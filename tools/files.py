@@ -292,7 +292,7 @@ def print_file(
     plate_num: int = 1,
     bed_type: str = "auto",
     use_ams: bool = True,
-    ams_mapping: str | None = None,
+    ams_mapping: list | str | None = None,
     timelapse: bool = False,
     bed_leveling: bool = True,
     flow_calibration: bool = False,
@@ -314,11 +314,12 @@ def print_file(
     use_ams=False = print using only the external spool holder (for single-color
     prints without AMS).
     ams_mapping overrides the AMS slot assignment baked into the .3mf file. Provide
-    a JSON array string where each element is an absolute tray_id for the corresponding
-    filament slot in the file. tray_id encoding: ams_unit_index * 4 + slot (0–3).
+    a JSON array string or a list of integers where each element is an absolute
+    tray_id for the corresponding filament slot in the file. tray_id encoding:
+    ams_unit_index * 4 + slot (0–3).
     Examples: slot 0 of AMS unit 0 = 0, slot 1 of AMS unit 0 = 1, slot 0 of AMS
     unit 1 = 4. External spool holder = 254. Unmapped filament = -1.
-    Example: "[1, -1, -1, -1]" maps filament 1 to AMS unit 0 slot 1, rest unmapped.
+    Example: "[1, -1, -1, -1]" or [1, -1, -1, -1] maps filament 1 to AMS unit 0 slot 1, rest unmapped.
     When ams_mapping is provided, use_ams is automatically set to True.
     Always call get_project_info() first to see what filament slots the .3mf requires,
     then map those slots to the physical AMS slots you want to use.
@@ -339,7 +340,9 @@ def print_file(
             else PlateType.AUTO
         )
         if ams_mapping is not None:
-            # Caller is explicitly overriding the AMS mapping
+            # Coerce list → JSON string so print_3mf_file's json.loads() works
+            if isinstance(ams_mapping, list):
+                ams_mapping = __import__("json").dumps(ams_mapping)
             resolved_ams_mapping = ams_mapping
             use_ams = True
             log.debug("print_file: using caller-provided ams_mapping: %s", ams_mapping)
