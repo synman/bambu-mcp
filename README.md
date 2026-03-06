@@ -1,6 +1,6 @@
 # Bambu Lab MCP Server
 
-**Version: 0.0.3** · Follows [Semantic Versioning](https://semver.org/)
+**Version: 0.0.4** · Follows [Semantic Versioning](https://semver.org/)
 
 A fully self-contained MCP (Model Context Protocol) server for managing Bambu Lab 3D printers.
 
