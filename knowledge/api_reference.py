@@ -219,6 +219,10 @@ Sets spool/tray filament type, color, temp range. Publishes AMS_FILAMENT_SETTING
 - tray_info_idx: filament index (e.g. "GFA00"). Pass "no_filament" to clear tray.
 - tray_color: CSS name or RRGGBB/RRGGBBAA hex string
 - ams_id parameter is unused (derived automatically from tray_id)
+- WARNING: Sends ALL fields in a single command. Empty string values ("") are
+  interpreted by the printer as "clear this field". Always pass all relevant fields
+  (tray_info_idx, tray_type, tray_color, nozzle_temp_min, nozzle_temp_max) together
+  to avoid wiping existing slot metadata.
 
 #### set_spool_k_factor(tray_id: int, k_value: float, n_coef: float | None = 1.399999976158142, nozzle_temp: int | None = -1, bed_temp: int | None = -1, max_volumetric_speed: int | None = -1) -> None
 Sets linear advance k factor. Broken in recent Bambu firmware.

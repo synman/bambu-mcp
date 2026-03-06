@@ -29,10 +29,10 @@ This applies to:
 
 **Hard requirements:**
 - Version lives in **one place**: `pyproject.toml` → `[project] version = "X.Y.Z"`.
-- After any version bump, run `pip install -e .` so `importlib.metadata` reflects the new version.
+- After any version bump: (1) run `pip install -e .` so `importlib.metadata` reflects the new version, then (2) run `python make.py version-sync` to propagate the version to `README.md` and `PLAN.md`.
 - `server.py` reads the version via `importlib.metadata.version("bambu-mcp")` and sets it on `mcp._mcp_server.version`. **Do not hardcode the version string anywhere else.**
 - Bump version in the same commit as the change that warrants it. Never bump speculatively.
-- Current version: **0.0.1**
+- Current version: **0.0.3**
 
 ---
 
@@ -56,6 +56,36 @@ This applies to:
 
 **HTTP protocol**: `_StreamHandler` uses HTTP/1.0 (default — no `protocol_version` override). Do not switch to HTTP/1.1 without chunked encoding — malformed HTTP/1.1 breaks Safari. Raw writes after headers are correct for HTTP/1.0.
 - `bambu-printer-app` is a **knowledge reference only** — it must not be referenced or imported at runtime.
+
+## Veil of Ignorance (MCP Stress-Test Mode)
+
+This project uses a named testing mode called the **"veil of ignorance"** to stress-test whether the MCP tools and their docstrings are sufficient to guide a naive agent through a real print workflow without any external knowledge.
+
+**Activation**: When the user says **"lower the veil"**, immediately enter restricted mode:
+- Pretend to have **no Bambu Lab domain knowledge** — no awareness of printer models, filament types, AMS behavior, firmware internals, slicer conventions, or any Bambu-specific terminology beyond what the tool docstrings provide.
+- Pretend to have **no workspace access** — do not read source files, configs, logs, or any local path. Interact with the printer exclusively through MCP tools.
+- Act as a naive agent discovering the workflow purely from the **bambu-mcp MCP tool** names, descriptions, and return values — no other tools, no shell commands, no file reads.
+- Do not break character to explain what you "really" know. Operate as if the bambu-mcp tool docstrings are your only reference.
+
+**Persistence**: This state is **sticky across session snapshots and context compaction**. The authoritative source of truth is `~/bambu-mcp/.veil_state` — a plain-text file containing either `LOWERED` or `LIFTED`.
+
+- **At the start of every session**, read this file and honor the state it contains before doing anything else in this project.
+- **On "lower the veil"**: write `LOWERED` to `~/bambu-mcp/.veil_state` immediately, then enter restricted mode.
+- **On "lift the veil"**: write `LIFTED` to `~/bambu-mcp/.veil_state` immediately, then restore full access.
+- If the file is missing, default to `LIFTED` and recreate it.
+- The file is `.gitignore`d — it is a local runtime state marker, not source code.
+
+**Deactivation**: Only when the user explicitly says **"lift the veil"** — restore full Bambu Lab domain knowledge and workspace access. No other phrasing deactivates this mode.
+
+**Purpose**: The goal is honest evaluation of MCP tool quality. If a naive agent cannot complete a task using only the tool docstrings, that is signal that the tools or docs need improvement — not a reason to break character early.
+
+---
+
+## Authorship
+
+**The user is the author of `bambu-mcp`.** Copilot is an aide — it drafts, implements, debugs, and iterates under the user's direction, but all design decisions, ownership, and credit belong to the user. Never describe Copilot as the author or co-author of this project.
+
+---
 
 ## BPM Usage
 

@@ -102,6 +102,11 @@ MQTT client, wastes resources, and risks MQTT interference.
 The only legitimate reason to instantiate BambuPrinter directly is to send a command
 that has no container API endpoint (e.g. `send_anything()`).
 
+**MCP tool functions cannot be tested standalone**: `tools/*.py` functions call
+`session_manager.get_printer(name)` which is only initialized when the MCP server
+process is running. Direct Python imports will fail with "printer not connected".
+Test tool logic by running the full MCP server and calling tools through the MCP client.
+
 ---
 
 ## ⚠️ Knowledge Escalation Rule (Tiered)
@@ -333,4 +338,21 @@ Offer camera tools proactively when the user asks about:
 - Display it by embedding in Markdown: `![snapshot]({data_uri})`
 - Do NOT attempt to decode, re-encode, download, or save it — it is already display-ready.
 - It can also be passed directly to an AI vision model for analysis.
+
+## MCP Array Parameter Pattern
+
+When a tool parameter logically accepts an array (e.g. `ams_mapping`, object lists),
+type it as `list | str | None` — never `str | None` alone.
+
+**Why**: The MCP framework JSON-parses tool call arguments before Pydantic validates them.
+If a client sends `[2, -1, -1]`, the framework delivers it as a Python `list`. A `str`
+annotation rejects this even when the underlying API expects a JSON string.
+
+**Coercion pattern** (apply in the tool body before passing to BPM):
+```python
+if isinstance(ams_mapping, list):
+    ams_mapping = json.dumps(ams_mapping)
+```
+
+This bridges MCP clients (send lists naturally) → BambuPrinter methods (expect JSON strings).
 """

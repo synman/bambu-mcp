@@ -7,9 +7,10 @@ Exports:
 """
 
 import sys
+from pathlib import Path
 
 # Make bpm importable from the bambu-printer-manager source tree
-_BPM_SRC = "/Users/shell/bambu-printer-manager/src"
+_BPM_SRC = str(Path.home() / "bambu-printer-manager" / "src")
 if _BPM_SRC not in sys.path:
     sys.path.insert(0, _BPM_SRC)
 

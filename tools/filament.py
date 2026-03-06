@@ -125,6 +125,12 @@ def set_ams_filament_setting(
     Pass -1 for nozzle_temp_min or nozzle_temp_max to keep the existing value or let the
     printer use the filament_id defaults.
     Requires user_permission=True.
+
+    WARNING: This call sends ALL fields to the printer in a single command. Any field left
+    at its default (empty string for text fields, -1 for temps) will be applied as-is —
+    the printer interprets empty strings as "clear this field". Always pass ALL relevant
+    fields in a single call (filament_id, filament_type, color, nozzle_temp_min,
+    nozzle_temp_max) to avoid accidentally wiping existing slot metadata.
     """
     log.debug("set_ams_filament_setting: called for name=%s unit_id=%s slot_id=%s", name, unit_id, slot_id)
     if not user_permission:

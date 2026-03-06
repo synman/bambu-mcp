@@ -107,6 +107,11 @@ def get_monitoring_history(name: str) -> dict:
 
     Data is provided as rolling 60-minute collections sampled every ~2.5 seconds.
     Also includes gcode_state_durations (time spent in each print state per job).
+
+    Note on gcode_state_durations: a FAILED entry does not mean the current job failed.
+    The rolling window captures the prior job's terminal state before the current job
+    started. A print that has been RUNNING continuously will show a small FAILED duration
+    from the previous job alongside its dominant RUNNING duration.
     """
     log.debug("get_monitoring_history: called for name=%s", name)
     data = data_collector.get_all_data(name)

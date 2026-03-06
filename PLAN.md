@@ -81,7 +81,7 @@ Version lives in one place: `pyproject.toml [project] version`. `server.py` read
 `importlib.metadata.version("bambu-mcp")` and sets `mcp._mcp_server.version` so clients
 see the correct version in every MCP `initialize` response.
 
-**Current version: 0.0.1**
+**Current version: 0.0.3**
 
 ---
 ## Installation
@@ -131,12 +131,10 @@ password = "changeit"   # ← change this before use
 ### Populating secrets (CLI)
 
 ```bash
-python -m bambu_mcp secrets set bambu-h2d-printer_ip       <ip>
-python -m bambu_mcp secrets set bambu-h2d-printer_access_code <code>
-python -m bambu_mcp secrets set bambu-h2d-printer_serial   <serial>
-python -m bambu_mcp secrets set bambu-a1-printer_ip        <ip>
-python -m bambu_mcp secrets set bambu-a1-printer_access_code <code>
-python -m bambu_mcp secrets set bambu-a1-printer_serial    <serial>
+# For each printer, set three secrets using the name you chose with add_printer():
+python -m bambu_mcp secrets set <printer-name>_ip           <ip>
+python -m bambu_mcp secrets set <printer-name>_access_code  <code>
+python -m bambu_mcp secrets set <printer-name>_serial       <serial>
 ```
 
 Same key naming convention as the existing workspace (compatible with `secrets.py`).
@@ -195,12 +193,9 @@ All from `secrets.py` — same store, different keys than the old container API 
 
 | Key | Description |
 |---|---|
-| `bambu-h2d-printer_ip` | H2D printer hostname/IP |
-| `bambu-h2d-printer_access_code` | H2D 8-char LAN access code |
-| `bambu-h2d-printer_serial` | H2D serial number |
-| `bambu-a1-printer_ip` | A1 printer hostname/IP |
-| `bambu-a1-printer_access_code` | A1 8-char LAN access code |
-| `bambu-a1-printer_serial` | A1 serial number |
+| `<printer-name>_ip` | Printer hostname/IP (`<printer-name>` is the name passed to `add_printer()`) |
+| `<printer-name>_access_code` | 8-char LAN access code |
+| `<printer-name>_serial` | Printer serial number |
 
 `auth.py` resolves `BPM_SECRETS_PASS` from `~/.zshenv` and returns `{ip, access_code, serial}` per printer name.
 
@@ -476,9 +471,9 @@ Exports `ESCALATION_TIERS`, `AUTHORITATIVE_REPOS` (ordered), and `ESCALATION_POL
 {
   "mcpServers": {
     "bambu-mcp": {
-      "command": "/Users/shell/bambu-mcp/.venv/bin/python3",
-      "args": ["/Users/shell/bambu-mcp/server.py"],
-      "env": { "PYTHONPATH": "/Users/shell/bambu-mcp" }
+      "command": "<install-dir>/bambu-mcp/.venv/bin/python3",
+      "args": ["<install-dir>/bambu-mcp/server.py"],
+      "env": { "PYTHONPATH": "<install-dir>/bambu-mcp" }
     }
   }
 }
@@ -489,9 +484,9 @@ Exports `ESCALATION_TIERS`, `AUTHORITATIVE_REPOS` (ordered), and `ESCALATION_POL
 {
   "mcpServers": {
     "bambu-mcp": {
-      "command": "/Users/shell/bambu-mcp/.venv/bin/python3",
-      "args": ["/Users/shell/bambu-mcp/server.py"],
-      "env": { "PYTHONPATH": "/Users/shell/bambu-mcp" }
+      "command": "<install-dir>/bambu-mcp/.venv/bin/python3",
+      "args": ["<install-dir>/bambu-mcp/server.py"],
+      "env": { "PYTHONPATH": "<install-dir>/bambu-mcp" }
     }
   }
 }
@@ -589,9 +584,9 @@ Correct config (all three files use this shape):
 {
   "mcpServers": {
     "bambu-mcp": {
-      "command": "/Users/shell/bambu-mcp/.venv/bin/python3",
-      "args": ["/Users/shell/bambu-mcp/server.py"],
-      "env": { "PYTHONPATH": "/Users/shell/bambu-mcp" }
+      "command": "<install-dir>/bambu-mcp/.venv/bin/python3",
+      "args": ["<install-dir>/bambu-mcp/server.py"],
+      "env": { "PYTHONPATH": "<install-dir>/bambu-mcp" }
     }
   }
 }
