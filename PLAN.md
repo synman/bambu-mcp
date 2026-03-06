@@ -733,6 +733,7 @@ in commit `4a8180e`.
 | Tool | Bug | Fix |
 |---|---|---|
 | `print_file` | AMS mapping baked into .3mf was the only option — no override | Added optional `ams_mapping: str\|None` param. When provided, bypasses metadata read and passes directly to `print_3mf_file()`. Documented tray_id encoding: `ams_unit*4+slot`, 254=external, -1=unmapped. |
+| `print_file` | `ams_mapping` typed `str\|None` — MCP clients send array literals as JSON lists (Python `list`), causing Pydantic validation failure before the function ran | Widened to `list\|str\|None`; list is coerced to JSON string via `json.dumps()` before passing to `print_3mf_file()`. Docstring updated to show both accepted forms. |
 | `set_nozzle_config` | `extruder` param accepted but completely ignored — `set_nozzle_details()` was called without it | Now calls `set_active_tool(extruder)` when target differs from current active tool, then `set_nozzle_details()`. `extruder=-1` applies to all. Side effect documented. |
 | `swap_tool` | Always toggled — no way to select a specific extruder directly | Added optional `extruder_id: int\|None` param. When provided, calls `set_active_tool(extruder_id)` directly instead of computing toggle target. |
 | `set_air_printing_detection` | Sensitivity hardcoded to `DetectorSensitivity.MEDIUM` | Added `sensitivity: str = "medium"` param, parsed via `DetectorSensitivity(sensitivity.lower())` — same pattern as `set_spaghetti_detection`. |

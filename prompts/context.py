@@ -178,7 +178,7 @@ Manage files on the printer's SD card and prepare print jobs. Upload .3mf files 
 - upload_file / download_file / delete_file / create_folder — file operations
 - rename_sdcard_file(name, src_path, dest_path) — FTPS rename/move file on SD card
 - print_file(name, file_path, plate_num, bed_type, use_ams, ams_mapping?, ...) — start print from SD card
-  ams_mapping: JSON array string overriding .3mf slot assignments; tray_id = ams_unit*4+slot (254=ext, -1=unmapped)
+  ams_mapping: JSON array string or list of integers overriding .3mf slot assignments; tray_id = ams_unit*4+slot (254=ext, -1=unmapped)
   Always call get_project_info() first to understand what filament slots the file requires.
 - open_plate_viewer(name, file_path) — HTML page with all plate thumbnails; opens in browser
 - open_plate_layout(name, file_path, plate_num) — annotated top-down PNG with bounding boxes; opens viewer
