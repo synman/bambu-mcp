@@ -618,7 +618,7 @@ All streaming complexity is self-contained within the MCP — no system ffmpeg r
 | `camera/protocol.py` | Model → protocol routing: `RTSPS_MODELS` (X1C/X1/X1E/P2S/H2D/H2S), `TCP_TLS_MODELS` (A1/A1_MINI/P1P/P1S) |
 | `camera/rtsps_stream.py` | PyAV RTSPS client (port 322, TLS cert disabled); H264 → yuvj420p → MJPEG via av re-encode |
 | `camera/tcp_stream.py` | Pure-Python TLS binary client (port 6000); 64-byte auth packet + 16-byte frame header; no external deps |
-| `camera/mjpeg_server.py` | stdlib `http.server` MJPEG server; `multipart/x-mixed-replace`; port allocation from 8090; `MJPEGServer` singleton + module-level `mjpeg_server` |
+| `camera/mjpeg_server.py` | stdlib `http.server` MJPEG server; serves `/stream` as `application/octet-stream` (Safari compat); JS fetch-based multipart parser in HTML page; port allocation from 8090; `MJPEGServer` singleton + module-level `mjpeg_server` |
 
 **New tool module: `tools/camera.py`** — 5 tools:
 
@@ -654,7 +654,9 @@ TCP+TLS binary (A1/P1, port 6000):
 **Smoke test results:**
 - H2D (RTSPS): 83KB JPEG, 1680×1080
 - A1 (TCP+TLS): 174KB JPEG, 1920×1080
-- Both MJPEG servers: `multipart/x-mixed-replace` confirmed via `urllib.request`
+- Both MJPEG servers: `application/octet-stream` stream endpoint; JS fetch multipart parser; Safari + Chrome first-load confirmed
+- H2D multi-client: `RTSPSFrameBuffer` single-thread PyAV architecture (prevents libav segfault)
+- A1 multi-client: `TCPFrameBuffer` (mirrors webcamd); Safari + Chrome + multiple tabs confirmed
 
 ---
 
