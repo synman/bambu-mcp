@@ -123,14 +123,20 @@ Control the active print job. These tools interact directly with physical hardwa
 ### Print Control (tools/print_control.py) — REQUIRE user_permission=True
 - pause_print / resume_print / stop_print — print job control
 - set_print_speed(name, level) — Quiet/Standard/Sport/Ludicrous
-- set_chamber_light(name, on) — chamber light toggle
-- skip_objects(name, object_ids) — skip print objects by ID
+- skip_objects(name, object_ids) — skip print objects by ID (from get_project_info bbox_objects)
+- set_print_option(name, option, enabled) — toggle auto_recovery / filament_tangle_detect / sound_enable /
+  auto_switch_filament / nozzle_blob_detect / air_print_detect
+- send_gcode(name, gcode) — send raw G-code; LAST RESORT — prefer dedicated tools; bypasses safety checks
+- select_extrusion_calibration(name, tray_id, cali_idx=-1) — apply saved flow calibration profile
 
 Manage the heated components: nozzle (melts filament, ~200–300°C), bed (build surface, ~50–110°C), and chamber (enclosed heating on some models). Wrong temperatures cause print failures or hardware damage. All require user_permission=True.
 
 ### Climate (tools/climate.py) — REQUIRE user_permission=True
-- set_nozzle_temperature / set_bed_temperature / set_chamber_temperature
-- set_part_fan_speed / set_aux_fan_speed / set_exhaust_fan_speed
+- set_nozzle_temp(name, temp, extruder?) / set_bed_temp(name, temp) / set_chamber_temp(name, temp)
+- set_chamber_light(name, on) / get_chamber_light(name) — chamber lighting
+- get_climate(name) — current temperatures + chamber door state
+- set_fan_speed(name, fan, speed_percent) — fan must be 'part_cooling', 'aux', or 'exhaust'; 0–100%
+  Note: fan speed may be overridden by the active print job slicer settings
 
 Manage filament spools in the AMS units and external spool holder. Load/unload filament, configure spool metadata, dry filament to remove moisture, and calibrate remaining estimates. All require user_permission=True.
 
@@ -145,21 +151,37 @@ Manage filament spools in the AMS units and external spool holder. Load/unload f
 Update the printer's record of the installed nozzle (diameter, material, flow type). This is metadata — it does not physically change the nozzle. Required after manually swapping nozzles so the printer applies correct temperature limits.
 
 ### Nozzle (tools/nozzle.py) — REQUIRE user_permission=True
-- set_nozzle_diameter / set_nozzle_type / set_nozzle_flow_ratio
+- get_nozzle_info(name) — nozzle diameter, type, flow_type, tray state per extruder
+- set_nozzle_config(name, diameter, nozzle_type, extruder=0) — inform printer of installed nozzle;
+  extruder=0=right, 1=left (H2D), -1=all; side effect: may switch active tool to reach target extruder
+- swap_tool(name, extruder_id?) — without extruder_id: toggle active extruder;
+  with extruder_id=0 or 1: directly select that extruder (H2D only)
+- refresh_nozzles(name) — re-read nozzle hardware after physical swap; updates get_nozzle_info()
 
 Configure the xcam AI vision detectors that monitor the print and can automatically pause it on failure. Each detector has an enable/disable toggle and sensitivity level. All require user_permission=True.
 
 ### Detectors (tools/detectors.py) — REQUIRE user_permission=True
-- set_spaghetti_detection / set_buildplate_marker / set_purge_pile_detection
-- set_nozzle_clumping / set_air_printing_detection
+- get_detector_settings(name) — read all detector enabled/sensitivity states
+- set_spaghetti_detection(name, enabled, sensitivity='medium') — loose filament / failed print
+- set_buildplate_marker_detection(name, enabled) — ArUco plate marker verification before print
+- set_first_layer_inspection(name, enabled) — LiDAR/camera scan after first layer (X1/H2D only)
+- set_nozzle_clumping_detection(name, enabled, sensitivity='medium') — filament blob on nozzle tip
+- set_purge_chute_detection(name, enabled, sensitivity='medium') — purge waste pile-up
+- set_air_printing_detection(name, enabled, sensitivity='medium') — nozzle extruding into open air
 
 Manage files on the printer's SD card and prepare print jobs. Upload .3mf files to queue a print, download files, view project plate thumbnails, and start prints. Read operations are safe; write operations require user_permission=True.
 
 ### Files (tools/files.py) — Reads safe; writes REQUIRE user_permission=True
 - list_sdcard_files(name, path) — list SD card directory
-- get_file_info / get_project_info — 3MF metadata + thumbnail
+- get_file_info(name, file_path) — file attributes on SD card
+- get_project_info(name, file_path, plate_num=1) — 3MF metadata + thumbnail (data URI, embed directly)
 - upload_file / download_file / delete_file / create_folder — file operations
-- print_file(name, file_path, plate_num, ...) — start print from SD card
+- rename_sdcard_file(name, src_path, dest_path) — FTPS rename/move file on SD card
+- print_file(name, file_path, plate_num, bed_type, use_ams, ams_mapping?, ...) — start print from SD card
+  ams_mapping: JSON array string overriding .3mf slot assignments; tray_id = ams_unit*4+slot (254=ext, -1=unmapped)
+  Always call get_project_info() first to understand what filament slots the file requires.
+- open_plate_viewer(name, file_path) — HTML page with all plate thumbnails; opens in browser
+- open_plate_layout(name, file_path, plate_num) — annotated top-down PNG with bounding boxes; opens viewer
 
 ### Camera (tools/camera.py)
 
@@ -205,9 +227,10 @@ Session-level operations: MQTT connection management, firmware version, telemetr
 ### System (tools/system.py)
 - get_session_status / get_firmware_version — safe reads
 - pause_mqtt_session / resume_mqtt_session — REQUIRE user_permission=True
-- trigger_printer_refresh / force_state_refresh — REQUIRE user_permission=True
-- get_monitoring_history — telemetry history
-- set_print_options — REQUIRE user_permission=True
+- trigger_printer_refresh / force_state_refresh — REQUIRE user_permission=True (trigger) / safe (force)
+- get_monitoring_history — telemetry time-series history (60 min rolling)
+- set_print_options(name, auto_recovery?, sound?) — REQUIRE user_permission=True
+- rename_printer(name, new_name) — change printer's firmware display name; REQUIRE user_permission=True
 
 Last-resort tool for sending raw MQTT JSON commands when no dedicated tool exists. Bypasses all safety guardrails. Requires user_permission=True AND strong justification. Do not use unless a specific dedicated tool does not exist.
 

@@ -8,7 +8,7 @@
 
 ## Problem & Goal
 
-A fully self-contained MCP server that bundles the complete functionality of `bambu-printer-manager` and `bambu-printer-app` directly. No containers, no Docker, no HTTP to a remote API. The only external dependency is a network connection to the printers. The MCP manages its own persistent MQTT sessions, replicates all monitoring state from `api.py`, and exposes the entire API surface as ~55 tools.
+A fully self-contained MCP server that bundles the complete functionality of `bambu-printer-manager` and `bambu-printer-app` directly. No containers, no Docker, no HTTP to a remote API. The only external dependency is a network connection to the printers. The MCP manages its own persistent MQTT sessions, replicates all monitoring state from `api.py`, and exposes the entire API surface as 81 tools.
 
 
 ## Incorporated User Requirements
@@ -20,7 +20,7 @@ All of the following user-requested changes are captured in this plan:
 
 Captured in:
 - `knowledge/api_reference.py` — complete inventory of all ~40 BambuPrinter methods, all ~30 BambuConfig properties, all BambuState fields, BambuDiscovery/BambuSpool/BambuProject/ActiveJobInfo docs, **and** all ~50 bambu-printer-app API endpoint behaviors (without hostnames)
-- `tools/` — 12 tool modules (~68 tools) exposing every operation from both libraries as callable MCP tools
+- `tools/` — 13 tool modules (81 tools) exposing every operation from both libraries as callable MCP tools
 - `prompts/context.py` — `bambu_system_context` prompt includes the full tool guide
 
 ### R2 — Rules files knowledge fully integrated
@@ -702,3 +702,46 @@ discovery `bind_state`/`connect_state` defined, and more.
 **README.md** — updated tool count (66 → 73), install instructions (make.py),
 server key name (`"bambu"` → `"bambu-mcp"`), Camera row in tool categories table,
 architecture file tree updated with `camera/` module and corrected tool counts.
+
+---
+
+### PA10 — MCP tool gap audit + fixes (81 tools)
+
+Comprehensive audit of MCP tool coverage against the full `BambuPrinter` API surface.
+Identified 14 gaps across bugs in existing tools and missing tools entirely. All fixed
+in commit `4a8180e`.
+
+**Bug fixes (existing tools):**
+
+| Tool | Bug | Fix |
+|---|---|---|
+| `print_file` | AMS mapping baked into .3mf was the only option — no override | Added optional `ams_mapping: str\|None` param. When provided, bypasses metadata read and passes directly to `print_3mf_file()`. Documented tray_id encoding: `ams_unit*4+slot`, 254=external, -1=unmapped. |
+| `set_nozzle_config` | `extruder` param accepted but completely ignored — `set_nozzle_details()` was called without it | Now calls `set_active_tool(extruder)` when target differs from current active tool, then `set_nozzle_details()`. `extruder=-1` applies to all. Side effect documented. |
+| `swap_tool` | Always toggled — no way to select a specific extruder directly | Added optional `extruder_id: int\|None` param. When provided, calls `set_active_tool(extruder_id)` directly instead of computing toggle target. |
+| `set_air_printing_detection` | Sensitivity hardcoded to `DetectorSensitivity.MEDIUM` | Added `sensitivity: str = "medium"` param, parsed via `DetectorSensitivity(sensitivity.lower())` — same pattern as `set_spaghetti_detection`. |
+
+**New tools added (8):**
+
+| Tool | Module | Maps To |
+|---|---|---|
+| `set_nozzle_clumping_detection(name, enabled, sensitivity)` | detectors.py | `printer.set_nozzleclumping_detector()` |
+| `set_purge_chute_detection(name, enabled, sensitivity)` | detectors.py | `printer.set_purgechutepileup_detector()` |
+| `set_fan_speed(name, fan, speed_percent)` | climate.py | `printer.set_{fan}_fan_speed_target_percent()` — fan ∈ {part_cooling, aux, exhaust} |
+| `send_gcode(name, gcode)` | print_control.py | `printer.send_gcode()` — with safety warning in docstring |
+| `select_extrusion_calibration(name, tray_id, cali_idx=-1)` | print_control.py | `printer.select_extrusion_calibration_profile()` |
+| `refresh_nozzles(name)` | nozzle.py | `printer.refresh_nozzles()` |
+| `rename_printer(name, new_name)` | system.py | `printer.rename_printer()` |
+| `rename_sdcard_file(name, src_path, dest_path)` | files.py | `printer.rename_sdcard_file()` — FTPS rename |
+
+**Root cause analysis:**
+The gap that triggered this audit was `print_file` missing `ams_mapping` override. An AI
+client operating without prior Bambu Lab knowledge was told "AMS mapping cannot be overridden"
+because the tool hid the parameter — instead of the correct answer (read `api_reference`,
+consult `print_3mf_file` signature, build the override). The audit then found the same
+"lying by omission" pattern in 13 other places.
+
+**Documentation updated:**
+- `README.md` — tool count 73 → 81, all category table rows corrected to actual tool names,
+  architecture file tree tool counts updated
+- `prompts/context.py` — tool inventory section corrected for all affected modules
+- `PLAN.md` — problem statement count updated, PA10 added
