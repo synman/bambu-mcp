@@ -47,6 +47,19 @@ class Collection:
             "data": [{"t": p.timestamp, "v": p.value} for p in self.points],
         }
 
+    def to_summary(self) -> dict:
+        """Return {min, max, avg, last, count} stats over the current window."""
+        if not self.points:
+            return {"count": 0, "min": None, "max": None, "avg": None, "last": None}
+        values = [p.value for p in self.points]
+        return {
+            "count": len(values),
+            "min": round(min(values), 2),
+            "max": round(max(values), 2),
+            "avg": round(sum(values) / len(values), 2),
+            "last": round(values[-1], 2),
+        }
+
 
 class PrinterDataCollector:
     """Collects telemetry history for a single printer."""
@@ -145,6 +158,20 @@ class PrinterDataCollector:
                 "gcode_state_durations": dict(self.gcode_state_durations),
             }
 
+    def get_summary(self) -> dict:
+        """Return per-collection summary stats + gcode_state_durations."""
+        with self._lock:
+            return {
+                "summary": {k: v.to_summary() for k, v in self.collections.items()},
+                "gcode_state_durations": dict(self.gcode_state_durations),
+            }
+
+    def get_collection(self, field: str) -> dict | None:
+        """Return the full time-series dict for one named field, or None if unknown."""
+        with self._lock:
+            col = self.collections.get(field)
+            return col.to_dict() if col else None
+
 
 class DataCollector:
     """Global data collector — one PrinterDataCollector per printer."""
@@ -169,6 +196,16 @@ class DataCollector:
         with self._lock:
             collector = self._collectors.get(name)
         return collector.get_all_data() if collector else None
+
+    def get_summary(self, name: str) -> dict | None:
+        with self._lock:
+            collector = self._collectors.get(name)
+        return collector.get_summary() if collector else None
+
+    def get_collection(self, name: str, field: str) -> dict | None:
+        with self._lock:
+            collector = self._collectors.get(name)
+        return collector.get_collection(field) if collector else None
 
     def get_configured_printers(self) -> list[str]:
         with self._lock:

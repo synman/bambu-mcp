@@ -35,12 +35,23 @@ def _find_file_in_tree(tree: dict, target_path: str) -> dict | None:
 
 def list_sdcard_files(name: str, path: str = "/") -> dict:
     """
-    Return the full SD card directory listing for the named printer.
+    Return the SD card directory listing for the named printer.
 
-    Calls get_sdcard_contents() which connects via FTPS and returns the complete
-    file tree. The path parameter is informational — the full tree is always returned.
+    When path="/" (default), returns the full top-level tree — backward compatible.
+    When path is a subdirectory (e.g. "/cache", "/model"), returns only that
+    subtree, which is much smaller than the full listing.
+
+    Use this in a hierarchy:
+      list_sdcard_files(name)           → full top-level tree
+      list_sdcard_files(name, "/cache") → only the /cache subtree
+      list_sdcard_files(name, "/model") → only the /model subtree
+
+    Response may be gzip+base64 compressed if the full tree is large. Decompress:
+      import gzip, json, base64
+      data = json.loads(gzip.decompress(base64.b64decode(r["data"])))
     """
     log.debug("list_sdcard_files: called for name=%s path=%s", name, path)
+    from tools._response import compress_if_large
     printer = session_manager.get_printer(name)
     if printer is None:
         log.warning("list_sdcard_files: printer not connected: %s", name)
@@ -51,9 +62,14 @@ def list_sdcard_files(name: str, path: str = "/") -> dict:
         if contents is None:
             log.debug("list_sdcard_files: → error: no contents for %s", name)
             return {"error": "Failed to retrieve SD card contents"}
-        log.debug("list_sdcard_files: success for %s", name)
-        log.debug("list_sdcard_files: → path=%s", path)
-        return {"path": path, "contents": contents}
+        if path and path != "/":
+            subtree = _find_file_in_tree(contents, path)
+            if subtree is None:
+                log.debug("list_sdcard_files: path not found: %s", path)
+                return {"error": f"Path not found: {path}", "path": path}
+            contents = subtree
+        log.debug("list_sdcard_files: success for %s path=%s", name, path)
+        return compress_if_large({"path": path, "contents": contents})
     except Exception as e:
         log.error("list_sdcard_files: error for %s: %s", name, e, exc_info=True)
         return {"error": f"Error listing SD card: {e}"}
@@ -88,30 +104,41 @@ def get_file_info(name: str, file_path: str) -> dict:
         return {"error": f"Error getting file info: {e}"}
 
 
-def get_project_info(name: str, file_path: str, plate_num: int = 1) -> dict:
+def get_project_info(name: str, file_path: str, plate_num: int = 1, include_images: bool = False) -> dict:
     """
     Return 3MF metadata and thumbnail info for a project file on the SD card.
 
     Parses the .3mf file for the requested plate and returns filament info,
-    AMS mapping, thumbnail (data URI), top-view image, and bounding box objects.
-    Uses a local cache to avoid repeated FTPS downloads.
+    AMS mapping, and bounding box objects. Uses a local cache to avoid repeated
+    FTPS downloads.
+
+    By default (include_images=False), the metadata.topimg and metadata.thumbnail
+    image fields are omitted to keep the response small. Use get_plate_thumbnail()
+    or get_plate_topview() to fetch images for a specific plate on demand.
+
+    When include_images=True, both data URIs are included in the response (large).
+
+    Multi-level call hierarchy:
+      Level 1 — get_project_info(name, file, 1)  → {plates:[1..N], ...}  (index)
+      Level 2 — get_project_info(name, file, N)  → per-plate metadata, bbox_objects
+      Level 3 — get_plate_thumbnail(name, file, N) → just the isometric image
+               get_plate_topview(name, file, N)   → just the top-down image
+
     The .3mf file is created by BambuStudio or OrcaSlicer — the slicing applications
     used to prepare 3D model files for Bambu Lab printers. They convert .STL/.3MF model
     files into printable G-code and package everything into a .3mf project file.
 
     Key fields in the returned dict:
-    - metadata.topimg:  Complete base64 data URI (data:image/png;base64,...).
-                        Use DIRECTLY as the src attribute of an HTML <img> tag.
-                        Do NOT re-fetch, decode, or write to disk — it is self-contained.
-    - metadata.thumbnail: Complete base64 data URI (data:image/png;base64,...).
-                        Use DIRECTLY as the src attribute of an HTML <img> tag.
-                        Isometric perspective thumbnail (vs. top-down for topimg).
-    - metadata.map.bbox_objects: List of {name, ...} dicts for objects on this plate.
-                        Filter out entries whose name contains 'wipe_tower' to get
-                        the human-readable part list.
     - plates:           List of all plate numbers in the file (e.g. [1,2,...,14]).
                         Iterate over this list and call get_project_info once per
                         plate to retrieve all plates.
+    - metadata.map.bbox_objects: List of {name, ...} dicts for objects on this plate.
+                        Filter out entries whose name contains 'wipe_tower' to get
+                        the human-readable part list.
+    - metadata.topimg:  Present only when include_images=True. Complete base64 data
+                        URI (data:image/png;base64,...). Use DIRECTLY as img src.
+    - metadata.thumbnail: Present only when include_images=True. Isometric thumbnail
+                        data URI. Use DIRECTLY as img src.
 
     Coordinate system for bbox fields:
     - bbox values are [x_min, y_min, x_max, y_max] in millimetres, absolute bed position.
@@ -124,7 +151,7 @@ def get_project_info(name: str, file_path: str, plate_num: int = 1) -> dict:
     Cross-tool link: bbox_objects[].id values are the identify_id integers required by skip_objects().
     Filter bbox_objects to exclude entries whose name contains 'wipe_tower' to get human-readable part names.
     """
-    log.debug("get_project_info: called for name=%s file_path=%s plate_num=%s", name, file_path, plate_num)
+    log.debug("get_project_info: called for name=%s file_path=%s plate_num=%s include_images=%s", name, file_path, plate_num, include_images)
     printer = session_manager.get_printer(name)
     if printer is None:
         log.warning("get_project_info: printer not connected: %s", name)
@@ -156,13 +183,131 @@ def get_project_info(name: str, file_path: str, plate_num: int = 1) -> dict:
             result = json.loads(
                 json.dumps(_to_dict(info), default=str)
             )
-            log.debug("get_project_info: → dataclass result for %s plate=%s", file_path, plate_num)
-            return result
-        log.debug("get_project_info: → dict/str result for %s plate=%s", file_path, plate_num)
-        return info if isinstance(info, dict) else {"info": str(info)}
+        else:
+            result = info if isinstance(info, dict) else {"info": str(info)}
+
+        if not include_images:
+            meta = result.get("metadata")
+            if isinstance(meta, dict):
+                if "topimg" in meta:
+                    meta["topimg"] = "[image omitted — use get_plate_topview to fetch]"
+                if "thumbnail" in meta:
+                    meta["thumbnail"] = "[image omitted — use get_plate_thumbnail to fetch]"
+
+        log.debug("get_project_info: → result for %s plate=%s include_images=%s", file_path, plate_num, include_images)
+        return result
     except Exception as e:
         log.error("get_project_info: error for %s: %s", name, e, exc_info=True)
         return {"error": f"Error getting project info: {e}"}
+
+
+def get_plate_thumbnail(
+    name: str,
+    file_path: str,
+    plate_num: int = 1,
+    quality: str = "standard",
+) -> dict:
+    """
+    Return the isometric thumbnail image for a single plate in a 3MF project file.
+
+    This is the separated visual sub-call for get_project_info — it returns only
+    the thumbnail data URI, without any metadata or bbox objects.
+
+    quality controls image size and JPEG compression:
+      "preview"  — ~5 KB  (320×180, JPEG q=65)  — quick overview
+      "standard" — ~16 KB (640×360, JPEG q=75)  — default, renders cleanly inline
+      "full"     — ~71 KB (original resolution)  — maximum detail
+
+    Returns:
+      data_uri  — complete data:image/jpeg;base64,... (embed directly as img src)
+      plate_num — the plate number
+      quality   — the quality tier used
+    """
+    log.debug("get_plate_thumbnail: called for name=%s file_path=%s plate_num=%s quality=%s", name, file_path, plate_num, quality)
+    return _get_plate_image(name, file_path, plate_num, quality, image_key="thumbnail")
+
+
+def get_plate_topview(
+    name: str,
+    file_path: str,
+    plate_num: int = 1,
+    quality: str = "standard",
+) -> dict:
+    """
+    Return the top-down view image for a single plate in a 3MF project file.
+
+    This is the separated visual sub-call for get_project_info — it returns only
+    the top-down view data URI, without any metadata or bbox objects.
+
+    quality controls image size and JPEG compression:
+      "preview"  — ~5 KB  (320×180, JPEG q=65)  — quick overview
+      "standard" — ~16 KB (640×360, JPEG q=75)  — default, renders cleanly inline
+      "full"     — ~71 KB (original resolution)  — maximum detail
+
+    Returns:
+      data_uri  — complete data:image/jpeg;base64,... (embed directly as img src)
+      plate_num — the plate number
+      quality   — the quality tier used
+    """
+    log.debug("get_plate_topview: called for name=%s file_path=%s plate_num=%s quality=%s", name, file_path, plate_num, quality)
+    return _get_plate_image(name, file_path, plate_num, quality, image_key="topimg")
+
+
+def _get_plate_image(
+    name: str,
+    file_path: str,
+    plate_num: int,
+    quality: str,
+    image_key: str,
+) -> dict:
+    """Shared implementation for get_plate_thumbnail and get_plate_topview."""
+    printer = session_manager.get_printer(name)
+    if printer is None:
+        return _no_printer(name)
+    try:
+        import base64
+        import io
+        from bpm.bambuproject import get_project_info as _get_project_info
+        import dataclasses
+        import json
+        from enum import Enum
+        from tools._response import resize_image_to_tier
+
+        def _to_dict(o):
+            if isinstance(o, Enum):
+                return o.name
+            if dataclasses.is_dataclass(o) and not isinstance(o, type):
+                return {f.name: _to_dict(getattr(o, f.name)) for f in dataclasses.fields(o)}
+            if isinstance(o, dict):
+                return {k: _to_dict(v) for k, v in o.items()}
+            if isinstance(o, (list, tuple)):
+                return [_to_dict(v) for v in o]
+            return o
+
+        info = _get_project_info(file_path, printer, plate_num=plate_num)
+        if info is None:
+            return {"error": f"Could not retrieve project info for '{file_path}'"}
+        if dataclasses.is_dataclass(info):
+            result = json.loads(json.dumps(_to_dict(info), default=str))
+        else:
+            result = info if isinstance(info, dict) else {}
+
+        meta = result.get("metadata", {})
+        data_uri = meta.get(image_key, "")
+        if not data_uri:
+            return {"error": f"No {image_key} image available for plate {plate_num}"}
+
+        # data_uri is "data:image/png;base64,<b64>"
+        raw_b64 = data_uri.split(",", 1)[1]
+        img_bytes = base64.b64decode(raw_b64)
+        jpeg_bytes, w, h = resize_image_to_tier(img_bytes, quality)
+        jpeg_uri = "data:image/jpeg;base64," + base64.b64encode(jpeg_bytes).decode("ascii")
+
+        log.debug("_get_plate_image: %s plate=%s quality=%s → %dx%d %d bytes", image_key, plate_num, quality, w, h, len(jpeg_bytes))
+        return {"data_uri": jpeg_uri, "plate_num": plate_num, "quality": quality, "width": w, "height": h}
+    except Exception as e:
+        log.error("_get_plate_image: error for %s: %s", name, e, exc_info=True)
+        return {"error": f"Error retrieving plate image: {e}"}
 
 
 def upload_file(

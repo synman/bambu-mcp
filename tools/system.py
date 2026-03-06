@@ -101,11 +101,22 @@ def resume_mqtt_session(name: str, user_permission: bool = False) -> str:
         return f"Error resuming session for '{name}': {e}"
 
 
-def get_monitoring_history(name: str) -> dict:
+def get_monitoring_history(name: str, raw: bool = False) -> dict:
     """
     Return telemetry history for charting: temperature and fan speed time-series.
 
-    Data is provided as rolling 60-minute collections sampled every ~2.5 seconds.
+    When raw=False (default), returns a lightweight summary with {min, max, avg,
+    last, count} statistics for each field, plus gcode_state_durations. Use this
+    for a quick overview of thermal and fan activity without transferring the full
+    time-series.
+
+    When raw=True, returns the complete rolling 60-minute time-series for all 8
+    fields (~1440 data points each). Use raw=True only when you need precise
+    charting data. For a single field, prefer get_monitoring_series() instead.
+
+    Data is sampled every ~2.5 seconds. Fields: tool, tool_1 (H2D second nozzle),
+    bed, chamber, part_fan, aux_fan, exhaust_fan, heatbreak_fan.
+
     Also includes gcode_state_durations (time spent in each print state per job).
 
     Note on gcode_state_durations: a FAILED entry does not mean the current job failed.
@@ -113,13 +124,47 @@ def get_monitoring_history(name: str) -> dict:
     started. A print that has been RUNNING continuously will show a small FAILED duration
     from the previous job alongside its dominant RUNNING duration.
     """
-    log.debug("get_monitoring_history: called for name=%s", name)
-    data = data_collector.get_all_data(name)
+    log.debug("get_monitoring_history: called for name=%s raw=%s", name, raw)
+    if raw:
+        data = data_collector.get_all_data(name)
+    else:
+        data = data_collector.get_summary(name)
     if data is None:
         log.warning("get_monitoring_history: printer %s not connected", name)
         return _no_printer(name)
-    log.debug("get_monitoring_history: returning data for %s", name)
+    log.debug("get_monitoring_history: returning data for %s raw=%s", name, raw)
     return data
+
+
+def get_monitoring_series(name: str, field: str) -> dict:
+    """
+    Return the full time-series for a single telemetry field.
+
+    field must be one of: tool, tool_1, bed, chamber, part_fan, aux_fan,
+    exhaust_fan, heatbreak_fan.
+
+    Returns the complete rolling 60-minute data for that field only (~1440 points,
+    ~22 KB compressed). Use this instead of get_monitoring_history(raw=True) when
+    you only need one metric — it avoids transferring all 8 series at once.
+
+    Call get_monitoring_history() first (default raw=False) to see the summary
+    for all fields, then call this for the specific field(s) you want to chart.
+
+    Response may be gzip+base64 compressed if the payload is large. Decompress:
+      import gzip, json, base64
+      data = json.loads(gzip.decompress(base64.b64decode(r["data"])))
+    """
+    log.debug("get_monitoring_series: called for name=%s field=%s", name, field)
+    from tools._response import compress_if_large
+    series = data_collector.get_collection(name, field)
+    if series is None:
+        if data_collector.get_summary(name) is None:
+            log.warning("get_monitoring_series: printer %s not connected", name)
+            return _no_printer(name)
+        valid = list(data_collector._collectors[name].collections.keys()) if name in data_collector._collectors else []
+        return {"error": f"Unknown field '{field}'. Valid fields: {valid}"}
+    log.debug("get_monitoring_series: returning series for %s field=%s points=%d", name, field, len(series.get("data", [])))
+    return compress_if_large({"field": field, "series": series})
 
 
 def trigger_printer_refresh(name: str, user_permission: bool = False) -> str:

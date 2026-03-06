@@ -32,7 +32,7 @@ This applies to:
 - After any version bump: (1) run `pip install -e .` so `importlib.metadata` reflects the new version, then (2) run `python make.py version-sync` to propagate the version to `README.md` and `PLAN.md`.
 - `server.py` reads the version via `importlib.metadata.version("bambu-mcp")` and sets it on `mcp._mcp_server.version`. **Do not hardcode the version string anywhere else.**
 - Bump version in the same commit as the change that warrants it. Never bump speculatively.
-- Current version: **0.0.4**
+- Current version: **0.0.5**
 
 ---
 
@@ -61,7 +61,7 @@ This applies to:
 
 This project uses a named testing mode called the **"veil of ignorance"** to stress-test whether the MCP tools and their docstrings are sufficient to guide a naive agent through a real print workflow without any external knowledge.
 
-**Activation**: When the user says **"lower the veil"**, immediately enter restricted mode:
+**Activation**: When the user says any of **"lower the veil"**, **"drop the veil"**, **"close the veil"**, or **"enable the veil"**, immediately enter restricted mode:
 - Pretend to have **no Bambu Lab domain knowledge** — no awareness of printer models, filament types, AMS behavior, firmware internals, slicer conventions, or any Bambu-specific terminology beyond what the tool docstrings provide.
 - Pretend to have **no workspace access** — do not read source files, configs, logs, or any local path. Interact with the printer exclusively through MCP tools.
 - Pretend to have **no session history** — act as if the conversation began at the moment the veil was lowered. Do not reference, recall, or act on any information, decisions, or context from the conversation that preceded lowering the veil.
@@ -71,12 +71,12 @@ This project uses a named testing mode called the **"veil of ignorance"** to str
 **Persistence**: This state is **sticky across session snapshots and context compaction**. The authoritative source of truth is `~/bambu-mcp/.veil_state` — a plain-text file containing either `LOWERED` or `LIFTED`.
 
 - **At the start of every session**, read this file and honor the state it contains before doing anything else in this project.
-- **On "lower the veil"**: write `LOWERED` to `~/bambu-mcp/.veil_state` immediately, then enter restricted mode.
-- **On "lift the veil"**: write `LIFTED` to `~/bambu-mcp/.veil_state` immediately, then restore full access.
+- **On "lower the veil"** (or drop / close / enable): write `LOWERED` to `~/bambu-mcp/.veil_state` immediately, then enter restricted mode.
+- **On "lift the veil"** (or raise / open / disable): write `LIFTED` to `~/bambu-mcp/.veil_state` immediately, then restore full access.
 - If the file is missing, default to `LIFTED` and recreate it.
 - The file is `.gitignore`d — it is a local runtime state marker, not source code.
 
-**Deactivation**: Only when the user explicitly says **"lift the veil"** — restore all of the following simultaneously: full Bambu Lab domain knowledge, workspace access, and access to all session history and context that existed before the veil was lowered. No other phrasing deactivates this mode.
+**Deactivation**: Only when the user explicitly says **"lift the veil"** (or raise / open / disable) — restore all of the following simultaneously: full Bambu Lab domain knowledge, workspace access, and access to all session history and context that existed before the veil was lowered. No other phrasing deactivates this mode.
 
 **Purpose**: The goal is honest evaluation of MCP tool quality. If a naive agent cannot complete a task using only the tool docstrings, that is signal that the tools or docs need improvement — not a reason to break character early.
 

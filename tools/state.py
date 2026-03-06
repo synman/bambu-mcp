@@ -74,6 +74,18 @@ def get_printer_state(name: str) -> dict:
 
     Includes extruder info, AMS units, spools, climate, HMS errors, and
     print-progress fields. Returns an error dict if the printer is not connected.
+
+    This is a convenience tool that bundles all printer state into one response.
+    For routine queries, prefer the targeted tools — they are smaller and faster:
+      get_temperatures()     — nozzle, bed, and chamber temperatures
+      get_spool_info()       — active spool and all AMS spools
+      get_job_info()         — current print job progress
+      get_nozzle_info()      — nozzle diameter, type, and tray state
+      get_print_progress()   — print percentage, layer, and time remaining
+      get_ams_units()        — AMS unit and slot details
+      get_hms_errors()       — active and historical HMS errors
+      get_fan_speeds()       — all fan speeds as percentages
+      get_climate()          — temperatures and chamber door state
     """
     log.debug("get_printer_state: called for printer=%s", name)
     state = session_manager.get_state(name)

@@ -30,6 +30,49 @@ def _no_printer(name: str) -> dict:
     return {"error": f"Printer '{name}' not connected"}
 
 
+def _build_status(name: str) -> dict:
+    """Return live print telemetry dict for printer name (same as start_stream overlay)."""
+    state = session_manager.get_state(name)
+    job = session_manager.get_job(name)
+    if state is None:
+        return {}
+    try:
+        nozzles = [
+            {"id": e.id, "temp": round(e.temp, 1), "target": e.temp_target}
+            for e in (state.extruders or [])
+        ]
+        if not nozzles:
+            nozzles = [{"id": 0, "temp": round(state.active_nozzle_temp, 1),
+                        "target": state.active_nozzle_temp_target}]
+        climate = state.climate
+        has_device_error = any(e.get("type") == "device_error" for e in (state.hms_errors or []))
+        active_errors = sum(
+            1 for e in (state.hms_errors or [])
+            if e.get("type") == "device_hms" and has_device_error
+        )
+        return {
+            "gcode_state": state.gcode_state,
+            "print_percentage": job.print_percentage if job else 0,
+            "current_layer": job.current_layer if job else 0,
+            "total_layers": job.total_layers if job else 0,
+            "elapsed_minutes": job.elapsed_minutes if job else 0,
+            "remaining_minutes": job.remaining_minutes if job else 0,
+            "stage_name": job.stage_name if job else "",
+            "subtask_name": job.subtask_name if job else "",
+            "nozzles": nozzles,
+            "bed_temp": round(climate.bed_temp, 1),
+            "bed_temp_target": climate.bed_temp_target,
+            "chamber_temp": round(climate.chamber_temp, 1),
+            "chamber_temp_target": climate.chamber_temp_target,
+            "part_cooling_pct": climate.part_cooling_fan_speed_percent,
+            "aux_pct": climate.aux_fan_speed_percent,
+            "exhaust_pct": climate.exhaust_fan_speed_percent,
+            "wifi_signal": state.wifi_signal_strength,
+            "active_error_count": active_errors,
+        }
+    except Exception:
+        return {}
+
 def _get_printer_checked(name: str):
     """Return (printer, error_dict) — error_dict is None on success."""
     log.debug("_get_printer_checked: called for name=%s", name)
@@ -118,25 +161,36 @@ def _make_stream_session(printer):
     raise ValueError("No camera protocol for this printer model")
 
 
-def get_snapshot(name: str) -> dict:
+def get_snapshot(name: str, quality: str = "standard", include_status: bool = False) -> dict:
     """
     Return a single still frame from the printer camera.
 
     Captures one JPEG frame and returns it as a base64-encoded data URI suitable for
     direct display. Does not start or stop a background streaming server.
 
+    quality controls image size and JPEG compression:
+      "preview"  — ~5 KB  (320×180, JPEG q=65)  — quick overview
+      "standard" — ~16 KB (640×360, JPEG q=75)  — default, renders cleanly inline
+      "full"     — ~71 KB (original resolution)  — maximum detail
+
+    include_status=True adds a "status" key with live print telemetry (gcode_state,
+    progress, temperatures, fan speeds, etc.) — the same status dict available in
+    the camera overlay when streaming via start_stream().
+
     Returns:
       data_uri  — complete data:image/jpeg;base64,... string (embed as Markdown image directly)
       width     — frame width in pixels
       height    — frame height in pixels
+      quality   — the quality tier used
       protocol  — "rtsps" (X1/H2D) or "tcp_tls" (A1/P1)
       timestamp — ISO8601 capture time
+      status    — print telemetry dict (only present when include_status=True)
 
     Returns {"error": "no_camera"} if this printer model has no camera.
     Returns {"error": "not_connected"} if the printer MQTT session is not active.
     Returns {"error": "stream_failed", "detail": "..."} if the camera connection fails.
     """
-    log.debug("get_snapshot: called for %s", name)
+    log.debug("get_snapshot: called for %s quality=%s include_status=%s", name, quality, include_status)
     printer, err = _get_printer_checked(name)
     if err:
         return err
@@ -146,17 +200,22 @@ def get_snapshot(name: str) -> dict:
         log.warning("get_snapshot: no camera for %s (protocol=none)", name)
         return {"error": "no_camera", "detail": "This printer model does not have a camera"}
     try:
+        from tools._response import resize_image_to_tier
         jpeg = _capture_jpeg(printer)
-        width, height = _jpeg_dimensions(jpeg)
-        data_uri = "data:image/jpeg;base64," + base64.b64encode(jpeg).decode("ascii")
-        log.debug("get_snapshot: → width=%d height=%d protocol=%s bytes=%d", width, height, protocol, len(jpeg))
-        return {
+        jpeg_out, width, height = resize_image_to_tier(jpeg, quality)
+        data_uri = "data:image/jpeg;base64," + base64.b64encode(jpeg_out).decode("ascii")
+        log.debug("get_snapshot: → width=%d height=%d quality=%s protocol=%s bytes=%d", width, height, quality, protocol, len(jpeg_out))
+        result = {
             "data_uri": data_uri,
             "width": width,
             "height": height,
+            "quality": quality,
             "protocol": protocol,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
+        if include_status:
+            result["status"] = _build_status(name)
+        return result
     except Exception as e:
         log.error("get_snapshot: error for %s: %s", name, e, exc_info=True)
         return {"error": "stream_failed", "detail": str(e)}
@@ -225,46 +284,7 @@ def start_stream(name: str, port: int | None = None) -> dict:
             return s.iter_frames() if hasattr(s, 'iter_frames') else iter(s)
 
         def status_fn(n=name):
-            state = session_manager.get_state(n)
-            job = session_manager.get_job(n)
-            if state is None:
-                return {}
-            try:
-                nozzles = [
-                    {"id": e.id, "temp": round(e.temp, 1), "target": e.temp_target}
-                    for e in (state.extruders or [])
-                ]
-                if not nozzles:
-                    nozzles = [{"id": 0, "temp": round(state.active_nozzle_temp, 1),
-                                "target": state.active_nozzle_temp_target}]
-                climate = state.climate
-                has_device_error = any(e.get("type") == "device_error" for e in (state.hms_errors or []))
-                active_errors = sum(
-                    1 for e in (state.hms_errors or [])
-                    if e.get("type") == "device_hms" and has_device_error
-                )
-                return {
-                    "gcode_state": state.gcode_state,
-                    "print_percentage": job.print_percentage if job else 0,
-                    "current_layer": job.current_layer if job else 0,
-                    "total_layers": job.total_layers if job else 0,
-                    "elapsed_minutes": job.elapsed_minutes if job else 0,
-                    "remaining_minutes": job.remaining_minutes if job else 0,
-                    "stage_name": job.stage_name if job else "",
-                    "subtask_name": job.subtask_name if job else "",
-                    "nozzles": nozzles,
-                    "bed_temp": round(climate.bed_temp, 1),
-                    "bed_temp_target": climate.bed_temp_target,
-                    "chamber_temp": round(climate.chamber_temp, 1),
-                    "chamber_temp_target": climate.chamber_temp_target,
-                    "part_cooling_pct": climate.part_cooling_fan_speed_percent,
-                    "aux_pct": climate.aux_fan_speed_percent,
-                    "exhaust_pct": climate.exhaust_fan_speed_percent,
-                    "wifi_signal": state.wifi_signal_strength,
-                    "active_error_count": active_errors,
-                }
-            except Exception:
-                return {}
+            return _build_status(n)
 
         # Shared image cache — regenerated only when job (gcode_file + plate_num) changes
         _img_cache: dict = {"key": None, "thumbnail": None, "layout": None}
@@ -377,10 +397,12 @@ def view_stream(name: str) -> dict:
     on macOS, Linux, and Windows without any extra dependencies.
 
     Returns:
-      url      — the local MJPEG server URL that was opened
-      port     — the server port
-      protocol — "rtsps" or "tcp_tls"
-      opened   — bool: True if the browser was launched successfully
+      url           — the local MJPEG server URL that was opened
+      port          — the server port
+      protocol      — "rtsps" or "tcp_tls"
+      opened        — bool: True if the browser was launched successfully
+      overlay_active — bool: True when the stream includes live print status, thumbnail,
+                       and layout overlays (always True for streams started by this tool)
     """
     import webbrowser
 
@@ -396,4 +418,5 @@ def view_stream(name: str) -> dict:
         "port": result["port"],
         "protocol": result["protocol"],
         "opened": opened,
+        "overlay_active": True,
     }

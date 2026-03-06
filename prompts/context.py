@@ -172,9 +172,16 @@ Configure the xcam AI vision detectors that monitor the print and can automatica
 Manage files on the printer's SD card and prepare print jobs. Upload .3mf files to queue a print, download files, view project plate thumbnails, and start prints. Read operations are safe; write operations require user_permission=True.
 
 ### Files (tools/files.py) — Reads safe; writes REQUIRE user_permission=True
-- list_sdcard_files(name, path) — list SD card directory
+- list_sdcard_files(name, path="/") — list SD card; path="/" returns full tree, any other path
+  returns only that subtree (e.g. "/cache"). Response may be gzip+base64 compressed for large trees.
 - get_file_info(name, file_path) — file attributes on SD card
-- get_project_info(name, file_path, plate_num=1) — 3MF metadata + thumbnail (data URI, embed directly)
+- get_project_info(name, file_path, plate_num=1, include_images=False) — 3MF metadata (no images by default)
+  Images are stripped by default; use get_plate_thumbnail / get_plate_topview for images on demand.
+  Multi-level hierarchy: call plate_num=1 first to get {plates:[1..N]} index, then iterate.
+- get_plate_thumbnail(name, file_path, plate_num, quality="standard") — isometric thumbnail image only
+  quality: "preview" (~5 KB) / "standard" (~16 KB, default) / "full" (~71 KB)
+- get_plate_topview(name, file_path, plate_num, quality="standard") — top-down view image only
+  Same quality tiers as get_plate_thumbnail.
 - upload_file / download_file / delete_file / create_folder — file operations
 - rename_sdcard_file(name, src_path, dest_path) — FTPS rename/move file on SD card
 - print_file(name, file_path, plate_num, bed_type, use_ams, ams_mapping?, ...) — start print from SD card
@@ -193,13 +200,15 @@ beyond the access_code already stored at add_printer() time.
 The MCP handles all streaming complexity internally. Two protocols are used:
 RTSPS (X1/H2D, port 322) and TCP+TLS binary (A1/P1, port 6000). You only use tools.
 
-- get_snapshot(name)        — Capture a single still frame. Returns:
+- get_snapshot(name, quality="standard", include_status=False) — Capture a single still frame. Returns:
                                data_uri   — complete data:image/jpeg;base64,... string
                                             Embed directly: ![snapshot]({data_uri})
                                             No decoding or saving needed.
                                width, height — frame dimensions in pixels
+                               quality    — tier used ("preview" ~5 KB / "standard" ~16 KB / "full" ~71 KB)
                                protocol   — "rtsps" or "tcp_tls"
                                timestamp  — ISO8601 capture time
+                               status     — live print telemetry dict (only when include_status=True)
                               Best for: "show me what's printing", visual quality check,
                               passing image to AI vision. Does NOT start a background server.
 
@@ -218,9 +227,10 @@ RTSPS (X1/H2D, port 322) and TCP+TLS binary (A1/P1, port 6000). You only use too
                                Returns: {stopped: bool, name: str}
 
 - view_stream(name)         — Start server (if needed) + open browser automatically.
-                               Returns: {url, port, protocol, opened: bool}
+                               Returns: {url, port, protocol, opened: bool, overlay_active: bool}
                               Uses webbrowser.open() — works on macOS, Linux, Windows.
                               Preferred for "let me watch the print" / "open the camera".
+                              overlay_active=True means stream includes live status + thumbnail overlays.
 
 Session-level operations: MQTT connection management, firmware version, telemetry history, and full state refresh. Rarely needed in normal operation. Some require user_permission=True.
 
@@ -228,7 +238,12 @@ Session-level operations: MQTT connection management, firmware version, telemetr
 - get_session_status / get_firmware_version — safe reads
 - pause_mqtt_session / resume_mqtt_session — REQUIRE user_permission=True
 - trigger_printer_refresh / force_state_refresh — REQUIRE user_permission=True (trigger) / safe (force)
-- get_monitoring_history — telemetry time-series history (60 min rolling)
+- get_monitoring_history(name, raw=False) — telemetry summary (default) or full time-series (raw=True)
+  Default returns {summary:{field:{min,max,avg,last,count},...}, gcode_state_durations} — lightweight.
+  Use raw=True only when you need the full 60-min series for all 8 fields.
+- get_monitoring_series(name, field) — full time-series for ONE field (e.g. "tool", "bed", "chamber")
+  Preferred over raw=True when you only need one metric. May return gzip+base64 compressed response.
+  Fields: tool, tool_1 (H2D second nozzle), bed, chamber, part_fan, aux_fan, exhaust_fan, heatbreak_fan
 - set_print_options(name, auto_recovery?, sound?) — REQUIRE user_permission=True
 - rename_printer(name, new_name) — change printer's firmware display name; REQUIRE user_permission=True
 
