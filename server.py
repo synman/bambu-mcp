@@ -64,6 +64,13 @@ logging.getLogger().setLevel(_log_level)
 log = logging.getLogger("bambu-mcp")
 
 # ── FastMCP server ─────────────────────────────────────────────────────────────
+def _pkg_version() -> str:
+    try:
+        from importlib.metadata import version
+        return version("bambu-mcp")
+    except Exception:
+        return "0.0.0"
+
 mcp = FastMCP(
     name="bambu-mcp",
     instructions=(
@@ -72,6 +79,9 @@ mcp = FastMCP(
         "Use the bambu_system_context prompt to load full context before any printer work."
     ),
 )
+# FastMCP doesn't expose version in its constructor, but the underlying MCPServer does.
+# Set it here so clients receive the correct version in the MCP initialize response.
+mcp._mcp_server.version = _pkg_version()
 
 # ── Register tools ─────────────────────────────────────────────────────────────
 _TOOL_MODULES = [

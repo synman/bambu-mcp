@@ -17,7 +17,24 @@ This applies to:
 
 ---
 
-## Architecture
+## Versioning Policy (SemVer)
+
+`bambu-mcp` follows **Semantic Versioning (SemVer)**: `MAJOR.MINOR.PATCH`.
+
+| Component | When to bump |
+|---|---|
+| `MAJOR` | Breaking change — removes/renames a tool, changes a required parameter, changes return shape incompatibly |
+| `MINOR` | New tool added, new optional parameter added (backwards-compatible addition) |
+| `PATCH` | Bug fix, docstring fix, internal refactor — no tool signature or behavior change |
+
+**Hard requirements:**
+- Version lives in **one place**: `pyproject.toml` → `[project] version = "X.Y.Z"`.
+- After any version bump, run `pip install -e .` so `importlib.metadata` reflects the new version.
+- `server.py` reads the version via `importlib.metadata.version("bambu-mcp")` and sets it on `mcp._mcp_server.version`. **Do not hardcode the version string anywhere else.**
+- Bump version in the same commit as the change that warrants it. Never bump speculatively.
+- Current version: **0.0.1**
+
+---
 
 - **bambu-mcp** is an MCP server exposing Bambu Lab printer control as tools.
 - All printer operations route exclusively through the **BPM library** (`bambu-printer-manager`) via `BambuPrinter` instances managed by `session_manager`.

@@ -67,6 +67,23 @@ Captured in:
 - `prompts/context.py` — includes `ESCALATION_POLICY_TEXT` verbatim in system context
 
 ---
+## Versioning
+
+`bambu-mcp` uses **Semantic Versioning (SemVer)**: `MAJOR.MINOR.PATCH`.
+
+| Component | When to bump |
+|---|---|
+| `MAJOR` | Breaking change: tool removed/renamed, required param changed, return shape broken |
+| `MINOR` | New tool added or new optional parameter added (backwards-compatible) |
+| `PATCH` | Bug fix, docstring fix, internal refactor — no tool API change |
+
+Version lives in one place: `pyproject.toml [project] version`. `server.py` reads it via
+`importlib.metadata.version("bambu-mcp")` and sets `mcp._mcp_server.version` so clients
+see the correct version in every MCP `initialize` response.
+
+**Current version: 0.0.1**
+
+---
 ## Installation
 
 ### Fully self-contained — no OS-specific dependencies
