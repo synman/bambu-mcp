@@ -221,3 +221,85 @@ def set_print_option(
     except Exception as e:
         log.error("set_print_option: error for %s: %s", name, e, exc_info=True)
         return f"Error setting option on '{name}': {e}"
+
+
+def send_gcode(
+    name: str,
+    gcode: str,
+    user_permission: bool = False,
+) -> str:
+    """
+    Send one or more raw G-code commands to the printer.
+
+    G-code (also written gcode) is the machine instruction language used to
+    control 3D printers. Each command is a short text instruction like 'G28'
+    (home all axes), 'G0 X50 Y50' (move to position), or 'M104 S200' (set
+    nozzle temperature). Commands are newline-separated when sending multiple.
+
+    gcode: a string containing one or more G-code commands separated by newlines.
+    Examples:
+      'G28'                      — home all axes
+      'G91\\nG0 X10\\nG90'        — relative mode, move 10mm on X, back to absolute
+      'M104 S0\\nM140 S0'         — turn off nozzle and bed heaters
+
+    WARNING: G-code commands bypass all print-job safety checks and are applied
+    immediately to the hardware. Incorrect commands can crash the toolhead,
+    damage the printer, or trigger a fault. Only use this for well-understood
+    G-code. For standard print operations (pause, speed, fan), prefer the
+    dedicated tools instead.
+    Requires user_permission=True.
+    """
+    log.debug("send_gcode: called for name=%s gcode=%r user_permission=%s", name, gcode, user_permission)
+    if not user_permission:
+        return _permission_denied()
+    printer = session_manager.get_printer(name)
+    if printer is None:
+        return _no_printer(name)
+    try:
+        printer.send_gcode(gcode)
+        log.debug("send_gcode: sent gcode to %s: %r", name, gcode)
+        return f"G-code sent to '{name}'."
+    except Exception as e:
+        log.error("send_gcode: error for %s: %s", name, e, exc_info=True)
+        return f"Error sending G-code to '{name}': {e}"
+
+
+def select_extrusion_calibration(
+    name: str,
+    tray_id: int,
+    cali_idx: int = -1,
+    user_permission: bool = False,
+) -> str:
+    """
+    Select an extrusion calibration profile for a specific filament spool.
+
+    Bambu printers can store multiple extrusion calibration profiles per
+    filament slot. Extrusion calibration (also called flow calibration) tunes
+    the exact amount of filament pushed through the nozzle to ensure the
+    printed lines match the intended dimensions.
+
+    tray_id: the absolute tray identifier for the filament slot to calibrate.
+    Encoding: ams_unit_index * 4 + slot (0–3). Examples:
+      - 0 = AMS unit 0, slot 0 (first AMS, first slot)
+      - 1 = AMS unit 0, slot 1
+      - 4 = AMS unit 1, slot 0 (second AMS, first slot)
+      - 254 = external spool holder
+    cali_idx: the index of the saved calibration profile to activate. Use -1
+    to let the printer automatically select the best matching profile for the
+    loaded filament. Use get_spool_info() to see currently loaded filaments
+    and their tray_ids before calling this.
+    Requires user_permission=True.
+    """
+    log.debug("select_extrusion_calibration: called for name=%s tray_id=%s cali_idx=%s user_permission=%s", name, tray_id, cali_idx, user_permission)
+    if not user_permission:
+        return _permission_denied()
+    printer = session_manager.get_printer(name)
+    if printer is None:
+        return _no_printer(name)
+    try:
+        printer.select_extrusion_calibration_profile(tray_id, cali_idx)
+        log.debug("select_extrusion_calibration: command sent to %s tray_id=%s cali_idx=%s", name, tray_id, cali_idx)
+        return f"Extrusion calibration profile selected for tray_id {tray_id} (cali_idx={cali_idx}) on '{name}'."
+    except Exception as e:
+        log.error("select_extrusion_calibration: error for %s: %s", name, e, exc_info=True)
+        return f"Error selecting extrusion calibration profile on '{name}': {e}"

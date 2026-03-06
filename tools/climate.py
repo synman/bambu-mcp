@@ -196,3 +196,51 @@ def get_chamber_light(name: str) -> dict:
         return result
     except Exception as e:
         return {"error": str(e)}
+
+
+def set_fan_speed(
+    name: str,
+    fan: str,
+    speed_percent: int,
+    user_permission: bool = False,
+) -> str:
+    """
+    Set the speed of a specific fan on the printer.
+
+    fan must be one of: 'part_cooling', 'aux', 'exhaust'.
+    - 'part_cooling': the fan that blows directly on the printed part to cool it.
+      Critical for PLA and PETG; often disabled for ABS to prevent warping.
+    - 'aux': the auxiliary recirculation fan inside the chamber. Helps regulate
+      chamber temperature and filter air on printers with HEPA filters.
+    - 'exhaust': the exhaust fan that vents chamber air out of the printer.
+      Used to expel fumes when printing ABS, ASA, or other engineering filaments.
+    speed_percent: integer 0–100. 0 = fan off, 100 = full speed.
+    Requires user_permission=True.
+
+    Note: These fan controls send M106 G-code commands internally. Fan speed
+    set here may be overridden by the active print job's slicer settings.
+    """
+    log.debug("set_fan_speed: called for name=%s fan=%s speed_percent=%s user_permission=%s", name, fan, speed_percent, user_permission)
+    if not user_permission:
+        return _permission_denied()
+    printer = session_manager.get_printer(name)
+    if printer is None:
+        return _no_printer(name)
+    if not 0 <= speed_percent <= 100:
+        return f"Error: speed_percent must be between 0 and 100, got {speed_percent}."
+    fan_map = {
+        "part_cooling": "set_part_cooling_fan_speed_target_percent",
+        "aux": "set_aux_fan_speed_target_percent",
+        "exhaust": "set_exhaust_fan_speed_target_percent",
+    }
+    fan_key = fan.lower()
+    if fan_key not in fan_map:
+        return f"Error: Unknown fan '{fan}'. Valid values: {list(fan_map.keys())}"
+    try:
+        method = getattr(printer, fan_map[fan_key])
+        method(speed_percent)
+        log.debug("set_fan_speed: set %s fan to %s%% on %s", fan_key, speed_percent, name)
+        return f"{fan_key} fan set to {speed_percent}% on '{name}'."
+    except Exception as e:
+        log.error("set_fan_speed: error for %s: %s", name, e, exc_info=True)
+        return f"Error setting {fan_key} fan speed on '{name}': {e}"

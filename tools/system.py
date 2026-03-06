@@ -227,3 +227,32 @@ def force_state_refresh(name: str) -> dict:
     except Exception as e:
         log.error("force_state_refresh: error for %s: %s", name, e, exc_info=True)
         return {"error": f"Error sending state refresh for '{name}': {e}"}
+
+
+def rename_printer(
+    name: str,
+    new_name: str,
+    user_permission: bool = False,
+) -> str:
+    """
+    Rename the printer device on the printer's own firmware.
+
+    Sends a RENAME_PRINTER command to the printer to change its display name
+    in the firmware (visible on the touchscreen and in Bambu Studio). This
+    changes the name stored on the printer itself, not the local identifier
+    used by this MCP (which is determined by the name passed to add_printer).
+    Requires user_permission=True.
+    """
+    log.debug("rename_printer: called for name=%s new_name=%s user_permission=%s", name, new_name, user_permission)
+    if not user_permission:
+        return _permission_denied()
+    printer = session_manager.get_printer(name)
+    if printer is None:
+        return _no_printer(name)
+    try:
+        printer.rename_printer(new_name)
+        log.debug("rename_printer: sent rename command to %s (new_name=%s)", name, new_name)
+        return f"Rename command sent to '{name}': printer display name set to '{new_name}'."
+    except Exception as e:
+        log.error("rename_printer: error for %s: %s", name, e, exc_info=True)
+        return f"Error renaming printer '{name}': {e}"

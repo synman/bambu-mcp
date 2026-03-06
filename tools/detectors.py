@@ -195,6 +195,7 @@ def set_first_layer_inspection(
 def set_air_printing_detection(
     name: str,
     enabled: bool,
+    sensitivity: str = "medium",
     user_permission: bool = False,
 ) -> str:
     """
@@ -202,9 +203,9 @@ def set_air_printing_detection(
 
     When triggered, the printer halts because the nozzle is detected to be
     extruding into open air (indicating a clog or grinding condition).
-    Requires user_permission=True.
+    sensitivity must be one of: 'low', 'medium', 'high'. Requires user_permission=True.
     """
-    log.debug("set_air_printing_detection: called for name=%s enabled=%s user_permission=%s", name, enabled, user_permission)
+    log.debug("set_air_printing_detection: called for name=%s enabled=%s sensitivity=%s user_permission=%s", name, enabled, sensitivity, user_permission)
     if not user_permission:
         log.debug("set_air_printing_detection: permission denied for %s", name)
         return _permission_denied()
@@ -214,10 +215,82 @@ def set_air_printing_detection(
         return _no_printer(name)
     try:
         from bpm.bambutools import DetectorSensitivity
+        try:
+            sens = DetectorSensitivity(sensitivity.lower())
+        except ValueError:
+            return f"Error: Invalid sensitivity '{sensitivity}'. Choose from: low, medium, high"
         log.debug("set_air_printing_detection: calling printer.set_airprinting_detector for %s", name)
-        printer.set_airprinting_detector(enabled, DetectorSensitivity.MEDIUM)
+        printer.set_airprinting_detector(enabled, sens)
         log.debug("set_air_printing_detection: command sent to %s", name)
-        return f"Air-printing detector {'enabled' if enabled else 'disabled'} on '{name}'."
+        return f"Air-printing detector {'enabled' if enabled else 'disabled'} (sensitivity: {sensitivity}) on '{name}'."
     except Exception as e:
         log.error("set_air_printing_detection: error for %s: %s", name, e, exc_info=True)
         return f"Error setting air-printing detector on '{name}': {e}"
+
+
+def set_nozzle_clumping_detection(
+    name: str,
+    enabled: bool,
+    sensitivity: str = "medium",
+    user_permission: bool = False,
+) -> str:
+    """
+    Enable or disable the nozzle clumping / blob detector (X-Cam AI vision).
+
+    When triggered, the printer halts the print. Detects filament accumulating
+    as a blob or clump around the nozzle tip — a condition that can damage the
+    nozzle, toolhead, or print if left unchecked.
+    sensitivity must be one of: 'low', 'medium', 'high'. Requires user_permission=True.
+    """
+    log.debug("set_nozzle_clumping_detection: called for name=%s enabled=%s sensitivity=%s user_permission=%s", name, enabled, sensitivity, user_permission)
+    if not user_permission:
+        return _permission_denied()
+    printer = session_manager.get_printer(name)
+    if printer is None:
+        return _no_printer(name)
+    try:
+        from bpm.bambutools import DetectorSensitivity
+        try:
+            sens = DetectorSensitivity(sensitivity.lower())
+        except ValueError:
+            return f"Error: Invalid sensitivity '{sensitivity}'. Choose from: low, medium, high"
+        printer.set_nozzleclumping_detector(enabled, sens)
+        log.debug("set_nozzle_clumping_detection: command sent to %s", name)
+        return f"Nozzle clumping detector {'enabled' if enabled else 'disabled'} (sensitivity: {sensitivity}) on '{name}'."
+    except Exception as e:
+        log.error("set_nozzle_clumping_detection: error for %s: %s", name, e, exc_info=True)
+        return f"Error setting nozzle clumping detector on '{name}': {e}"
+
+
+def set_purge_chute_detection(
+    name: str,
+    enabled: bool,
+    sensitivity: str = "medium",
+    user_permission: bool = False,
+) -> str:
+    """
+    Enable or disable the purge chute pile-up detector (X-Cam AI vision).
+
+    When triggered, the printer halts the print. Detects when purged filament
+    waste accumulates in the purge chute to a level that could block the toolhead
+    or cause jams during multi-color prints.
+    sensitivity must be one of: 'low', 'medium', 'high'. Requires user_permission=True.
+    """
+    log.debug("set_purge_chute_detection: called for name=%s enabled=%s sensitivity=%s user_permission=%s", name, enabled, sensitivity, user_permission)
+    if not user_permission:
+        return _permission_denied()
+    printer = session_manager.get_printer(name)
+    if printer is None:
+        return _no_printer(name)
+    try:
+        from bpm.bambutools import DetectorSensitivity
+        try:
+            sens = DetectorSensitivity(sensitivity.lower())
+        except ValueError:
+            return f"Error: Invalid sensitivity '{sensitivity}'. Choose from: low, medium, high"
+        printer.set_purgechutepileup_detector(enabled, sens)
+        log.debug("set_purge_chute_detection: command sent to %s", name)
+        return f"Purge chute pile-up detector {'enabled' if enabled else 'disabled'} (sensitivity: {sensitivity}) on '{name}'."
+    except Exception as e:
+        log.error("set_purge_chute_detection: error for %s: %s", name, e, exc_info=True)
+        return f"Error setting purge chute detector on '{name}': {e}"

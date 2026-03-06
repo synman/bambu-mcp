@@ -131,9 +131,13 @@ def set_nozzle_config(
     Requires user_permission=True.
 
     Extruder selection on H2D: extruder=0 = right nozzle; extruder=1 = left nozzle;
-    extruder=-1 = apply to all nozzles.
+    extruder=-1 = apply to all nozzles (applies to extruder 0 then extruder 1).
+    The underlying SET_ACCESSORIES command applies to the currently active extruder.
+    When extruder differs from the current active tool, set_active_tool() is called
+    first to select the target extruder. Side effect: active extruder may change.
+    For extruder=-1, the active extruder is left on extruder 1 after the call.
     """
-    log.debug("set_nozzle_config: called for name=%s diameter=%s nozzle_type=%s user_permission=%s", name, diameter, nozzle_type, user_permission)
+    log.debug("set_nozzle_config: called for name=%s diameter=%s nozzle_type=%s extruder=%s user_permission=%s", name, diameter, nozzle_type, extruder, user_permission)
     if not user_permission:
         log.debug("set_nozzle_config: permission denied for %s", name)
         return _permission_denied()
@@ -141,6 +145,7 @@ def set_nozzle_config(
     if printer is None:
         log.warning("set_nozzle_config: printer not connected: %s", name)
         return _no_printer(name)
+    state = session_manager.get_state(name)
     try:
         from bpm.bambutools import NozzleDiameter, NozzleType
         try:
@@ -153,25 +158,42 @@ def set_nozzle_config(
         except KeyError:
             valid = [v.name.lower() for v in NozzleType if v != NozzleType.UNKNOWN]
             return f"Error: Unknown nozzle_type '{nozzle_type}'. Valid: {valid}"
-        log.debug("set_nozzle_config: calling printer.set_nozzle_details for %s", name)
-        printer.set_nozzle_details(nozzle_diameter=nd, nozzle_type=nt)
-        log.debug("set_nozzle_config: command sent to %s", name)
-        return (
-            f"Nozzle config set to {diameter}mm {nozzle_type} on extruder {extruder} of '{name}'."
-        )
+
+        current_tool = state.active_tool.value if state and state.active_tool is not None else 0
+
+        def _apply_to_extruder(target: int):
+            if target != current_tool:
+                log.debug("set_nozzle_config: switching to extruder %s for %s", target, name)
+                printer.set_active_tool(target)
+            log.debug("set_nozzle_config: calling printer.set_nozzle_details for extruder %s on %s", target, name)
+            printer.set_nozzle_details(nozzle_diameter=nd, nozzle_type=nt)
+
+        if extruder == -1:
+            _apply_to_extruder(0)
+            _apply_to_extruder(1)
+            applied = "all extruders"
+        else:
+            _apply_to_extruder(extruder)
+            applied = f"extruder {extruder}"
+
+        log.debug("set_nozzle_config: command(s) sent to %s", name)
+        return f"Nozzle config set to {diameter}mm {nozzle_type} on {applied} of '{name}'."
     except Exception as e:
         log.error("set_nozzle_config: error for %s: %s", name, e, exc_info=True)
         return f"Error setting nozzle config on '{name}': {e}"
 
 
-def swap_tool(name: str, user_permission: bool = False) -> str:
+def swap_tool(name: str, extruder_id: int | None = None, user_permission: bool = False) -> str:
     """
     Swap the active extruder on H2D dual-extruder printers.
 
-    Toggles between extruder 0 (right) and extruder 1 (left). Has no effect on
-    single-extruder printers. Requires user_permission=True.
+    Without extruder_id: toggles between extruder 0 (right) and extruder 1 (left).
+    With extruder_id=0 or extruder_id=1: directly selects that extruder without
+    toggling — use this when you need to ensure a specific extruder is active
+    regardless of the current state. Has no effect on single-extruder printers.
+    Requires user_permission=True.
     """
-    log.debug("swap_tool: called for name=%s user_permission=%s", name, user_permission)
+    log.debug("swap_tool: called for name=%s extruder_id=%s user_permission=%s", name, extruder_id, user_permission)
     if not user_permission:
         log.debug("swap_tool: permission denied for %s", name)
         return _permission_denied()
@@ -182,13 +204,42 @@ def swap_tool(name: str, user_permission: bool = False) -> str:
     state = session_manager.get_state(name)
     try:
         from bpm.bambutools import ActiveTool
-        current = state.active_tool.value if state and state.active_tool is not None else 0
-        # ActiveTool.SINGLE_EXTRUDER == 0, extruder 1 == 1
-        next_tool = 1 if current == 0 else 0
-        log.debug("swap_tool: calling printer.set_active_tool(%s) for %s", next_tool, name)
-        printer.set_active_tool(next_tool)
+        if extruder_id is not None:
+            target = int(extruder_id)
+            log.debug("swap_tool: directly selecting extruder %s on %s", target, name)
+        else:
+            current = state.active_tool.value if state and state.active_tool is not None else 0
+            target = 1 if current == 0 else 0
+            log.debug("swap_tool: toggling from %s to %s on %s", current, target, name)
+        printer.set_active_tool(target)
         log.debug("swap_tool: command sent to %s", name)
-        return f"Tool swap command sent: switching to extruder {next_tool} on '{name}'."
+        return f"Tool selection command sent: extruder {target} now active on '{name}'."
     except Exception as e:
         log.error("swap_tool: error for %s: %s", name, e, exc_info=True)
         return f"Error swapping tool on '{name}': {e}"
+
+
+def refresh_nozzles(name: str, user_permission: bool = False) -> str:
+    """
+    Refresh nozzle information from the printer hardware.
+
+    Sends a REFRESH_NOZZLE command to the printer, which causes it to re-read
+    the installed nozzle hardware and update the telemetry reported by
+    get_nozzle_info(). Use this after physically swapping a nozzle on an H2D
+    or any other dual-extruder printer to ensure the MCP state reflects the
+    newly installed nozzle.
+    Requires user_permission=True.
+    """
+    log.debug("refresh_nozzles: called for name=%s user_permission=%s", name, user_permission)
+    if not user_permission:
+        return _permission_denied()
+    printer = session_manager.get_printer(name)
+    if printer is None:
+        return _no_printer(name)
+    try:
+        printer.refresh_nozzles()
+        log.debug("refresh_nozzles: command sent to %s", name)
+        return f"Nozzle refresh command sent to '{name}'."
+    except Exception as e:
+        log.error("refresh_nozzles: error for %s: %s", name, e, exc_info=True)
+        return f"Error refreshing nozzles on '{name}': {e}"

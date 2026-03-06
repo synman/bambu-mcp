@@ -292,6 +292,7 @@ def print_file(
     plate_num: int = 1,
     bed_type: str = "auto",
     use_ams: bool = True,
+    ams_mapping: str | None = None,
     timelapse: bool = False,
     bed_leveling: bool = True,
     flow_calibration: bool = False,
@@ -312,6 +313,15 @@ def print_file(
     use_ams=True = load filament from AMS slots as mapped in the .3mf file.
     use_ams=False = print using only the external spool holder (for single-color
     prints without AMS).
+    ams_mapping overrides the AMS slot assignment baked into the .3mf file. Provide
+    a JSON array string where each element is an absolute tray_id for the corresponding
+    filament slot in the file. tray_id encoding: ams_unit_index * 4 + slot (0–3).
+    Examples: slot 0 of AMS unit 0 = 0, slot 1 of AMS unit 0 = 1, slot 0 of AMS
+    unit 1 = 4. External spool holder = 254. Unmapped filament = -1.
+    Example: "[1, -1, -1, -1]" maps filament 1 to AMS unit 0 slot 1, rest unmapped.
+    When ams_mapping is provided, use_ams is automatically set to True.
+    Always call get_project_info() first to see what filament slots the .3mf requires,
+    then map those slots to the physical AMS slots you want to use.
     """
     log.debug("print_file: called for name=%s file_path=%s plate_num=%s bed_type=%s user_permission=%s", name, file_path, plate_num, bed_type, user_permission)
     if not user_permission:
@@ -328,35 +338,42 @@ def print_file(
             if bed_type and bed_type.upper() in PlateType.__members__
             else PlateType.AUTO
         )
-        ams_mapping = ""
-        if use_ams:
-            try:
-                from bpm.bambuproject import get_project_info as _get_project_info
-                info = _get_project_info(file_path, printer, plate_num=plate_num)
-                if info and hasattr(info, "metadata") and info.metadata:
-                    raw = info.metadata.get("ams_mapping", "")
-                    ams_mapping = __import__("json").dumps(raw) if isinstance(raw, list) else raw
-            except Exception:
-                pass
+        if ams_mapping is not None:
+            # Caller is explicitly overriding the AMS mapping
+            resolved_ams_mapping = ams_mapping
+            use_ams = True
+            log.debug("print_file: using caller-provided ams_mapping: %s", ams_mapping)
+        else:
+            resolved_ams_mapping = ""
+            if use_ams:
+                try:
+                    from bpm.bambuproject import get_project_info as _get_project_info
+                    info = _get_project_info(file_path, printer, plate_num=plate_num)
+                    if info and hasattr(info, "metadata") and info.metadata:
+                        raw = info.metadata.get("ams_mapping", "")
+                        resolved_ams_mapping = __import__("json").dumps(raw) if isinstance(raw, list) else raw
+                except Exception:
+                    pass
         log.debug("print_file: calling printer.print_3mf_file for %s", name)
         printer.print_3mf_file(
             name=file_path,
             plate=plate_num,
             bed=bed_enum,
             use_ams=use_ams,
-            ams_mapping=ams_mapping,
+            ams_mapping=resolved_ams_mapping,
             bedlevel=bed_leveling,
             flow=flow_calibration,
             timelapse=timelapse,
         )
         log.debug("print_file: print started for %s", name)
-        log.debug("print_file: → file=%s plate=%s bed_type=%s use_ams=%s", file_path, plate_num, bed_enum.name, use_ams)
+        log.debug("print_file: → file=%s plate=%s bed_type=%s use_ams=%s ams_mapping=%s", file_path, plate_num, bed_enum.name, use_ams, resolved_ams_mapping)
         return {
             "success": True,
             "file_path": file_path,
             "plate_num": plate_num,
             "bed_type": bed_enum.name,
             "use_ams": use_ams,
+            "ams_mapping": resolved_ams_mapping,
         }
     except Exception as e:
         log.error("print_file: error for %s: %s", name, e, exc_info=True)
@@ -705,3 +722,33 @@ def open_plate_layout(name: str, file_path: str, plate_num: int = 1) -> dict:
     except Exception as e:
         log.error("open_plate_layout: error for %s: %s", name, e, exc_info=True)
         return {"error": f"Error building plate layout: {e}"}
+
+
+def rename_sdcard_file(
+    name: str,
+    src_path: str,
+    dest_path: str,
+    user_permission: bool = False,
+) -> dict:
+    """
+    Rename or move a file on the printer's SD card.
+
+    src_path and dest_path are full paths on the SD card (e.g.
+    '/cache/my_old_name.gcode.3mf'). Both paths must be on the SD card —
+    this is an FTPS rename operation, not a copy. The file is moved/renamed
+    in place; no data is re-uploaded.
+    Requires user_permission=True.
+    """
+    log.debug("rename_sdcard_file: called for name=%s src=%s dest=%s user_permission=%s", name, src_path, dest_path, user_permission)
+    if not user_permission:
+        return {"error": _permission_denied()}
+    printer = session_manager.get_printer(name)
+    if printer is None:
+        return _no_printer(name)
+    try:
+        printer.rename_sdcard_file(src_path, dest_path)
+        log.debug("rename_sdcard_file: renamed %s → %s on %s", src_path, dest_path, name)
+        return {"success": True, "src_path": src_path, "dest_path": dest_path}
+    except Exception as e:
+        log.error("rename_sdcard_file: error for %s: %s", name, e, exc_info=True)
+        return {"error": f"Error renaming file on '{name}': {e}"}
