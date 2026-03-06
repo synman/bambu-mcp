@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "bambu-mcp": {
+      "command": "/Users/shell/bambu-mcp/.venv/bin/python3",
+      "args": ["/Users/shell/bambu-mcp/server.py"],
+      "env": {
+        "PYTHONPATH": "/Users/shell/bambu-mcp"
+      }
+    }
+  }
+}

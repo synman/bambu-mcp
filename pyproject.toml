@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=76"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+exclude = ["bambu_mcp.egg-info*", "*.egg-info"]
+
+[project]
+name = "bambu-mcp"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp[cli]==1.26.0",
+    "cryptography",
+    "av>=14.0",
+    "pillow",
+    "bambu-printer-manager @ git+https://github.com/synman/bambu-printer-manager.git@devel",
+]
+
+[project.scripts]
+bambu-mcp = "server:main"

@@ -1,0 +1,4 @@
+[secrets]
+# Default password for the encrypted secrets store.
+# Change this before use. Applies to ~/.bambu-mcp/secrets.enc
+password = "changeit"
