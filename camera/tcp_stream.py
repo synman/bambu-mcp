@@ -71,7 +71,7 @@ def capture_frame(ip: str, access_code: str, timeout: float = 30.0) -> bytes:
     Uses a blocking connection — for one-shot snapshot use only.
     Returns raw JPEG bytes.
     """
-    log.debug("capture_frame: connecting to %s:6000", ip)
+    log.info("capture_frame: connecting to %s:6000 timeout=%.1fs", ip, timeout)
     ctx = _make_ssl_context()
     with socket.create_connection((ip, 6000), timeout=timeout) as raw:
         sock = ctx.wrap_socket(raw, server_hostname=ip)
@@ -81,7 +81,7 @@ def capture_frame(ip: str, access_code: str, timeout: float = 30.0) -> bytes:
         size = int.from_bytes(raw_header[:4], "little")
         log.debug("capture_frame: reading JPEG payload size=%d", size)
         data = _read_exactly(sock, size)
-        log.debug("capture_frame: received %d bytes", len(data))
+        log.info("capture_frame: → %d bytes from %s", len(data), ip)
         return data
 
 

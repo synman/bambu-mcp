@@ -73,29 +73,49 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
 #fps{position:fixed;top:14px;right:16px;color:rgba(255,255,255,.55);
   font:700 15px/1 'Courier New',monospace;pointer-events:none;letter-spacing:.04em;
   text-shadow:0 1px 3px rgba(0,0,0,.9)}
+@keyframes pulse{0%{opacity:1}50%{opacity:.42}100%{opacity:1}}
+.heating{animation:pulse 1.5s ease-in-out infinite}
+#badge-row{display:flex;align-items:center;gap:6px;margin-bottom:5px}
+#badge{margin-bottom:0}
+#speed-badge{display:none;font-size:10px;font-weight:700;padding:1px 6px;
+  border-radius:3px;letter-spacing:.03em}
+.sQ{background:#2a2a2a;color:#666}.sS{background:#1a3a1a;color:#50b060}
+.sSP{background:#4a2e10;color:#e0902a}.sL{background:#4a1010;color:#e05050}
+#progress-bar{height:3px;background:rgba(255,255,255,.08);border-radius:2px;margin:3px 0 4px}
+#progress-fill{height:100%;border-radius:2px;transition:width .6s}
+#filament-row{margin:2px 0 1px;font-size:12px}
+#door-warn{font-size:11px;font-weight:700;margin-top:2px;padding:1px 0}
+#humidity-row{font-size:11px;margin-top:3px}
 </style>
 </head>
 <body>
 <img id="stream">
 <div id="fps"></div>
 <div id="hud">
-  <div id="badge" class="bIDLE">IDLE</div>
+  <div id="badge-row">
+    <div id="badge" class="bIDLE">IDLE</div>
+    <div id="speed-badge"></div>
+  </div>
   <div id="subtask" class="dim" style="font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:275px;margin-bottom:2px"></div>
   <div class="row"><span class="lbl">Progress</span><span id="pct" class="val">\u2014</span></div>
   <div class="row"><span class="lbl">Layer</span><span id="layers" class="val">\u2014</span></div>
+  <div id="progress-bar"><div id="progress-fill"></div></div>
   <div id="stage-row" class="row hidden"><span class="lbl">Stage</span><span id="stage" class="val" style="text-align:right;max-width:190px;font-size:11px">\u2014</span></div>
   <div id="time-row" class="row hidden"><span class="lbl">Elapsed</span><span id="elapsed" class="val">\u2014</span></div>
   <div id="remain-row" class="row hidden"><span class="lbl">Remain</span><span id="remain" class="val">\u2014</span></div>
   <div class="sep"></div>
   <div class="hdr">Temps</div>
   <div id="nozzles"></div>
+  <div id="filament-row" style="display:none"></div>
   <div class="row"><span class="lbl">Bed</span><span id="bed" class="dim">\u2014</span></div>
   <div id="chamber-row" class="row hidden"><span class="lbl">Chamber</span><span id="chamber" class="dim">\u2014</span></div>
+  <div id="door-warn" style="display:none"></div>
   <div id="sec-fans" class="hidden">
     <div class="sep"></div>
     <div class="hdr">Fans</div>
     <div id="fans"></div>
   </div>
+  <div id="humidity-row" style="display:none"></div>
   <div class="sep"></div>
   <div class="row" style="font-size:11px">
     <span id="wifi" class="dim"></span>
@@ -135,8 +155,21 @@ function update(d){
   var lEl=document.getElementById('layers');
   lEl.textContent=(active&&d.total_layers>0)?d.current_layer+' / '+d.total_layers:'\u2014';
 
+  // E3 — progress bar
+  var pfEl=document.getElementById('progress-fill');
+  var stateColors={RUNNING:'#60d080',PREPARE:'#80a0ff',PAUSE:'#ffcc40',FAILED:'#ff6060',FINISH:'#60d0e0'};
+  pfEl.style.width=(active?(d.print_percentage||0):0)+'%';
+  pfEl.style.background=stateColors[s]||'#555';
+
   var sub=document.getElementById('subtask');
   sub.textContent=(active&&d.subtask_name)?d.subtask_name:'';
+
+  // E6 — speed level badge
+  var spdEl=document.getElementById('speed-badge');
+  var spdMap={1:['QUIET','sQ'],2:['STANDARD','sS'],3:['SPORT','sSP'],4:['LUDICROUS','sL']};
+  var se=spdMap[d.speed_level];
+  if(se&&active){spdEl.textContent=se[0];spdEl.className=se[1];spdEl.style.display='inline-block';}
+  else spdEl.style.display='none';
 
   var sn=d.stage_name||'';
   var sRow=document.getElementById('stage-row');
@@ -152,28 +185,55 @@ function update(d){
   if(d.remaining_minutes>0){document.getElementById('remain').textContent=fmtM(d.remaining_minutes);rRow.classList.remove('hidden');}
   else rRow.classList.add('hidden');
 
+  // E8 — heating animation helper
+  function htg(t,tgt){return (tgt>0&&tgt-t>10)?' heating':'';}
+
   var nEl=document.getElementById('nozzles');
   nEl.innerHTML='';
   (d.nozzles||[]).forEach(function(n){
     var lbl=(d.nozzles.length>1)?('Nozzle '+(n.id===0?'R':'L')):'Nozzle';
     var cls=tCls(n.temp,n.target);
-    nEl.innerHTML+='<div class="row"><span class="lbl">'+lbl+'</span><span class="'+cls+'">'+fmtT(n.temp,n.target)+'</span></div>';
+    nEl.innerHTML+='<div class="row"><span class="lbl">'+lbl+'</span><span class="'+cls+htg(n.temp,n.target)+'">'+fmtT(n.temp,n.target)+'</span></div>';
   });
+
+  // E4 — active filament swatch
+  var fRow=document.getElementById('filament-row');
+  if(d.active_filament&&active){
+    var f=d.active_filament;
+    var fc=f.color||'#888';
+    if(fc&&!fc.startsWith('#')&&/^[0-9a-fA-F]{6}$/.test(fc)) fc='#'+fc;
+    var fh='<span style="display:inline-block;width:10px;height:10px;background:'+fc+
+           ';border-radius:2px;vertical-align:middle;margin-right:4px;border:1px solid rgba(255,255,255,.2)"></span>';
+    fh+='<span class="val">'+(f.type||'\u2014')+'</span>';
+    if(f.remaining_pct>0) fh+=' <span class="dim">'+f.remaining_pct+'%</span>';
+    fRow.innerHTML=fh;fRow.style.display='block';
+  } else fRow.style.display='none';
 
   var bedEl=document.getElementById('bed');
   bedEl.textContent=fmtT(d.bed_temp,d.bed_temp_target);
-  bedEl.className=tCls(d.bed_temp,d.bed_temp_target);
+  bedEl.className=tCls(d.bed_temp,d.bed_temp_target)+htg(d.bed_temp,d.bed_temp_target);
 
   var cRow=document.getElementById('chamber-row');
   if(d.chamber_temp>0||d.chamber_temp_target>0){
     var cEl=document.getElementById('chamber');
     cEl.textContent=fmtT(d.chamber_temp,d.chamber_temp_target);
-    cEl.className=tCls(d.chamber_temp,d.chamber_temp_target);
+    cEl.className=tCls(d.chamber_temp,d.chamber_temp_target)+htg(d.chamber_temp,d.chamber_temp_target);
     cRow.classList.remove('hidden');
   } else cRow.classList.add('hidden');
 
+  // E5 — chamber door / lid warning
+  var dwEl=document.getElementById('door-warn');
+  var openParts=[];
+  if(d.is_chamber_door_open) openParts.push('DOOR');
+  if(d.is_chamber_lid_open) openParts.push('LID');
+  if(openParts.length>0){
+    dwEl.innerHTML='<span style="color:#ff6040">\u26a0 '+openParts.join(' + ')+' OPEN</span>';
+    dwEl.style.display='block';
+  } else dwEl.style.display='none';
+
+  // E2 — heatbreak fan added to fan list
   var fanSec=document.getElementById('sec-fans');
-  var fanData=[['Part',d.part_cooling_pct],['Aux',d.aux_pct],['Exhaust',d.exhaust_pct]].filter(function(f){return f[1]>0;});
+  var fanData=[['Part',d.part_cooling_pct],['Aux',d.aux_pct],['Exhaust',d.exhaust_pct],['Heatbreak',d.heatbreak_pct]].filter(function(f){return f[1]>0;});
   if(fanData.length>0){
     var fEl=document.getElementById('fans');
     fEl.innerHTML='';
@@ -181,8 +241,30 @@ function update(d){
     fanSec.classList.remove('hidden');
   } else fanSec.classList.add('hidden');
 
+  // E7 — AMS humidity (shown only when elevated)
+  var hmEl=document.getElementById('humidity-row');
+  var hIdx=d.ams_humidity_index||0;
+  if(hIdx>=3){
+    var hc=hIdx>=4?'#ff5050':'#ffcc40';
+    hmEl.innerHTML='<span style="color:'+hc+'">&#x1F4A7; Humid '+hIdx+'/5</span>';
+    hmEl.style.display='block';
+  } else hmEl.style.display='none';
+
+  // E1 — Wi-Fi signal bars
   var wEl=document.getElementById('wifi');
-  wEl.textContent=d.wifi_signal?'Wi-Fi '+d.wifi_signal:'';
+  if(d.wifi_signal){
+    var wm=d.wifi_signal.match(/-?\\d+/);
+    if(wm){
+      var dbm=parseInt(wm[0]);
+      var tier=dbm>=-50?4:dbm>=-60?3:dbm>=-70?2:dbm>=-80?1:0;
+      var wc=tier===4?'#60d080':tier===3?'#a0e040':tier===2?'#ffcc40':tier===1?'#ff9040':'#ff5050';
+      var bars=['\u2581','\u2583','\u2585','\u2587'];
+      var ws='<span style="letter-spacing:1px">';
+      bars.forEach(function(b,i){ws+='<span style="color:'+(i<tier?wc:'#333')+'">'+b+'</span>';});
+      ws+='</span> <span style="color:#555">'+dbm+'</span>';
+      wEl.innerHTML=ws;
+    } else wEl.textContent=d.wifi_signal;
+  } else wEl.textContent='';
 
   var eEl=document.getElementById('errors');
   if(d.active_error_count>0){
@@ -296,6 +378,7 @@ class _MJPEGHTTPServer(ThreadingHTTPServer):
         self._fps_lock = threading.Lock()
         self._fps_times: collections.deque[float] = collections.deque()
         self._fps_last_frame_id: int = -1
+        log.debug("_MJPEGHTTPServer.__init__: ready on port %s", addr[1])
 
 
 class _StreamHandler(BaseHTTPRequestHandler):
@@ -323,8 +406,10 @@ class _StreamHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+        log.debug("_serve_html: done, %d bytes sent to %s", len(body), self.client_address)
 
     def _serve_status(self):
+        log.debug("_serve_status: called from %s", self.client_address)
         data = {}
         if self.server.status_fn:
             try:
@@ -365,7 +450,7 @@ class _StreamHandler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
             return
-        log.debug("_serve_image: serving %d bytes to %s", len(data), self.client_address)
+        log.debug("_serve_image: served %d bytes to %s", len(data), self.client_address)
         self.send_response(200)
         self.send_header("Content-Type", "image/png")
         self.send_header("Content-Length", str(len(data)))
@@ -512,6 +597,7 @@ class MJPEGServer:
 
     def _next_port(self) -> int:
         """Find the next available port starting at BASE_PORT."""
+        log.debug("MJPEGServer._next_port: searching from BASE_PORT=%d", BASE_PORT)
         used = {e.port for e in self._servers.values()}
         port = BASE_PORT
         while True:
@@ -522,11 +608,14 @@ class MJPEGServer:
 
 
 def _port_available(port: int) -> bool:
+    log.debug("_port_available: checking port=%d", port)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         try:
             s.bind(("", port))
+            log.debug("_port_available: port=%d is available", port)
             return True
         except OSError:
+            log.debug("_port_available: port=%d is in use", port, exc_info=True)
             return False
 
 

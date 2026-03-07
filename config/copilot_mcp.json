@@ -5,7 +5,8 @@
       "command": "/Users/shell/bambu-mcp/.venv/bin/python3",
       "args": ["/Users/shell/bambu-mcp/server.py"],
       "env": {
-        "PYTHONPATH": "/Users/shell/bambu-mcp"
+        "PYTHONPATH": "/Users/shell/bambu-mcp",
+        "BAMBU_MCP_DEBUG": "1"
       }
     }
   }
