@@ -123,6 +123,20 @@ seconds. It is NOT a hardware fault and must NOT be treated as a blocker for sta
 a new job. If it has not yet self-cleared, use `clear_print_error()` to dismiss it
 immediately. Never refuse to submit a new job solely because this error code is present.
 
+**Two-command clear protocol (mandatory for reliable error dismissal).**
+BambuStudio sends TWO commands when dismissing an error dialog, and `clear_print_error()`
+replicates both:
+  1. `clean_print_error` — clears the `print_error` integer value on the printer.
+  2. `uiop` (system command, action "close") — signals "UI dialog acknowledged."
+Without the `uiop` signal the printer stays in a UI-acknowledgment pending state.
+Any open BambuStudio session will re-raise `print_error` on every `push_status` until
+it receives this signal, overriding the clear. Always use `clear_print_error()` — never
+send `clean_print_error` alone via `send_mqtt_command`.
+
+`gcode_state: "FAILED"` after cancellation is a terminal job state, NOT a fault. It
+persists until a new print starts and does NOT block printing. Healthy post-cancel state
+is `gcode_state: "FAILED"` + `print_error: 0`.
+
 ---
 
 

@@ -113,6 +113,14 @@ def clear_print_error(
     a lingering cancellation or fault error (e.g. HMS_0300-400C "task was
     canceled") before starting a new print.
 
+    This tool sends TWO commands, matching the protocol BambuStudio uses when
+    dismissing an error dialog:
+      1. clean_print_error — clears the print_error value on the printer.
+      2. uiop (UI operation) — signals "dialog acknowledged" to the printer.
+         Without this second command, the printer remains in a UI-acknowledgment
+         pending state and any open BambuStudio session will re-raise print_error
+         on every push_status until it receives this signal.
+
     print_error: the integer error code to clear. Pass 0 to clear any active
         error without specifying a code. Use get_hms_errors() to find the
         current print_error value.
@@ -137,7 +145,8 @@ def clear_print_error(
             name, print_error,
         )
         printer.clean_print_error(subtask_id=subtask_id, print_error=print_error)
-        log.debug("clear_print_error: command sent to %s", name)
+        printer.clean_print_error_uiop(print_error=print_error)
+        log.debug("clear_print_error: clean_print_error + uiop sent to %s print_error=%08X", name, print_error)
         return f"clear_print_error command sent to '{name}' (print_error={print_error})."
     except Exception as e:
         log.error("clear_print_error: error for %s: %s", name, e, exc_info=True)
