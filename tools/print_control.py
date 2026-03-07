@@ -99,6 +99,51 @@ def stop_print(name: str, user_permission: bool = False) -> str:
         return f"Error stopping '{name}': {e}"
 
 
+def clear_print_error(
+    name: str,
+    print_error: int = 0,
+    subtask_id: str = "",
+    user_permission: bool = False,
+) -> str:
+    """
+    Clear an active print_error on the named printer.
+
+    Sends a clean_print_error command to the printer. The printer acknowledges
+    by pushing a push_status with print_error reset to 0. Use this to dismiss
+    a lingering cancellation or fault error (e.g. HMS_0300-400C "task was
+    canceled") before starting a new print.
+
+    print_error: the integer error code to clear. Pass 0 to clear any active
+        error without specifying a code. Use get_hms_errors() to find the
+        current print_error value.
+    subtask_id: optional subtask_id of the failed job from get_job_info().
+        Pass empty string if not known.
+    Requires user_permission=True.
+    """
+    log.debug(
+        "clear_print_error: called for name=%s print_error=%s subtask_id=%s user_permission=%s",
+        name, print_error, subtask_id, user_permission,
+    )
+    if not user_permission:
+        log.debug("clear_print_error: permission denied for %s", name)
+        return _permission_denied()
+    printer = session_manager.get_printer(name)
+    if printer is None:
+        log.warning("clear_print_error: printer not connected: %s", name)
+        return _no_printer(name)
+    try:
+        log.debug(
+            "clear_print_error: calling printer.clean_print_error() for %s print_error=%s",
+            name, print_error,
+        )
+        printer.clean_print_error(subtask_id=subtask_id, print_error=print_error)
+        log.debug("clear_print_error: command sent to %s", name)
+        return f"clear_print_error command sent to '{name}' (print_error={print_error})."
+    except Exception as e:
+        log.error("clear_print_error: error for %s: %s", name, e, exc_info=True)
+        return f"Error clearing print error on '{name}': {e}"
+
+
 def set_print_speed(
     name: str,
     speed_level: str,

@@ -497,6 +497,27 @@ def print_file(
     When ams_mapping is provided, use_ams is automatically set to True.
     Always call get_project_info() first to see what filament slots the .3mf requires,
     then map those slots to the physical AMS slots you want to use.
+
+    ⚠️ CONFIRMATION REQUIRED — DO NOT CALL THIS TOOL until all steps below are done
+    IN A SINGLE TURN. This tool starts an irreversible physical print.
+
+    STEP 1 — Gather everything first (no user interaction yet):
+      Call get_project_info(), get_ams_units(), get_spool_info() to collect all data
+      needed to build the complete summary before asking the user anything.
+
+    STEP 2 — Present ONE complete summary containing ALL of the following:
+      - Part name(s) and filament(s) from the project metadata
+      - bed_type (from metadata) — ask: is this correct for the plate physically on the bed?
+      - ams_mapping — show each filament → AMS unit/slot; ask: matches what's loaded?
+      - flow_calibration (default False) — ask: run flow calibration before printing?
+      - timelapse (default False) — ask: record a timelapse?
+      - bed_leveling (default True) — ask: run bed leveling, or skip for speed?
+
+    STEP 3 — Wait for explicit go-ahead AFTER the complete summary.
+      Do NOT call print_file after confirming individual parameters across separate turns.
+      Confirming flow_calibration, timelapse, or bed_leveling mid-conversation does NOT
+      satisfy this gate. The go-ahead must come in the turn immediately after the full
+      summary is shown with all six items visible.
     """
     log.debug("print_file: called for name=%s file_path=%s plate_num=%s bed_type=%s user_permission=%s", name, file_path, plate_num, bed_type, user_permission)
     if not user_permission:

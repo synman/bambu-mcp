@@ -70,9 +70,16 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
 .bFINISH{background:#1a4a5c;color:#60d0e0}
 .bIDLE,.bINIT{background:#222;color:#777}
 .hidden{display:none}
-#fps{position:fixed;top:14px;right:16px;color:rgba(255,255,255,.55);
-  font:700 15px/1 'Courier New',monospace;pointer-events:none;letter-spacing:.04em;
-  text-shadow:0 1px 3px rgba(0,0,0,.9)}
+#fps{position:fixed;top:12px;right:14px;background:rgba(0,0,0,.72);padding:6px 8px 8px;
+  border-radius:6px;pointer-events:none;border:1px solid rgba(255,255,255,.10);
+  display:none;flex-direction:column;align-items:stretch;gap:3px;width:52px;text-align:center}
+#fps-num{font:800 14px/1 'Courier New',monospace;letter-spacing:-.02em;transition:color .4s;width:100%}
+#fps-lbl{font:600 12px/1 sans-serif;letter-spacing:.08em;color:rgba(255,255,255,.4);width:100%}
+#fps-bar{display:flex;gap:2px;align-items:flex-end;height:10px;justify-content:center;width:100%}
+#fps-bar span{width:10px;border-radius:1px;background:rgba(255,255,255,.15);transition:background .4s,height .4s}
+.fps-hi{color:#39ff6e}.fps-mid{color:#f5a623}.fps-lo{color:#ff4444}
+.error-link{pointer-events:auto;color:inherit;text-decoration:none;cursor:pointer}
+.error-link:hover{text-decoration:underline}
 @keyframes pulse{0%{opacity:1}50%{opacity:.42}100%{opacity:1}}
 .heating{animation:pulse 1.5s ease-in-out infinite}
 #badge-row{display:flex;align-items:center;gap:6px;margin-bottom:5px}
@@ -90,7 +97,7 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
 </head>
 <body>
 <img id="stream">
-<div id="fps"></div>
+<div id="fps"><span id="fps-num"></span><span id="fps-lbl">FPS</span><div id="fps-bar"><span></span><span></span><span></span><span></span><span></span></div></div>
 <div id="hud">
   <div id="badge-row">
     <div id="badge" class="bIDLE">IDLE</div>
@@ -119,7 +126,7 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
   <div class="sep"></div>
   <div class="row" style="font-size:11px">
     <span id="wifi" class="dim"></span>
-    <span id="errors" class="warn hidden"></span>
+    <div id="errors" class="hidden"></div>
   </div>
 </div>
 <div id="thumb-wrap" class="img-panel hidden">
@@ -244,8 +251,8 @@ function update(d){
   // E7 — AMS humidity (shown only when elevated)
   var hmEl=document.getElementById('humidity-row');
   var hIdx=d.ams_humidity_index||0;
-  if(hIdx>=3){
-    var hc=hIdx>=4?'#ff5050':'#ffcc40';
+  if(hIdx>0&&hIdx<=2){
+    var hc=hIdx===1?'#ff5050':'#ffcc40';
     hmEl.innerHTML='<span style="color:'+hc+'">&#x1F4A7; Humid '+hIdx+'/5</span>';
     hmEl.style.display='block';
   } else hmEl.style.display='none';
@@ -267,8 +274,14 @@ function update(d){
   } else wEl.textContent='';
 
   var eEl=document.getElementById('errors');
-  if(d.active_error_count>0){
-    eEl.textContent='\u26a0 '+d.active_error_count+' error'+(d.active_error_count>1?'s':'');
+  if(d.hms_errors&&d.hms_errors.length>0){
+    var html='';
+    d.hms_errors.forEach(function(e){
+      var lbl='\u26a0 '+(e.code||'error');
+      if(e.url) html+='<a class="error-link warn" href="'+e.url+'" onclick="window.open(this.href,\\'hms_popup\\',\\'width=600,height=400,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes\\');return false;">'+lbl+'</a><br>';
+      else html+='<span class="warn">'+lbl+'</span><br>';
+    });
+    eEl.innerHTML=html;
     eEl.classList.remove('hidden');
   } else eEl.classList.add('hidden');
 }
@@ -292,7 +305,21 @@ function refreshImages(){
 function poll(){fetch('/status').then(function(r){return r.json();}).then(function(d){
   update(d);
   var f=d.fps||0;
-  document.getElementById('fps').textContent=f>0?f+' fps':'';
+  var fpsCont=document.getElementById('fps');
+  if(f>0){
+    fpsCont.style.display='flex';
+    var numEl=document.getElementById('fps-num');
+    numEl.textContent=f;
+    numEl.className=f>=24?'fps-hi':f>=12?'fps-mid':'fps-lo';
+    var bars=document.querySelectorAll('#fps-bar span');
+    var cap=30,pct=Math.min(f/cap,1),lit=Math.round(pct*5);
+    var barCol=f>=24?'#39ff6e':f>=12?'#f5a623':'#ff4444';
+    var heights=['4px','7px','10px','7px','4px'];
+    bars.forEach(function(b,i){
+      if(i<lit){b.style.background=barCol;b.style.height=heights[i];}
+      else{b.style.background='rgba(255,255,255,.15)';b.style.height='3px';}
+    });
+  }else{fpsCont.style.display='none';}
 }).catch(function(){});}
 poll();
 setInterval(poll,2000);

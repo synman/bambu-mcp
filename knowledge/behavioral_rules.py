@@ -78,9 +78,54 @@ background agents, scripted execution.
 
 ---
 
-## ⚠️ Session Start — Auto-Discovery Rule
+## ⚠️ Pre-Print Confirmation Gate (Mandatory)
 
-At the start of every session, call `get_configured_printers()` immediately.
+Never call `print_file` without explicit user confirmation in the current turn.
+
+Before calling `print_file`:
+1. Gather everything first — fetch `get_project_info`, `get_ams_units`, `get_spool_info`.
+2. Present ONE complete summary containing all parameters:
+   - Part name(s) and filament(s)
+   - `bed_type` — confirm matches the plate physically on the bed
+   - `ams_mapping` — confirm each filament → AMS slot mapping matches loaded spools
+   - `flow_calibration` — run flow calibration before printing?
+   - `timelapse` — record a timelapse?
+   - `bed_leveling` — run bed leveling, or skip for speed?
+3. Wait for explicit go-ahead AFTER the complete summary.
+
+Single-summary rule (hard): Confirming some parameters across separate turns does NOT
+satisfy the gate. Do NOT call print_file after confirming only flow_calibration,
+timelapse, or bed_leveling mid-conversation. The complete summary must be shown first,
+and print_file may only be called after the user approves the full summary.
+
+---
+
+## Printer State Interpretation (Mandatory)
+
+**`gcode_state: "FAILED"` does not mean the printer is broken or blocked.**
+It means the *last job* failed. The printer is idle and ready to accept a new print.
+Do NOT treat FAILED gcode_state as a reason to withhold or delay submitting a new job.
+
+**Historical HMS errors do not indicate an active hardware fault.**
+A `device_hms` entry with no matching `device_error` is a cleared/past fault with
+`severity="Historical"` and `is_critical=False`. It has no bearing on the printer's
+current health. Only errors with `is_critical=True` or severity ≠ "Historical" require
+attention before printing.
+
+**Combining the two**: `gcode_state="FAILED"` + only historical HMS errors = the last
+job failed, the fault has since cleared, and the printer is healthy and idle. Proceed
+with a new job normally.
+
+**HMS_0300-400C ("The task was canceled") is transient — it does NOT block printing.**
+When a print job is canceled, the printer briefly sets `print_error: 50348044` (HMS
+code `0300-400C`). This is a UI-acknowledgment state that auto-clears within a few
+seconds. It is NOT a hardware fault and must NOT be treated as a blocker for starting
+a new job. If it has not yet self-cleared, use `clear_print_error()` to dismiss it
+immediately. Never refuse to submit a new job solely because this error code is present.
+
+---
+
+
 
 - If it returns a non-empty list: printers are configured — proceed normally.
 - If it returns an empty list: automatically call `discover_printers()` without waiting

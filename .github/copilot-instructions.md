@@ -32,7 +32,7 @@ This applies to:
 - After any version bump: (1) run `pip install -e .` so `importlib.metadata` reflects the new version, then (2) run `python make.py version-sync` to propagate the version to `README.md` and `PLAN.md`.
 - `server.py` reads the version via `importlib.metadata.version("bambu-mcp")` and sets it on `mcp._mcp_server.version`. **Do not hardcode the version string anywhere else.**
 - Bump version in the same commit as the change that warrants it. Never bump speculatively.
-- Current version: **0.0.6**
+- Current version: **0.1.0**
 
 ---
 
@@ -57,7 +57,37 @@ This applies to:
 **HTTP protocol**: `_StreamHandler` uses HTTP/1.0 (default — no `protocol_version` override). Do not switch to HTTP/1.1 without chunked encoding — malformed HTTP/1.1 breaks Safari. Raw writes after headers are correct for HTTP/1.0.
 - `bambu-printer-app` is a **knowledge reference only** — it must not be referenced or imported at runtime.
 
-## Veil of Ignorance (MCP Stress-Test Mode)
+## MCP Server Restart Procedure (Mandatory)
+
+Restarting `server.py` is required after any code change to `bambu-mcp`. The procedure has two distinct phases — both are required for a full restart.
+
+### Phase 1 — Kill and relaunch the server process
+
+1. **Find the running process**: `ps aux | grep "bambu-mcp.*server.py" | grep -v grep`
+2. **Kill it**: `kill <PID>`
+3. **Relaunch using the bash tool with `mode="async", detach=true`**:
+   ```
+   cd ~/bambu-mcp && BAMBU_MCP_DEBUG=1 nohup .venv/bin/python3 server.py >> bambu-mcp.log 2>&1
+   ```
+   - `detach=true` is **mandatory** — without it, the shell treats the process as a job and suspends it (status `T`/stopped) when the shell exits. `nohup` alone is not sufficient without `detach=true`.
+   - Do **not** use `setsid` — not available on macOS.
+   - Do **not** use `nohup ... &` in a sync or non-detached async shell — the process will be stopped, not backgrounded.
+4. **Verify**: `ps aux | grep "server.py" | grep -v grep` — confirm the process is running (`S` state, not `T`).
+5. **Check logs**: `tail -10 ~/bambu-mcp/bambu-mcp.log` — confirm clean startup, no import errors.
+
+### Phase 2 — Reconnect the MCP client (user action required)
+
+**Killing the server process drops all MCP tools from the Copilot CLI session.** They are NOT automatically restored when the server restarts. The user must run:
+
+```
+/mcp
+```
+
+This triggers an MCP reconnect in the Copilot CLI, which re-discovers and re-registers all tools from the restarted server. Until the user runs `/mcp`, tool calls will fail with "tool not available".
+
+**What the agent can do**: Inform the user that the server has been restarted and ask them to run `/mcp` to restore the tools. Do not attempt to call MCP tools until the tools_changed_notice confirms they are available again.
+
+
 
 This project uses a named testing mode called the **"veil of ignorance"** to stress-test whether the MCP tools and their docstrings are sufficient to guide a naive agent through a real print workflow without any external knowledge.
 
@@ -72,12 +102,44 @@ This project uses a named testing mode called the **"veil of ignorance"** to str
 - **At the start of every session**, read this file and honor the state it contains before doing anything else in this project.
 - **On "lower the veil"** (or drop / close / enable): write `LOWERED` to `~/bambu-mcp/.veil_state` immediately, then enter restricted mode.
 - **On "lift the veil"** (or raise / open / disable): write `LIFTED` to `~/bambu-mcp/.veil_state` immediately, then restore full access.
-- If the file is missing, default to `LIFTED` and recreate it.
+- If the file is missing, **do not assume a default** — ask the user explicitly: "`.veil_state` is missing — should the veil be LIFTED or LOWERED?" Write the user's answer to the file immediately before proceeding.
 - The file is `.gitignore`d — it is a local runtime state marker, not source code.
+- **Path is `~/bambu-mcp/.veil_state` — NOT `~/.veil_state`**. Writing to the home directory root is a known past failure mode; always use the full project-relative path.
 
 **Deactivation**: Only when the user explicitly says **"lift the veil"** (or raise / open / disable) — restore all of the following simultaneously: full Bambu Lab domain knowledge, workspace access, and access to all session history and context that existed before the veil was lowered. No other phrasing deactivates this mode.
 
+**Post-veil-test cleanup (mandatory):** If a veil test reaches `print_file` and a real print is submitted, the print MUST be cancelled immediately after the test is complete — before lifting the veil, before ending the session, and before any context compaction. Record the cancellation explicitly in the session state. A running print left over from a veil test is indistinguishable from an intentional print in the next session.
+
 **Purpose**: The goal is honest evaluation of MCP tool quality. If a naive agent cannot complete a task using only the tool docstrings, that is signal that the tools or docs need improvement — not a reason to break character early.
+
+---
+
+## Pre-Print Confirmation Gate (Mandatory)
+
+**Never call `print_file` without explicit user confirmation in the current turn.**
+
+`print_file` is an irreversible physical action. Before calling it, always:
+
+1. **Gather all parameters first** — fetch `get_project_info`, `get_ams_units`, and `get_spool_info` so you have everything needed to build the complete summary before asking anything.
+2. **Present ONE complete summary** containing all of the following — do not ask about parameters piecemeal across multiple turns:
+   - Part name(s) and filament(s)
+   - `bed_type` — from 3MF metadata; confirm it matches the plate physically on the bed
+   - `ams_mapping` — show each filament slot → physical AMS slot/spool mapping; confirm it matches what's loaded
+   - `flow_calibration` — ask: run flow calibration before printing?
+   - `timelapse` — ask: record a timelapse?
+   - `bed_leveling` — ask: run bed leveling, or skip for speed?
+3. **Wait for explicit go-ahead** — do not call `print_file` until the user approves ALL items in a single response.
+
+**⚠️ Single-summary rule (hard):** Confirming some parameters across separate turns does NOT satisfy the gate. The complete summary must be presented once, and `print_file` may only be called after the user approves in the turn that followed the complete summary. Confirming `flow_calibration` or `bed_leveling` mid-conversation does not grant permission to submit.
+
+**Pre-print checklist (must all be satisfied in the same summary before calling `print_file`):**
+- [ ] Part name(s) and filament(s) presented to user
+- [ ] `flow_calibration` confirmed
+- [ ] `timelapse` confirmed
+- [ ] `bed_leveling` confirmed
+- [ ] `bed_type` confirmed
+- [ ] `ams_mapping` confirmed against physically loaded spools
+- [ ] Explicit user go-ahead received in the turn immediately following the complete summary
 
 ---
 

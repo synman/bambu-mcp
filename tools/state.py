@@ -111,6 +111,10 @@ def get_job_info(name: str) -> dict:
     Field semantics:
     - gcode_state: string — known values: "IDLE", "PREPARE", "RUNNING", "PAUSE",
       "FINISH", "FAILED", "SLICING", "INIT".
+      IMPORTANT: "FAILED" means the *last* job failed — it is a terminal state for
+      that job, not an indication the printer is currently broken or blocked. The
+      printer is idle and ready to accept a new print job when gcode_state is
+      "FAILED". Do NOT treat FAILED as a reason to withhold or delay a new job.
     - stage: integer stage code —
         0=idle/finished, 1=auto-leveling, 2=heatbed preheating,
         3=sweeping XY mech, 4=changing filament, 6=M400 pause,
@@ -245,6 +249,11 @@ def get_hms_errors(name: str) -> dict:
     - A `device_hms` entry with no matching `device_error` = historical / cleared
       error (no longer active). These are returned with severity="Historical" and
       is_critical=False.
+    - Historical errors do NOT indicate a current hardware problem and do NOT block
+      printing. Only actively faulted errors (is_critical=True or severity≠"Historical")
+      require attention before submitting a new job.
+    - gcode_state="FAILED" combined with only historical HMS errors means the last
+      job failed but the printer is idle and healthy — ready for a new print.
     - Error codes follow pattern HMS_XXXX-XXXX-XXXX-XXXX. The first segment encodes
       the hardware module (e.g. 0x05=AMS, 0x07=Toolhead); the second segment encodes
       the error category and severity.
@@ -269,6 +278,9 @@ def get_print_progress(name: str) -> dict:
     Field semantics:
     - gcode_state: string — "IDLE", "PREPARE", "RUNNING", "PAUSE", "FINISH",
       "FAILED", "SLICING", "INIT".
+      IMPORTANT: "FAILED" means the *last* job failed — the printer is now idle and
+      ready to accept a new print. It does NOT mean the printer is currently broken
+      or blocked. Do NOT treat FAILED gcode_state as a reason to withhold a new job.
     - stage: integer stage code — see get_job_info() for the full table (0=idle,
       255=printing normally, 17=paused by user, etc.).
     """

@@ -50,10 +50,12 @@ def _build_status(name: str) -> dict:
                         "target": state.active_nozzle_temp_target}]
         climate = state.climate
         has_device_error = any(e.get("type") == "device_error" for e in (state.hms_errors or []))
-        active_errors = sum(
-            1 for e in (state.hms_errors or [])
+        active_error_list = [
+            {"code": e.get("code", ""), "msg": e.get("msg", ""), "url": e.get("url", "")}
+            for e in (state.hms_errors or [])
             if e.get("type") == "device_hms" and has_device_error
-        )
+        ]
+        active_errors = len(active_error_list)
 
         # Active filament swatch (E4)
         active_tray_id = getattr(state, "active_tray_id", -1)
@@ -90,7 +92,7 @@ def _build_status(name: str) -> dict:
         printer = session_manager.get_printer(name)
         speed_level = getattr(printer, "speed_level", 0) if printer else 0
 
-        return {
+        result = {
             "gcode_state": state.gcode_state,
             "print_percentage": job.print_percentage if job else 0,
             "current_layer": job.current_layer if job else 0,
@@ -115,7 +117,10 @@ def _build_status(name: str) -> dict:
             "speed_level": speed_level,
             "wifi_signal": state.wifi_signal_strength,
             "active_error_count": active_errors,
+            "hms_errors": active_error_list,
         }
+        log.debug("_build_status: → ok state=%s active_errors=%d", result.get("gcode_state"), active_errors)
+        return result
     except Exception:
         log.warning("_build_status: error building status for %s", name, exc_info=True)
         return {}

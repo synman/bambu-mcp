@@ -52,6 +52,10 @@ def cmd_install() -> None:
     print("Installing/updating bambu-mcp and dependencies...")
     run(str(PIP), "install", "--force-reinstall", "-e", str(PROJECT))
 
+    print("Force-reinstalling bambu-printer-manager from devel branch...")
+    run(str(PIP), "install", "--force-reinstall",
+        "bambu-printer-manager @ git+https://github.com/synman/bambu-printer-manager.git@devel")
+
     print()
     print("Done.")
     print(f"MCP config should use: {PYTHON}")

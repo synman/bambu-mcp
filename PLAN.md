@@ -81,7 +81,7 @@ Version lives in one place: `pyproject.toml [project] version`. `server.py` read
 `importlib.metadata.version("bambu-mcp")` and sets `mcp._mcp_server.version` so clients
 see the correct version in every MCP `initialize` response.
 
-**Current version: 0.0.6**
+**Current version: 0.1.0**
 
 ---
 ## Installation
@@ -787,3 +787,134 @@ Returning a raw `data_uri` blob to a human in a chat or terminal context is neve
 | `pyproject.toml` | Version 0.0.5 → 0.0.6 |
 | `README.md`, `PLAN.md` | Version sync via `make.py version-sync` |
 | `.github/copilot-instructions.md` | Current version updated to 0.0.6 |
+
+---
+
+### PA12 — HUD enhancements: FPS polish, HMS error links, pre-print confirmation gate
+
+**Problem**: Three gaps identified during a live print session:
+1. FPS indicator styling was inconsistent with the rest of the HUD (no background, wrong size, faded color).
+2. HMS error indicators in the HUD were plain text with no action path — each error has a `url` field from `get_hms_errors` but it was not wired to the HUD.
+3. Agent called `print_file` immediately after announcing plate details without asking for user confirmation or surfacing optional parameters (`flow_calibration`, `timelapse`, `bed_leveling`).
+
+**Fix**:
+
+**`camera/mjpeg_server.py`**:
+- `#fps` CSS: added `background:rgba(0,0,0,.65)`, `padding:4px 8px`, `border-radius:5px`, `border`, reduced to 12px — now matches HUD panel style. Removed `text-shadow`.
+- `.error-link` CSS: `pointer-events:auto` (overrides panel `none`), `color:inherit`, `text-decoration:none`, hover underline.
+- `#errors` element: changed from `<span>` to `<div>`.
+- JS `update()`: renders one `<a class="error-link warn">` per active HMS error using `e.url` and `e.code`; falls back to `<span>` if no URL.
+
+**`tools/camera.py`** (`_build_status`):
+- Replaced `active_errors = sum(...)` with `active_error_list` comprehension capturing `code`, `msg`, `url` per active error.
+- `active_error_count` now derived from `len(active_error_list)`.
+- Added `"hms_errors": active_error_list` to returned dict.
+- Added missing exit `log.debug(...)` on normal return path (logging standard compliance).
+- Assigned return dict to `result` variable before returning.
+
+**`.github/copilot-instructions.md`**:
+- Added `## Pre-Print Confirmation Gate (Mandatory)` rule: agent must present part/filament/AMS summary, surface `flow_calibration`/`timelapse`/`bed_leveling` as user-preference params, confirm `bed_type`/`ams_mapping` from metadata, and wait for explicit go-ahead before calling `print_file`. Includes a pre-print checklist.
+
+**Files changed:**
+
+| File | Change |
+|---|---|
+| `camera/mjpeg_server.py` | FPS CSS polish; `.error-link` CSS; `#errors` span→div; JS per-error anchor rendering |
+| `tools/camera.py` | `_build_status`: `hms_errors` list added; exit log added; return via `result` variable |
+| `.github/copilot-instructions.md` | Pre-Print Confirmation Gate rule added; version 0.0.6 → 0.0.7 |
+| `pyproject.toml` | Version 0.0.6 → 0.0.7 |
+| `README.md`, `PLAN.md` | Version sync via `make.py version-sync` |
+
+---
+
+### PA13 — MCP server restart procedure documented
+
+**Problem**: Restarting `server.py` after code changes requires two distinct steps — the agent had to rediscover these through trial and error during the session.
+
+**What was learned:**
+
+1. `nohup .venv/bin/python3 server.py >> bambu-mcp.log 2>&1 &` in a standard shell backgrounded the process but it was suspended (`T` state) rather than truly running. The `&` in a shell that was itself spawned as a session causes the job to be stopped when the shell exits.
+
+2. `setsid` is not available on macOS — cannot use to detach.
+
+3. `bg %1 && disown %1` failed because the job had already stopped before the command ran.
+
+4. The correct solution: use the bash tool's `mode="async", detach=true` option, which wraps the command with the CLI's own detachment mechanism (equivalent to `setsid` on Linux). The process launches as a true independent background process (`S` state).
+
+5. **Even after a successful process restart, all MCP tools drop from the Copilot CLI session.** Restarting `server.py` does not automatically reconnect the MCP client. The user must run `/mcp` to trigger a reconnect and re-register all tools.
+
+**Fix**: Documented the full two-phase restart procedure in `.github/copilot-instructions.md` under "MCP Server Restart Procedure (Mandatory)".
+
+**Files changed:**
+
+| File | Change |
+|---|---|
+| `.github/copilot-instructions.md` | Added "MCP Server Restart Procedure" section with two-phase instructions, `detach=true` requirement, and `/mcp` user action |
+| `PLAN.md` | This PA13 entry |
+
+---
+
+### PA14 — Pre-print confirmation gate: single-summary enforcement + veil test cleanup
+
+**Version:** 0.0.7 → 0.0.8
+
+**Problem**: The pre-print confirmation gate (added in PA12) was violated twice in the same session. The veil-mode agent collected `flow_calibration`, `timelapse`, and `bed_leveling` across three separate turns, then called `print_file` immediately after the third confirmation — treating the last piecemeal answer as implicit go-ahead. `bed_type` and `ams_mapping` were never confirmed. The print started with the wrong AMS slot mapping and had to be stopped and resubmitted.
+
+**Root cause**: The gate rule said "wait for explicit go-ahead" but structured steps 1–4 in a way that could be read as sequential phases, not a single-turn requirement. There was no explicit prohibition on piecemeal collection.
+
+**Second problem identified**: A veil test that reaches `print_file` submits a real print. No rule existed requiring post-test cancellation before session end. The running print persisted into the next session and was misidentified as an intentional print.
+
+**Fixes applied:**
+
+1. **`tools/files.py` — `print_file` docstring restructured**: Replaced numbered steps 1–4 with an explicit three-step sequence leading with "gather first, then present ONE complete summary, then wait for go-ahead." The prohibition on piecemeal confirmation is now the primary framing, not a footnote.
+
+2. **`.github/copilot-instructions.md` — Pre-Print Confirmation Gate rewritten**: Added "gather first" as step 1. All six parameters (bed_type, ams_mapping, flow_calibration, timelapse, bed_leveling + explicit go-ahead) must appear in a single summary before submission.
+
+3. **`knowledge/behavioral_rules.py` — Matching update**: Single-summary rule added as the primary constraint, not an addendum.
+
+4. **`.github/copilot-instructions.md` — Veil test cleanup rule added**: Post-veil-test prints MUST be cancelled before lifting the veil, ending the session, or any context compaction. Leftover prints must be explicitly recorded in session state.
+
+**Files changed:**
+
+| File | Change |
+|---|---|
+| `tools/files.py` | `print_file` docstring restructured — single-summary requirement is now primary framing |
+| `.github/copilot-instructions.md` | Pre-Print Confirmation Gate rewritten; veil test cleanup rule added; version 0.0.7 → 0.0.8 |
+| `knowledge/behavioral_rules.py` | Single-summary rule added as primary constraint |
+| `pyproject.toml` | Version 0.0.7 → 0.0.8 |
+| `README.md`, `PLAN.md` | Version sync via `make.py version-sync` |
+
+### PA15 — BPM debug logging + clean_print_error + HUD fixes
+
+**Version:** 0.0.9 → 0.1.0
+
+**Problem**: (1) BPM MQTT logging was not visible at debug level, making it impossible to observe live printer behavior. (2) No MCP tool existed to dismiss the transient HMS_0300-400C "task was canceled" `print_error` state. (3) Minor HUD bugs: humidity alert threshold was inverted; HMS error links opened in the same tab.
+
+**Fixes applied:**
+
+1. **`session_manager.py` — BPM verbose logging wired to `BAMBU_MCP_DEBUG`**: `BambuConfig(verbose=True)` and `logging.getLogger("bpm").setLevel(DEBUG)` when env var is set.
+
+2. **`bambu-printer-manager` — `clean_print_error` command**: Added `CLEAN_PRINT_ERROR_TEMPLATE` to `bambucommands.py` and `clean_print_error(subtask_id, print_error)` method to `bambuprinter.py`. Verified against BambuStudio `DeviceManager.cpp` reference.
+
+3. **`tools/print_control.py` — `clear_print_error` MCP tool**: New tool wrapping `printer.clean_print_error()`. Requires `user_permission=True`.
+
+4. **`make.py` — BPM force-reinstall step**: Added explicit `pip install --force-reinstall` of `bambu-printer-manager @ git+...@devel` after the main `pip install -e .` to ensure latest devel commit is always pulled.
+
+5. **`knowledge/behavioral_rules.py` — HMS_0300-400C cancellation note**: Added rule clarifying this error is transient, self-clearing, and must not block new print jobs.
+
+6. **`camera/mjpeg_server.py` — Humidity threshold corrected**: Fixed inverted condition `hIdx>=3` → `hIdx>0&&hIdx<=2` (alert when humid/wet, not when dry). Color: index 1 = red, index 2 = yellow.
+
+7. **`camera/mjpeg_server.py` — HMS popup window**: Replaced `target="_blank"` anchor with `window.open()` minimal popup (no toolbar/menubar/location/status).
+
+**Files changed:**
+
+| File | Change |
+|---|---|
+| `session_manager.py` | BPM verbose + log level wired to `BAMBU_MCP_DEBUG` |
+| `tools/print_control.py` | `clear_print_error` tool added |
+| `make.py` | BPM force-reinstall step added |
+| `knowledge/behavioral_rules.py` | HMS_0300-400C cancellation rule added |
+| `camera/mjpeg_server.py` | Humidity threshold fix; HMS links open as popup |
+| `.github/copilot-instructions.md` | Version 0.0.9 → 0.1.0; bpm preferred name noted |
+| `pyproject.toml` | Version 0.0.9 → 0.1.0 |
+| `README.md`, `PLAN.md` | Version sync via `make.py version-sync` |
