@@ -181,9 +181,18 @@ def _startup() -> None:
     except Exception as exc:
         log.warning(f"Startup error (sessions not started): {exc}")
 
+    try:
+        import api_server
+        api_server.start()
+    except Exception as exc:
+        log.warning(f"API server startup error: {exc}")
+
 
 def _shutdown() -> None:
     """Stop all MQTT sessions and camera streams on exit."""
+    # api_server runs autonomously in a non-daemon thread — do not stop it here.
+    # It keeps the process alive after the MCP stdio transport exits, and is
+    # terminated only when the process is explicitly killed.
     try:
         from camera.mjpeg_server import mjpeg_server
         mjpeg_server.stop_all()
