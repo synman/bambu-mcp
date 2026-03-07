@@ -758,3 +758,32 @@ consult `print_3mf_file` signature, build the override). The audit then found th
   architecture file tree tool counts updated
 - `prompts/context.py` — tool inventory section corrected for all affected modules
 - `PLAN.md` — problem statement count updated, PA10 added
+
+---
+
+### PA11 — Human viewability guidance in tool docstrings and knowledge base
+
+**Problem**: The veil-of-ignorance session exposed a gap: when a naive agent was asked
+"what does the plate look like?", it called `get_plate_thumbnail` and `get_plate_topview`
+— both return raw base64 `data_uri` blobs that are invisible to the human user in a
+terminal/chat context. The agent needed an explicit second prompt before discovering
+`open_plate_viewer`. The same pattern existed for camera snapshots.
+
+**Fix**: Docstring-only additions to 4 tools (PATCH bump 0.0.5 → 0.0.6), plus updates
+to `knowledge/behavioral_rules.py` to reflect the rule system-wide.
+
+**The rule**: The consumer of the image determines which tool to call.
+- **Human is viewer** ("show me", "open it", "let me see") → browser-opening tool
+- **AI is consumer** ("what does it look like?", vision analysis, comparison) → raw data_uri tool
+Returning a raw `data_uri` blob to a human in a chat or terminal context is never correct.
+
+**Files changed:**
+
+| File | Change |
+|---|---|
+| `tools/files.py` | Human viewability note added to `get_plate_thumbnail`, `get_plate_topview`, `get_project_info` (include_images path) |
+| `tools/camera.py` | Human viewability note added to `get_snapshot` |
+| `knowledge/behavioral_rules.py` | `## Camera Usage Rules` section updated: "Choosing the right camera tool" rewritten around AI/human consumer distinction; `data_uri handling` corrected (removed Markdown embedding advice); new `### Human viewability — images and plate assets` subsection added with decision table |
+| `pyproject.toml` | Version 0.0.5 → 0.0.6 |
+| `README.md`, `PLAN.md` | Version sync via `make.py version-sync` |
+| `.github/copilot-instructions.md` | Current version updated to 0.0.6 |

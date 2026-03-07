@@ -296,20 +296,26 @@ Never leave files in a state where a project file rule contradicts the global fi
 Offer camera tools proactively when the user asks about:
 - Print progress, current layer, or "what's happening on the printer" — a snapshot is
   more informative than any text status summary and takes only seconds
-- Print quality, layer adhesion, warping, or visual inspection ("does it look okay?")
-- Anything framed as "show me", "can I see", "let me watch", "what does it look like"
+- Print quality, layer adhesion, warping, or visual inspection ("does it look okay?",
+  "is the print stuck?", "describe what you see")
+- Human wants to visually watch: "show me", "can I see", "let me watch", "open the camera"
 
 ### Choosing the right camera tool
 
-- **Single still image** ("show me what's printing", "take a picture", "is it okay?"):
-  Use `get_snapshot(name)`. It is fast (connects, grabs one frame, disconnects), returns
-  a base64 data URI the AI can embed directly in a Markdown response, and leaves no
-  background server running. This is the correct default for most camera queries.
+The key question is **who is consuming the image — the AI or the human?**
 
-- **Live stream — browser** ("let me watch the print", "open the camera feed", "stream it"):
+- **Human wants to see the camera** ("show me", "open the camera", "let me see what it's
+  doing", "stream it", "let me watch"):
   Use `view_stream(name)`. It starts the MJPEG server AND opens the browser in one step.
-  Do NOT use `start_stream()` followed by manually telling the user the URL — view_stream
+  This is the correct path whenever the human is the viewer. Do NOT use `get_snapshot()`
+  and return a data_uri — the human cannot see a raw base64 blob in a chat context.
+  Do NOT use `start_stream()` followed by manually telling the user the URL — `view_stream`
   is the simpler, preferred path.
+
+- **AI is analyzing/describing the camera view on the human's behalf** ("what does it look
+  like?", "is the print stuck?", "describe what you see", "is it okay?"):
+  Use `get_snapshot(name)`. The AI consumes the image data directly. Fast, no background
+  server left running.
 
 - **Live stream — programmatic** (user wants to embed the URL, use it in automation, etc.):
   Use `start_stream(name)` to get the URL, then provide it to the user.
@@ -334,10 +340,35 @@ Offer camera tools proactively when the user asks about:
 ### data_uri handling
 
 - `get_snapshot()` returns a `data_uri` field that is a complete, self-contained JPEG
-  image encoded as a base64 data URI.
-- Display it by embedding in Markdown: `![snapshot]({data_uri})`
-- Do NOT attempt to decode, re-encode, download, or save it — it is already display-ready.
-- It can also be passed directly to an AI vision model for analysis.
+  image encoded as a base64 data URI. Use it when the AI needs to analyze, describe, or
+  pass to a vision model. Do NOT return the raw data_uri to the human — they cannot view
+  it in a chat or terminal context.
+- If the human wants to view the camera, always call `view_stream()` instead.
+- It can be passed directly to an AI vision model for analysis.
+
+### Human viewability — images and plate assets
+
+**The rule**: Whenever a human user wants to *view* a digital asset (camera snapshot,
+plate thumbnail, plate top-down view, plate layout), use the browser-opening tool that
+makes it actually visible. Returning raw base64 `data_uri` output to a human is never
+the right choice.
+
+**Who is the consumer determines which tool to call:**
+
+| Human intent | Correct tool |
+|---|---|
+| "show me", "open it", "let me see", "display it" | `view_stream()`, `open_plate_viewer()`, `open_plate_layout()` |
+| "what does it look like?", "describe it", "is there anything on the plate?" | `get_snapshot()`, `get_plate_thumbnail()`, `get_plate_topview()` — AI analyzes |
+
+The distinction:
+- **Human is the viewer** → browser-opening tool (`view_stream`, `open_plate_viewer`,
+  `open_plate_layout`)
+- **AI is the consumer** (to describe, analyze, compare, or pass to a vision model) →
+  raw-data tool (`get_snapshot`, `get_plate_thumbnail`, `get_plate_topview`)
+
+Returning a data_uri to the human in a chat or terminal context is never the right choice.
+Embedding it in Markdown (`![img](data:...)`) is also wrong — rely on the browser-opening
+tools for human viewability.
 
 ## MCP Array Parameter Pattern
 
