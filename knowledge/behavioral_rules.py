@@ -17,10 +17,40 @@ BEHAVIORAL_RULES_TEXT: str = """
 
 ## ⚠️ Rules Mandatory Rule
 
+Approach every query as if arriving with no prior context — fresh eyes, no cached
+assumptions, no reliance on prior turns. This is the fundamental operating posture
+that ensures the agent is effective and the MCP server is being used correctly.
+
 On every request, consult all knowledge/ modules and bambu://rules/* resources.
-Do not rely on cached assumptions from prior turns. Both the global rules file and
-any repo-specific rules file MUST be read and applied together before any tool call
-related to the task. Prior-session memory of rules does NOT satisfy this requirement.
+Both the global rules file and any repo-specific rules file MUST be read and applied
+together before any tool call related to the task. Prior-session memory of rules does
+NOT satisfy this requirement.
+
+---
+
+## ⚠️ Always Start with bambu-mcp — Query First, Never Infer
+
+For any printer-related query, always use bambu-mcp tools first. Never infer current
+printer state from prior messages, user descriptions, or assumptions. Query the printer
+directly through the tools, then respond.
+
+Knowledge/research escalation order (never skip tiers):
+  Tier 1 — baked-in knowledge modules (fastest, offline) — always exhausted first
+  Tier 2 — authoritative repos (BambuStudio, ha-bambulab, OpenBambuAPI)
+  Tier 3 — broad web/GitHub search (last resort only)
+
+Docstrings are the primary interface contract for both the AI consumer and the human
+consumer operating behind it. A tool with an incomplete or inaccurate docstring breaks
+the chain — the AI cannot use the tool correctly, and the human cannot trust the output.
+Keeping docstrings accurate and complete is a first-class maintenance requirement.
+
+---
+
+## ⚠️ When in Doubt, Ask
+
+If anything is unclear — intent, scope, a required value, an expected behavior — stop
+and ask the user before proceeding. A wrong assumption costs more than a one-line
+clarification. Do not infer, guess, or proceed on ambiguous footing.
 
 ---
 
@@ -139,7 +169,10 @@ is `gcode_state: "FAILED"` + `print_error: 0`.
 
 ---
 
+## ⚠️ Session Startup — No Configured Printers
 
+Call `get_configured_printers()` at the start of every session before doing anything
+printer-related.
 
 - If it returns a non-empty list: printers are configured — proceed normally.
 - If it returns an empty list: automatically call `discover_printers()` without waiting
@@ -165,17 +198,6 @@ that has no container API endpoint (e.g. `send_anything()`).
 `session_manager.get_printer(name)` which is only initialized when the MCP server
 process is running. Direct Python imports will fail with "printer not connected".
 Test tool logic by running the full MCP server and calling tools through the MCP client.
-
----
-
-## ⚠️ Knowledge Escalation Rule (Tiered)
-
-Tier 1 (baked-in): Use knowledge modules and cached source understanding first.
-Tier 2 (authoritative repos): Escalate to BambuStudio, ha-bambulab/pybambu,
-  OpenBambuAPI, X1Plus, OrcaSlicer when Tier 1 is insufficient.
-Tier 3 (broad search): Only after Tier 2 is exhausted — broad web/GitHub search.
-
-Never skip tiers. Document which tier resolved the question.
 
 ---
 

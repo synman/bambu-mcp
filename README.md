@@ -1,6 +1,6 @@
 # Bambu Lab MCP Server
 
-**Version: 0.1.0** · Follows [Semantic Versioning](https://semver.org/)
+**Version: 0.1.1** · Follows [Semantic Versioning](https://semver.org/)
 
 A fully self-contained MCP (Model Context Protocol) server for managing Bambu Lab 3D printers.
 
@@ -12,7 +12,7 @@ All intelligence from `bambu-printer-manager` and `bambu-printer-app` is baked i
 
 ## Features
 
-- **81 tools** covering discovery, state monitoring, print control, climate, filament, camera, files, detectors, and raw commands
+- **85 tools** covering discovery, state monitoring, print control, climate, filament, camera, files, detectors, and raw commands
 - **9 resources** at `bambu://` URIs: live rules files + baked-in knowledge modules
 - **1 system prompt** (`bambu_system_context`) that loads all behavioral rules, escalation policy, and tool guidance
 - **Encrypted secrets store** — Fernet AES-256 at `~/.bambu-mcp/secrets.enc` (cross-platform)
@@ -91,7 +91,7 @@ Merge `config/copilot_mcp.json` into your Copilot MCP configuration.
 
 ```
 ~/bambu-mcp/
-├── server.py                    ← FastMCP entry point (81 tools, 9 resources, 1 prompt)
+├── server.py                    ← FastMCP entry point (85 tools, 9 resources, 1 prompt)
 ├── session_manager.py           ← Persistent BambuPrinter MQTT sessions
 ├── data_collector.py            ← Telemetry history (8 rolling time-series per printer)
 ├── secrets_store.py             ← Fernet-encrypted secrets at ~/.bambu-mcp/secrets.enc
@@ -111,14 +111,14 @@ Merge `config/copilot_mcp.json` into your Copilot MCP configuration.
 │   └── fallback_strategy.py     ← 3-tier escalation policy
 ├── tools/                       ← 13 tool modules
 │   ├── state.py                 ← 12 read tools
-│   ├── print_control.py         ← 8 print control tools
+│   ├── print_control.py         ← 9 print control tools
 │   ├── climate.py               ← 7 climate/fan tools
 │   ├── filament.py              ← 9 filament/AMS tools
 │   ├── nozzle.py                ← 4 nozzle config tools
 │   ├── detectors.py             ← 7 detector tools
 │   ├── management.py            ← 5 printer lifecycle tools
-│   ├── files.py                 ← 11 file operation tools
-│   ├── system.py                ← 9 system/session tools
+│   ├── files.py                 ← 13 file operation tools
+│   ├── system.py                ← 10 system/session tools
 │   ├── camera.py                ← 5 camera/streaming tools
 │   ├── discovery.py             ← 1 SSDP discovery tool
 │   ├── commands.py              ← 1 raw MQTT command tool

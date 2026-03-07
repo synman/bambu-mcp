@@ -81,7 +81,7 @@ Version lives in one place: `pyproject.toml [project] version`. `server.py` read
 `importlib.metadata.version("bambu-mcp")` and sets `mcp._mcp_server.version` so clients
 see the correct version in every MCP `initialize` response.
 
-**Current version: 0.1.0**
+**Current version: 0.1.1**
 
 ---
 ## Installation
@@ -917,4 +917,40 @@ Returning a raw `data_uri` blob to a human in a chat or terminal context is neve
 | `camera/mjpeg_server.py` | Humidity threshold fix; HMS links open as popup |
 | `.github/copilot-instructions.md` | Version 0.0.9 → 0.1.0; bpm preferred name noted |
 | `pyproject.toml` | Version 0.0.9 → 0.1.0 |
+| `README.md`, `PLAN.md` | Version sync via `make.py version-sync` |
+
+---
+
+### PA16 — Reconciliation Protocol Baseline + Behavioral Rules Hardening
+
+**Version:** 0.1.0 → 0.1.1
+
+**Problem:**
+Since PA10 the README tool count (81) had drifted from the actual registered tool count (85). `behavioral_rules.py` lacked a clear operating posture at its opening — the fundamental "query first, escalation order, docstrings as interface contract, when in doubt ask" principles were either absent or buried. A broken section heading (missing `## Session Startup — No Configured Printers`) left bullet points without context. The permanent reconciliation protocol needed baselining as a reusable artifact.
+
+**Fix:**
+
+1. **`knowledge/behavioral_rules.py` — Operating posture hardened (top 3 rules)**:
+   - Rule 1 (Rules Mandatory Rule): Reframed to lead with the fresh-eyes operating posture as the *why*, not just the compliance checklist.
+   - Rule 2 (Always Start with bambu-mcp): New rule — query first, never infer; Tier 1→2→3 escalation order consolidated here; docstrings declared as the primary AI+human consumer interface contract.
+   - Rule 3 (When in Doubt, Ask): New rule — stop and clarify before proceeding on ambiguous footing.
+   - Restored broken section heading: `## Session Startup — No Configured Printers`.
+   - Removed duplicate `## Knowledge Escalation Rule` section (consolidated into Rule 2).
+   - Boundary established: veil ACT mechanics (activation, path, restrictions) live exclusively in `.github/copilot-instructions.md` — not mirrored here.
+
+2. **`README.md` — Tool count corrected**:
+   - Summary line: 81 → 85
+   - server.py comment: 81 → 85
+   - Per-module tree: `print_control` 8→9, `files` 11→13, `system` 9→10
+
+3. **`RECONCILE_PROTOCOL.md` (session artifact)**: Permanent 8-track reconciliation protocol created and baselined — covers rules integrity, knowledge sync, docstring audit, veil test prescription, PA entry format, README accuracy, version bump, logging standard.
+
+**Files changed:**
+
+| File | Change |
+|---|---|
+| `knowledge/behavioral_rules.py` | Top 3 rules rewritten/added; broken heading restored; duplicate escalation rule removed |
+| `README.md` | Tool count 81 → 85 (3 locations + per-module tree) |
+| `.github/copilot-instructions.md` | Version 0.1.0 → 0.1.1 |
+| `pyproject.toml` | Version 0.1.0 → 0.1.1 |
 | `README.md`, `PLAN.md` | Version sync via `make.py version-sync` |
