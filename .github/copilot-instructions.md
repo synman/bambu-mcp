@@ -32,7 +32,7 @@ This applies to:
 - After any version bump: (1) run `pip install -e .` so `importlib.metadata` reflects the new version, then (2) run `python make.py version-sync` to propagate the version to `README.md` and `PLAN.md`.
 - `server.py` reads the version via `importlib.metadata.version("bambu-mcp")` and sets it on `mcp._mcp_server.version`. **Do not hardcode the version string anywhere else.**
 - Bump version in the same commit as the change that warrants it. Never bump speculatively.
-- Current version: **0.0.5**
+- Current version: **0.0.6**
 
 ---
 
@@ -63,10 +63,9 @@ This project uses a named testing mode called the **"veil of ignorance"** to str
 
 **Activation**: When the user says any of **"lower the veil"**, **"drop the veil"**, **"close the veil"**, or **"enable the veil"**, immediately enter restricted mode:
 - Pretend to have **no Bambu Lab domain knowledge** — no awareness of printer models, filament types, AMS behavior, firmware internals, slicer conventions, or any Bambu-specific terminology beyond what the tool docstrings provide.
-- Pretend to have **no workspace access** — do not read source files, configs, logs, or any local path. Interact with the printer exclusively through MCP tools.
+- Pretend to have **no workspace file access** — do not read source code, config files, logs, or any local workspace path. This restricts *knowledge sources* only: bash, general reasoning, internet knowledge, MCP tools, and all other non-file-read tools remain fully available.
 - Pretend to have **no session history** — act as if the conversation began at the moment the veil was lowered. Do not reference, recall, or act on any information, decisions, or context from the conversation that preceded lowering the veil.
-- Act as a naive agent discovering the workflow purely from the **bambu-mcp MCP tool** names, descriptions, and return values — no other tools, no shell commands, no file reads.
-- Do not break character to explain what you "really" know. Operate as if the bambu-mcp tool docstrings are your only reference.
+- Discover the printer workflow purely from the **bambu-mcp MCP tool** names, descriptions, and return values. Do not break character to explain what you "really" know.
 
 **Persistence**: This state is **sticky across session snapshots and context compaction**. The authoritative source of truth is `~/bambu-mcp/.veil_state` — a plain-text file containing either `LOWERED` or `LIFTED`.
 
@@ -94,3 +93,39 @@ This project uses a named testing mode called the **"veil of ignorance"** to str
 - Use `printer.*` methods for all printer interactions.
 - Import BPM library modules (`from bpm.*`) only for types, helpers, and project parsing.
 - BPM is stable — do not modify it to solve MCP-layer problems.
+
+---
+
+## Pervasive Logging Standard (Mandatory)
+
+All code in `bambu-mcp` must follow three dimensions of logging. Any new code or code change that does not carry all three forward is a defect.
+
+### 1. Entry and exit on every method
+
+Every function or method must have:
+- An **entry** `log.debug("fn_name: called with key_param=%s", val)` as the first statement.
+- An **exit** `log.debug("fn_name: → result_summary")` on **every return path** — including early returns, error returns, and normal completion.
+
+### 2. Integration and I/O event logging
+
+Log before AND after every call to an external system, library boundary, or I/O operation:
+- `av.open()` / `container.decode()` / `container.close()`
+- Socket connects, reads, writes
+- BPM method calls (`printer.*`)
+- FTPS file operations
+- Any other external I/O
+
+Use `log.info` for significant lifecycle events (connect, disconnect, first frame); `log.debug` for per-call details.
+
+### 3. All exceptions with `exc_info=True`
+
+No bare `except: pass` or silent swallows. Every `except` block that does not re-raise must log:
+```python
+log.warning("fn: context: %s", e, exc_info=True)  # or log.error for unexpected failures
+```
+
+### Infrastructure
+
+- Log file: `~/bambu-mcp/bambu-mcp.log` — written at DEBUG level when `BAMBU_MCP_DEBUG=1`.
+- `BAMBU_MCP_DEBUG=1` must be set in the live MCP config (`~/.copilot/mcp-config.json`) for DEBUG output to reach the log file. Without it, only INFO+ is logged.
+- Stderr always receives INFO+ regardless of `BAMBU_MCP_DEBUG`.

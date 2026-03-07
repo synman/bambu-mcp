@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import base64
 import logging
+import os
+import tempfile
 from datetime import datetime, timezone
 
 log = logging.getLogger(__name__)
@@ -32,9 +34,11 @@ def _no_printer(name: str) -> dict:
 
 def _build_status(name: str) -> dict:
     """Return live print telemetry dict for printer name (same as start_stream overlay)."""
+    log.debug("_build_status: called for name=%s", name)
     state = session_manager.get_state(name)
     job = session_manager.get_job(name)
     if state is None:
+        log.debug("_build_status: → no state, returning {}")
         return {}
     try:
         nozzles = [
@@ -50,6 +54,42 @@ def _build_status(name: str) -> dict:
             1 for e in (state.hms_errors or [])
             if e.get("type") == "device_hms" and has_device_error
         )
+
+        # Active filament swatch (E4)
+        active_tray_id = getattr(state, "active_tray_id", -1)
+        active_spool = next(
+            (s for s in (state.spools or []) if s.id == active_tray_id),
+            None
+        ) if active_tray_id not in (-1, 255) else None
+        active_filament = None
+        if active_spool:
+            color = active_spool.color or ""
+            # Normalise bare 6-char hex to #RRGGBB
+            if color and not color.startswith("#") and len(color) == 6 and all(
+                c in "0123456789abcdefABCDEF" for c in color
+            ):
+                color = "#" + color
+            active_filament = {
+                "type": active_spool.type or "",
+                "color": color,
+                "remaining_pct": active_spool.remaining_percent,
+            }
+
+        # AMS humidity for the active AMS unit (E7)
+        active_ams_id = getattr(state, "active_ams_id", -1)
+        ams_humidity_index = 0
+        if active_ams_id >= 0:
+            ams_unit = next(
+                (u for u in (getattr(state, "ams_units", None) or []) if u.ams_id == active_ams_id),
+                None,
+            )
+            if ams_unit:
+                ams_humidity_index = getattr(ams_unit, "humidity_index", 0)
+
+        # Speed level from printer object (E6)
+        printer = session_manager.get_printer(name)
+        speed_level = getattr(printer, "speed_level", 0) if printer else 0
+
         return {
             "gcode_state": state.gcode_state,
             "print_percentage": job.print_percentage if job else 0,
@@ -67,10 +107,17 @@ def _build_status(name: str) -> dict:
             "part_cooling_pct": climate.part_cooling_fan_speed_percent,
             "aux_pct": climate.aux_fan_speed_percent,
             "exhaust_pct": climate.exhaust_fan_speed_percent,
+            "heatbreak_pct": getattr(climate, "heatbreak_fan_speed_percent", 0),
+            "is_chamber_door_open": getattr(climate, "is_chamber_door_open", False),
+            "is_chamber_lid_open": getattr(climate, "is_chamber_lid_open", False),
+            "active_filament": active_filament,
+            "ams_humidity_index": ams_humidity_index,
+            "speed_level": speed_level,
             "wifi_signal": state.wifi_signal_strength,
             "active_error_count": active_errors,
         }
     except Exception:
+        log.warning("_build_status: error building status for %s", name, exc_info=True)
         return {}
 
 def _get_printer_checked(name: str):
@@ -112,8 +159,7 @@ def _jpeg_dimensions(jpeg: bytes) -> tuple[int, int]:
                 length = (jpeg[i + 2] << 8) | jpeg[i + 3]
                 i += 2 + length
     except Exception:
-        pass
-    log.debug("_jpeg_dimensions: could not determine dimensions, returning (0,0)")
+        log.debug("_jpeg_dimensions: failed to parse JPEG headers", exc_info=True)
     return 0, 0
 
 
@@ -189,8 +235,20 @@ def get_snapshot(name: str, quality: str = "standard", include_status: bool = Fa
     Returns {"error": "no_camera"} if this printer model has no camera.
     Returns {"error": "not_connected"} if the printer MQTT session is not active.
     Returns {"error": "stream_failed", "detail": "..."} if the camera connection fails.
+
+    Human viewability note: This tool returns a raw base64 data URI.
+
+    Use this tool when the AI agent is the consumer of the image — either to
+    describe or analyze the camera view on the human's behalf ("what does the
+    printer look like right now?", "is the print stuck?", "describe what you see")
+    or to process the raw bytes directly (vision model input, comparison, etc.).
+
+    When the human user wants to *see* the camera feed themselves — "show me",
+    "open the camera", "let me see what it's doing" — call view_stream() instead.
+    It starts a local MJPEG server and opens it in the browser. Returning a raw
+    data_uri to a human in a chat or terminal context is never the right choice.
     """
-    log.debug("get_snapshot: called for %s quality=%s include_status=%s", name, quality, include_status)
+    log.info("get_snapshot: called for %s quality=%s include_status=%s", name, quality, include_status)
     printer, err = _get_printer_checked(name)
     if err:
         return err
@@ -205,8 +263,13 @@ def get_snapshot(name: str, quality: str = "standard", include_status: bool = Fa
         jpeg_out, width, height = resize_image_to_tier(jpeg, quality)
         data_uri = "data:image/jpeg;base64," + base64.b64encode(jpeg_out).decode("ascii")
         log.debug("get_snapshot: → width=%d height=%d quality=%s protocol=%s bytes=%d", width, height, quality, protocol, len(jpeg_out))
+        tmp_path = os.path.join(tempfile.gettempdir(), f"bambu_snap_{name}_{quality}.jpg")
+        with open(tmp_path, "wb") as f:
+            f.write(jpeg_out)
+        log.info("get_snapshot: saved %dx%d %s snapshot to %s", width, height, quality, tmp_path)
         result = {
             "data_uri": data_uri,
+            "saved_path": tmp_path,
             "width": width,
             "height": height,
             "quality": quality,
@@ -221,13 +284,21 @@ def get_snapshot(name: str, quality: str = "standard", include_status: bool = Fa
         return {"error": "stream_failed", "detail": str(e)}
 
 
+def _redact_rtsps_url(url: str | None) -> str | None:
+    """Replace the password in an rtsps://user:pass@host URL with ****."""
+    if url is None:
+        return None
+    import re
+    return re.sub(r"(rtsps://[^:]+:)[^@]+(@)", r"\1****\2", url)
+
+
 def get_stream_url(name: str) -> dict:
     """
     Return camera stream URL information without starting a server or connecting to the camera.
 
     Returns:
       protocol        — "rtsps", "tcp_tls", or "none"
-      rtsps_url       — raw RTSPS URL for X1/H2D printers (open with VLC/ffplay), or null
+      rtsps_url       — RTSPS URL for X1/H2D printers (password redacted; open with VLC/ffplay), or null
       local_mjpeg_url — URL of running local MJPEG server, or null if not started
       streaming       — bool: whether a local MJPEG server is currently active
     """
@@ -236,7 +307,7 @@ def get_stream_url(name: str) -> dict:
     if err:
         return err
     protocol = get_protocol(printer)
-    rtsps_url = get_rtsps_url(printer) if protocol == "rtsps" else None
+    rtsps_url = _redact_rtsps_url(get_rtsps_url(printer) if protocol == "rtsps" else None)
     local_url = mjpeg_server.get_url(name)
     log.debug("get_stream_url: %s protocol=%s streaming=%s", name, protocol, mjpeg_server.is_running(name))
     return {
@@ -350,8 +421,7 @@ def start_stream(name: str, port: int | None = None) -> dict:
                 _img_cache["layout"] = layout_bytes
                 return thumb_bytes, layout_bytes
             except Exception as _e:
-                import traceback
-                traceback.print_exc()
+                log.warning("_get_images: error fetching thumbnail/layout: %s", _e, exc_info=True)
                 return None, None
 
         def thumbnail_fn():

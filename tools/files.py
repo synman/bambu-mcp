@@ -117,6 +117,11 @@ def get_project_info(name: str, file_path: str, plate_num: int = 1, include_imag
     or get_plate_topview() to fetch images for a specific plate on demand.
 
     When include_images=True, both data URIs are included in the response (large).
+    Note: these are raw base64 data URIs — not directly visible to a human user in
+    a chat or terminal context. If the human wants to *view* all plates visually,
+    call open_plate_viewer() instead. Use include_images=True only when the AI
+    agent needs to process the raw image bytes directly (vision analysis, comparison,
+    etc.) or is describing the image content on the human's behalf.
 
     Multi-level call hierarchy:
       Level 1 — get_project_info(name, file, 1)  → {plates:[1..N], ...}  (index)
@@ -222,6 +227,18 @@ def get_plate_thumbnail(
       data_uri  — complete data:image/jpeg;base64,... (embed directly as img src)
       plate_num — the plate number
       quality   — the quality tier used
+
+    Human viewability note: This tool returns a raw base64 data URI.
+
+    Use this tool when the AI agent is the consumer of the image — either to
+    describe or analyze the asset on the human's behalf ("what does it look like?",
+    "describe the plate", "is there anything on it?") or to process the raw bytes
+    directly (vision model input, pixel comparison, local image library).
+
+    When the human user is the intended viewer — "show me", "open it", "display
+    the thumbnail", "let me see it" — call open_plate_viewer() to show all plates
+    or open_plate_layout() for an annotated single-plate view. Returning a raw
+    data_uri to a human in a chat or terminal context is never the right choice.
     """
     log.debug("get_plate_thumbnail: called for name=%s file_path=%s plate_num=%s quality=%s", name, file_path, plate_num, quality)
     return _get_plate_image(name, file_path, plate_num, quality, image_key="thumbnail")
@@ -248,6 +265,18 @@ def get_plate_topview(
       data_uri  — complete data:image/jpeg;base64,... (embed directly as img src)
       plate_num — the plate number
       quality   — the quality tier used
+
+    Human viewability note: This tool returns a raw base64 data URI.
+
+    Use this tool when the AI agent is the consumer of the image — either to
+    describe or analyze the asset on the human's behalf ("what does it look like?",
+    "describe the plate", "is there anything on it?") or to process the raw bytes
+    directly (vision model input, pixel comparison, local image library).
+
+    When the human user is the intended viewer — "show me", "open it", "display
+    the top view", "let me see it" — call open_plate_viewer() to show all plates
+    or open_plate_layout() for an annotated single-plate view. Returning a raw
+    data_uri to a human in a chat or terminal context is never the right choice.
     """
     log.debug("get_plate_topview: called for name=%s file_path=%s plate_num=%s quality=%s", name, file_path, plate_num, quality)
     return _get_plate_image(name, file_path, plate_num, quality, image_key="topimg")
