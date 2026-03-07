@@ -436,11 +436,13 @@ def start_stream(name: str, port: int | None = None) -> dict:
             return _get_images()[1]
 
         log.debug("start_stream: frame_factory created, calling mjpeg_server.start")
+        fps_cap = 0.5 if protocol == "tcp_tls" else 30
         url = mjpeg_server.start(name, frame_factory, port,
                                  status_fn=status_fn,
                                  thumbnail_fn=thumbnail_fn,
                                  layout_fn=layout_fn,
-                                 closer=closer)
+                                 closer=closer,
+                                 fps_cap=fps_cap)
         allocated_port = int(url.split(":")[-1].rstrip("/"))
         log.info("start_stream: server started for '%s' at %s protocol=%s", name, url, protocol)
         return {"url": url, "port": allocated_port, "protocol": protocol}

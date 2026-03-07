@@ -309,11 +309,12 @@ function poll(){fetch('/status').then(function(r){return r.json();}).then(functi
   if(f>0){
     fpsCont.style.display='flex';
     var numEl=document.getElementById('fps-num');
-    numEl.textContent=f;
-    numEl.className=f>=24?'fps-hi':f>=12?'fps-mid':'fps-lo';
+    numEl.textContent=f<2?f.toFixed(1):f;
+    var cap=d.fps_cap||30;
+    numEl.className=f>=cap*.8?'fps-hi':f>=cap*.4?'fps-mid':'fps-lo';
     var bars=document.querySelectorAll('#fps-bar span');
-    var cap=30,pct=Math.min(f/cap,1),lit=Math.round(pct*5);
-    var barCol=f>=24?'#39ff6e':f>=12?'#f5a623':'#ff4444';
+    var pct=Math.min(f/cap,1),lit=Math.round(pct*5);
+    var barCol=f>=cap*.8?'#39ff6e':f>=cap*.4?'#f5a623':'#ff4444';
     var heights=['4px','7px','10px','7px','4px'];
     bars.forEach(function(b,i){
       if(i<lit){b.style.background=barCol;b.style.height=heights[i];}
@@ -393,13 +394,15 @@ class _MJPEGHTTPServer(ThreadingHTTPServer):
     def __init__(self, addr, handler_class, frame_factory: Callable[[], Iterator[bytes]],
                  status_fn: Callable[[], dict] | None = None,
                  thumbnail_fn: Callable[[], bytes | None] | None = None,
-                 layout_fn: Callable[[], bytes | None] | None = None):
+                 layout_fn: Callable[[], bytes | None] | None = None,
+                 fps_cap: float = 30):
         super().__init__(addr, handler_class)
         log.debug("_MJPEGHTTPServer.__init__: starting on port %s", addr[1])
         self.frame_factory = frame_factory
         self.status_fn = status_fn
         self.thumbnail_fn = thumbnail_fn
         self.layout_fn = layout_fn
+        self.fps_cap = fps_cap
         self._running = True
         # FPS tracking — rolling 10s window of frame timestamps; deduplicated by frame id
         self._fps_lock = threading.Lock()
@@ -451,7 +454,8 @@ class _StreamHandler(BaseHTTPRequestHandler):
                 dq.popleft()
             total = len(dq)
         fps_val = total / 10.0
-        data["fps"] = round(fps_val, 1) if fps_val < 2 else round(fps_val)
+        data["fps"] = round(fps_val, 2) if fps_val < 2 else round(fps_val)
+        data["fps_cap"] = self.server.fps_cap
         log.debug("_serve_status: fps=%.1f for request from %s", fps_val, self.client_address)
         body = json.dumps(data).encode()
         self.send_response(200)
@@ -545,7 +549,8 @@ class MJPEGServer:
               status_fn: Callable[[], dict] | None = None,
               thumbnail_fn: Callable[[], bytes | None] | None = None,
               layout_fn: Callable[[], bytes | None] | None = None,
-              closer: Callable[[], None] | None = None) -> str:
+              closer: Callable[[], None] | None = None,
+              fps_cap: float = 30) -> str:
         """
         Start a local MJPEG server for the named printer.
 
@@ -569,6 +574,7 @@ class MJPEGServer:
             server = _MJPEGHTTPServer(
                 ("", allocated_port), _StreamHandler, frame_factory,
                 status_fn=status_fn, thumbnail_fn=thumbnail_fn, layout_fn=layout_fn,
+                fps_cap=fps_cap,
             )
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
