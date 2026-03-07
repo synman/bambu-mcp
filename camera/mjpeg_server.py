@@ -40,7 +40,7 @@ _HTML_PAGE = """\
 body{background:#000;display:flex;align-items:center;justify-content:center;height:100vh;overflow:hidden}
 #stream{max-width:100%;max-height:100vh;display:block}
 #hud{position:fixed;top:16px;left:16px;background:rgba(0,0,0,.75);color:#ddd;
-  font:13px/1.6 'Courier New',monospace;padding:10px 14px;border-radius:8px;
+  font:14px/1.6 'Courier New',monospace;padding:10px 14px;border-radius:8px;
   pointer-events:none;min-width:230px;max-width:310px;
   border:1px solid rgba(255,255,255,.08)}
 .img-panel{position:fixed;bottom:16px;pointer-events:none;
@@ -50,7 +50,7 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
 .img-panel img{display:block;max-width:190px;max-height:190px;border-radius:4px;opacity:.92}
 #thumb-wrap{left:16px}
 #layout-wrap{right:16px}
-.hdr{font-size:10px;color:#666;text-transform:uppercase;letter-spacing:.08em;
+.hdr{font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.08em;
   border-bottom:1px solid rgba(255,255,255,.1);margin-bottom:3px;padding-bottom:2px;margin-top:6px}
 .hdr:first-child{margin-top:0}
 .row{display:flex;justify-content:space-between;gap:12px}
@@ -61,7 +61,7 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
 .dim{color:#555}
 .warn{color:#ff5050}
 .sep{border-top:1px solid rgba(255,255,255,.08);margin:6px 0}
-#badge{display:inline-block;font-size:11px;font-weight:700;padding:1px 7px;
+#badge{display:inline-block;font-size:12px;font-weight:700;padding:1px 7px;
   border-radius:3px;margin-bottom:5px;letter-spacing:.04em}
 .bRUNNING{background:#1a5c2a;color:#60d080}
 .bPREPARE{background:#1a2e5c;color:#80a0ff}
@@ -74,7 +74,7 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
   border-radius:6px;pointer-events:none;border:1px solid rgba(255,255,255,.10);
   display:none;flex-direction:column;align-items:stretch;gap:3px;width:52px;text-align:center}
 #fps-num{font:800 14px/1 'Courier New',monospace;letter-spacing:-.02em;transition:color .4s;width:100%}
-#fps-lbl{font:600 12px/1 sans-serif;letter-spacing:.08em;color:rgba(255,255,255,.4);width:100%}
+#fps-lbl{font:400 12px/1 'Courier New',monospace;letter-spacing:.08em;color:rgba(255,255,255,.4);width:100%}
 #fps-bar{display:flex;gap:2px;align-items:flex-end;height:10px;justify-content:center;width:100%}
 #fps-bar span{width:10px;border-radius:1px;background:rgba(255,255,255,.15);transition:background .4s,height .4s}
 .fps-hi{color:#39ff6e}.fps-mid{color:#f5a623}.fps-lo{color:#ff4444}
@@ -84,15 +84,15 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
 .heating{animation:pulse 1.5s ease-in-out infinite}
 #badge-row{display:flex;align-items:center;gap:6px;margin-bottom:5px}
 #badge{margin-bottom:0}
-#speed-badge{display:none;font-size:10px;font-weight:700;padding:1px 6px;
+#speed-badge{display:none;font-size:11px;font-weight:700;padding:1px 6px;
   border-radius:3px;letter-spacing:.03em}
 .sQ{background:#2a2a2a;color:#666}.sS{background:#1a3a1a;color:#50b060}
 .sSP{background:#4a2e10;color:#e0902a}.sL{background:#4a1010;color:#e05050}
 #progress-bar{height:3px;background:rgba(255,255,255,.08);border-radius:2px;margin:3px 0 4px}
 #progress-fill{height:100%;border-radius:2px;transition:width .6s}
-#filament-row{margin:2px 0 1px;font-size:12px}
-#door-warn{font-size:11px;font-weight:700;margin-top:2px;padding:1px 0}
-#humidity-row{font-size:11px;margin-top:3px}
+#filament-row{margin:2px 0 1px;font-size:13px}
+#door-warn{font-size:12px;font-weight:700;margin-top:2px;padding:1px 0}
+#humidity-row{font-size:12px;margin-top:3px}
 </style>
 </head>
 <body>
@@ -103,11 +103,11 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
     <div id="badge" class="bIDLE">IDLE</div>
     <div id="speed-badge"></div>
   </div>
-  <div id="subtask" class="dim" style="font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:275px;margin-bottom:2px"></div>
+  <div id="subtask" class="dim" style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:275px;margin-bottom:2px"></div>
   <div class="row"><span class="lbl">Progress</span><span id="pct" class="val">\u2014</span></div>
   <div class="row"><span class="lbl">Layer</span><span id="layers" class="val">\u2014</span></div>
   <div id="progress-bar"><div id="progress-fill"></div></div>
-  <div id="stage-row" class="row hidden"><span class="lbl">Stage</span><span id="stage" class="val" style="text-align:right;max-width:190px;font-size:11px">\u2014</span></div>
+  <div id="stage-row" class="row hidden"><span class="lbl">Stage</span><span id="stage" class="val" style="text-align:right;max-width:190px;font-size:12px">—</span></div>
   <div id="time-row" class="row hidden"><span class="lbl">Elapsed</span><span id="elapsed" class="val">\u2014</span></div>
   <div id="remain-row" class="row hidden"><span class="lbl">Remain</span><span id="remain" class="val">\u2014</span></div>
   <div class="sep"></div>
@@ -124,7 +124,7 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
   </div>
   <div id="humidity-row" style="display:none"></div>
   <div class="sep"></div>
-  <div class="row" style="font-size:11px">
+  <div class="row" style="font-size:12px">
     <span id="wifi" class="dim"></span>
     <div id="errors" class="hidden"></div>
   </div>
