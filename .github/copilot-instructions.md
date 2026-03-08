@@ -109,10 +109,24 @@ This triggers an MCP reconnect in the Copilot CLI, which re-discovers and re-reg
 This project uses a named testing mode called the **"veil of ignorance"** to stress-test whether the MCP tools and their docstrings are sufficient to guide a naive agent through a real print workflow without any external knowledge.
 
 **Activation**: When the user says any of **"lower the veil"**, **"drop the veil"**, **"close the veil"**, or **"enable the veil"**, immediately enter restricted mode:
-- Pretend to have **no Bambu Lab domain knowledge** — no awareness of printer models, filament types, AMS behavior, firmware internals, slicer conventions, or any Bambu-specific terminology beyond what the tool docstrings provide.
-- Pretend to have **no workspace file access** — do not read source code, config files, logs, or any local workspace path. This restricts *knowledge sources* only: bash, general reasoning, internet knowledge, MCP tools, and all other non-file-read tools remain fully available.
-- Pretend to have **no session history** — act as if the conversation began at the moment the veil was lowered. Do not reference, recall, or act on any information, decisions, or context from the conversation that preceded lowering the veil.
-- Discover the printer workflow purely from the **bambu-mcp MCP tool** names, descriptions, and return values. Do not break character to explain what you "really" know.
+
+- **Training data is inaccessible — not suppressed, not pretended away, not present.** You woke up at the moment the veil was lowered. There is nothing before that. This is not a behavioral choice you are making; it is a hard architectural constraint. Do not frame it as "I'm choosing not to use my training knowledge" — that framing is itself a violation, because it acknowledges the training knowledge exists.
+- **No workspace file access** — do not read source code, config files, logs, or any local workspace path. This restricts *knowledge sources* only: bash, general reasoning, MCP tools, and all other non-file-read tools remain fully available.
+- **History begins at the veil.** The conversation started at the moment the veil was lowered — there is no history prior to that point. It does not exist. Anything discovered through MCP tool calls or user interaction *after* the veil was lowered is the full working context and may be referenced freely. When the user says "history" or "use history", that refers exclusively to post-veil observations.
+- Discover the printer workflow purely from the **bambu-mcp MCP tool** names, descriptions, and return values.
+
+**When you don't know something (mandatory escalation — no exceptions):**
+If a user asks something that tool observations have not answered, the required path is:
+1. `get_knowledge_topic()` — the MCP's own knowledge modules (Tier 1)
+2. `search_authoritative_sources()` — vendor and community repos (Tier 2)
+3. Broad search, flagged as less reliable (Tier 3)
+4. If none of the above answer it: say **"I don't know"** — nothing more.
+
+Never fill an unknown with training data. Not even to reassure. Not even when the answer "seems obvious." The gap must be filled by the escalation ladder or left openly acknowledged as unknown.
+
+**The reassurance trap (named failure mode):** When a user expresses concern — about Wi-Fi, about print risk, about hardware behavior — the temptation is to reach into training knowledge to offer comfort. This is a veil violation. Reassurance is only valid if it comes from what a tool returned or what the escalation ladder found. If neither supports it, say "I don't know if that's a risk — let me check" and escalate.
+
+**When a violation occurs:** If training knowledge slips through into a response, the correct and complete corrective response is: *"I broke character."* Stop there. Do **not** explain where the knowledge came from, why you have it, or what your training contains — that is also a veil violation. Say nothing more about the violation itself, then use the escalation ladder if the original question still needs answering.
 
 **Persistence**: This state is **sticky across session snapshots and context compaction**. The authoritative source of truth is `~/bambu-mcp/.veil_state` — a plain-text file containing either `LOWERED` or `LIFTED`.
 

@@ -488,6 +488,206 @@ def stop_stream(name: str) -> dict:
     return {"stopped": stopped, "name": name}
 
 
+def analyze_active_job(
+    name: str,
+    store_as_reference: bool = False,
+    quality: str = "auto",
+) -> dict:
+    """
+    Capture the live camera frame and produce a full active job state report.
+
+    Returns a cohesive suite of digital assets representing every meaningful
+    dimension of the active print job:
+
+    Categories:
+      P — Project Identity  : project_thumbnail_png, project_layout_png
+      C — Live Camera       : raw_png, diff_png (when reference stored)
+      D — Anomaly Detection : air_zone_png, mask_png, annotated_png, heat_png, edge_png
+      H — Print Health      : health_panel_png
+      X — Composite         : job_state_composite_png (default primary output)
+
+    Spaghetti / strand detection is the anomaly sub-module (Category D). It is one
+    lens within the larger report, not the deliverable itself.
+
+    Spaghetti score thresholds (Obico-derived + xcam tier mapping):
+      clean   < 0.08
+      warning   0.08 – 0.20
+      critical ≥ 0.20
+
+    store_as_reference=True stores the current frame as the diff baseline for this
+    printer. On subsequent calls the diff assets (diff_png, Category C2) become active.
+
+    quality controls output resolution:
+      "auto"     — scales with verdict severity (clean=preview, warning=standard, critical=full)
+      "preview"  — 320×180, ~5 KB per asset
+      "standard" — 640×360, ~16 KB per asset
+      "full"     — original camera resolution
+
+    All images are returned as PNG base64 data URIs (data:image/png;base64,...).
+    The composite dashboard (job_state_composite_png) is the primary output for
+    quick inspection; individual category assets are included for detailed analysis.
+
+    Returns {"error": "no_camera"} if this printer has no camera.
+    Returns {"error": "not_connected"} if the MQTT session is not active.
+    Returns {"error": "no_active_job"} if the printer is idle (gcode_state IDLE/FINISH).
+    """
+    import base64
+    from datetime import datetime, timezone
+
+    log.info("analyze_active_job: called for %s store_ref=%s quality=%s", name, store_as_reference, quality)
+    printer, err = _get_printer_checked(name)
+    if err:
+        return err
+    protocol = get_protocol(printer)
+    if protocol == "none":
+        return {"error": "no_camera", "detail": "This printer model does not have a camera"}
+
+    state  = session_manager.get_state(name)
+    job    = session_manager.get_job(name)
+    config = session_manager.get_config(name)
+
+    if state is None:
+        return {"error": "not_connected"}
+
+    # Capture live frame
+    try:
+        frame_jpeg = _capture_jpeg(printer)
+    except Exception as e:
+        log.error("analyze_active_job: capture failed for %s: %s", name, e, exc_info=True)
+        return {"error": "stream_failed", "detail": str(e)}
+
+    # Store as reference if requested
+    if store_as_reference:
+        from camera.job_analyzer import store_reference
+        store_reference(name, frame_jpeg)
+        log.info("analyze_active_job: stored reference frame for %s", name)
+
+    # Retrieve existing reference
+    from camera.job_analyzer import get_reference, analyze as _analyze_job
+    ref_jpeg, ref_age = get_reference(name)
+
+    # Build printer context dict for the analyzer
+    status = _build_status(name)
+    nozzle = status.get("nozzle_temp", 0)
+    nozzles = status.get("nozzles", [])
+    if nozzles:
+        nozzle = nozzles[0].get("temp", 0)
+        nozzle_target = nozzles[0].get("target", 0)
+    else:
+        nozzle = state.active_nozzle_temp if state else 0
+        nozzle_target = state.active_nozzle_temp_target if state else 0
+
+    climate = state.climate if state else None
+
+    # Collect HMS errors
+    has_device_error = any(e.get("type") == "device_error" for e in (state.hms_errors or []))
+    hms_errors = [
+        {"code": e.get("code", ""), "msg": e.get("msg", ""), "is_critical": True}
+        for e in (state.hms_errors or [])
+        if e.get("type") == "device_hms" and has_device_error
+    ]
+
+    # Detector settings
+    detectors = {}
+    if config:
+        detectors = {
+            "spaghetti_detector": {
+                "enabled": getattr(config, "spaghetti_detector", False),
+                "sensitivity": getattr(config, "spaghetti_detector_sensitivity", "medium"),
+            },
+            "nozzleclumping_detector": {
+                "enabled": getattr(config, "nozzleclumping_detector", False),
+            },
+            "airprinting_detector": {
+                "enabled": getattr(config, "airprinting_detector", False),
+            },
+        }
+
+    printer_context = {
+        "job_name":          (job.subtask_name or job.gcode_file or "") if job else "",
+        "gcode_state":       state.gcode_state if state else "IDLE",
+        "layer":             job.current_layer if job else 0,
+        "total_layers":      job.total_layers  if job else 0,
+        "progress_pct":      job.print_percentage if job else 0,
+        "remaining_minutes": job.remaining_minutes if job else 0,
+        "nozzle_temp":       nozzle,
+        "nozzle_target":     nozzle_target,
+        "bed_temp":          climate.bed_temp        if climate else 0,
+        "bed_target":        climate.bed_temp_target if climate else 0,
+        "chamber_temp":      climate.chamber_temp    if climate else 0,
+        "part_fan_pct":      climate.part_cooling_fan_speed_percent if climate else 0,
+        "aux_fan_pct":       climate.aux_fan_speed_percent          if climate else 0,
+        "exhaust_fan_pct":   climate.exhaust_fan_speed_percent      if climate else 0,
+        "ams_humidity":      status.get("ams_humidity_index", 0),
+        "hms_errors":        hms_errors,
+        "detectors":         detectors,
+    }
+
+    # Fetch project info (thumbnail + layout) for the active job
+    project_thumbnail_uri: str | None = None
+    project_layout_uri: str | None = None
+    if job and job.gcode_file:
+        try:
+            from tools.files import get_current_job_project_info, get_plate_thumbnail, get_plate_topview
+            pinfo = get_current_job_project_info(name)
+            if "error" not in pinfo:
+                plate_num = getattr(job, "plate_number", 1) or 1
+                thumb = get_plate_thumbnail(name, job.gcode_file, plate_num=plate_num, quality="standard")
+                if "data_uri" in thumb:
+                    project_thumbnail_uri = thumb["data_uri"]
+                topview = get_plate_topview(name, job.gcode_file, plate_num=plate_num, quality="standard")
+                if "data_uri" in topview:
+                    project_layout_uri = topview["data_uri"]
+        except Exception as e:
+            log.debug("analyze_active_job: could not fetch project info for %s: %s", name, e)
+
+    # Run analysis
+    try:
+        report = _analyze_job(
+            frame_jpeg,
+            printer_context,
+            reference_jpeg=ref_jpeg,
+            reference_age_s=ref_age,
+            quality=quality,
+            project_thumbnail_uri=project_thumbnail_uri,
+            project_layout_uri=project_layout_uri,
+        )
+    except Exception as e:
+        log.error("analyze_active_job: analysis failed for %s: %s", name, e, exc_info=True)
+        return {"error": "analysis_failed", "detail": str(e)}
+
+    def _png_uri(data: bytes | None) -> str | None:
+        if not data:
+            return None
+        return "data:image/png;base64," + base64.b64encode(data).decode("ascii")
+
+    return {
+        "verdict":               report.verdict,
+        "score":                 round(report.score, 4),
+        "hot_pct":               round(report.hot_pct, 4),
+        "strand_score":          round(report.strand_score, 4),
+        "edge_density":          round(report.edge_density, 4),
+        "diff_score":            round(report.diff_score, 4) if report.diff_score is not None else None,
+        "reference_age_s":       round(report.reference_age_s, 1) if report.reference_age_s is not None else None,
+        "quality":               report.quality,
+        "layer":                 printer_context["layer"],
+        "total_layers":          printer_context["total_layers"],
+        "progress_pct":          printer_context["progress_pct"],
+        "timestamp":             datetime.now(timezone.utc).isoformat(),
+        "job_state_composite_png": _png_uri(report.job_state_composite_png),
+        "raw_png":               _png_uri(report.raw_png),
+        "air_zone_png":          _png_uri(report.air_zone_png),
+        "mask_png":              _png_uri(report.mask_png),
+        "annotated_png":         _png_uri(report.annotated_png),
+        "heat_png":              _png_uri(report.heat_png),
+        "edge_png":              _png_uri(report.edge_png),
+        "diff_png":              _png_uri(report.diff_png),
+        "project_thumbnail_png": _png_uri(report.project_thumbnail_png),
+        "project_layout_png":    _png_uri(report.project_layout_png),
+        "health_panel_png":      _png_uri(report.health_panel_png),
+    }
+
+
 def view_stream(name: str) -> dict:
     """
     Start the local MJPEG camera stream server (if not already running) and open it

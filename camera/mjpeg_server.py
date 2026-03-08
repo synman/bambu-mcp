@@ -41,16 +41,28 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
   font:14px/1.6 'Courier New',monospace;padding:10px 14px;border-radius:8px;
   pointer-events:none;min-width:230px;max-width:310px;
   border:1px solid rgba(255,255,255,.08)}
-.img-panel{position:fixed;bottom:16px;pointer-events:none;
+.img-panel{position:fixed;bottom:16px;pointer-events:auto;
   background:rgba(0,0,0,.6);border-radius:8px;padding:6px;
-  border:1px solid rgba(255,255,255,.08)}
+  border:1px solid rgba(255,255,255,.08);cursor:pointer;
+  transition:max-width .35s cubic-bezier(.17,.67,.36,1.12),
+             max-height .35s cubic-bezier(.17,.67,.36,1.12),
+             padding .35s ease}
 .img-panel.hidden{display:none}
-.img-panel img{display:block;max-width:190px;max-height:190px;border-radius:4px;opacity:.92}
+.img-panel img{display:block;max-width:190px;max-height:190px;border-radius:4px;opacity:.92;
+  transition:max-width .35s cubic-bezier(.17,.67,.36,1.12),
+             max-height .35s cubic-bezier(.17,.67,.36,1.12)}
+.img-panel.expanded img{max-width:570px;max-height:570px}
 #thumb-wrap{left:16px}
 #layout-wrap{right:16px}
 .hdr{font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.08em;
-  border-bottom:1px solid rgba(255,255,255,.1);margin-bottom:3px;padding-bottom:2px;margin-top:6px}
+  border-bottom:1px solid rgba(255,255,255,.1);margin-bottom:3px;padding-bottom:2px;margin-top:6px;
+  cursor:pointer;pointer-events:auto;display:flex;justify-content:space-between;align-items:center;
+  user-select:none}
 .hdr:first-child{margin-top:0}
+.hdr-chev{font-size:9px;color:#444;transition:transform .2s;margin-left:4px}
+.hdr-chev.open{transform:rotate(180deg)}
+.hdr-section{overflow:hidden;transition:max-height .25s ease}
+.hdr-section.collapsed{max-height:0}
 .row{display:flex;justify-content:space-between;gap:12px}
 .lbl{color:#888}
 .val{color:#ddd}
@@ -91,17 +103,77 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
 #filament-row{margin:2px 0 1px;font-size:13px}
 #door-warn{font-size:12px;font-weight:700;margin-top:2px;padding:1px 0}
 #humidity-row{font-size:12px;margin-top:3px}
+#health-panel{position:fixed;top:118px;right:14px;width:180px;max-height:320px;overflow:hidden;
+  background:rgba(0,0,0,.75);border:1px solid rgba(255,255,255,.08);border-radius:6px;
+  padding:7px 10px 8px;display:none;flex-direction:column;gap:4px;pointer-events:auto;
+  font-family:'Courier New',monospace}
+#health-panel .hp-hdr{font-size:10px;color:#555;letter-spacing:.08em;text-transform:uppercase;
+  display:flex;justify-content:space-between;align-items:center;cursor:pointer;user-select:none}
+#health-panel .hp-hdr .hp-chev{font-size:9px;color:#555;transition:transform .2s}
+#health-panel .hp-hdr .hp-chev.open{transform:rotate(180deg)}
+#health-panel .hp-body{overflow:hidden;transition:max-height .25s ease}
+#health-panel .hp-body.collapsed{max-height:0}
+#hp-verdict{display:inline-block;font-size:12px;font-weight:700;padding:1px 8px;
+  border-radius:3px;letter-spacing:.04em}
+.hpC{background:#1a5c2a;color:#60d080}.hpW{background:#5c4a1a;color:#ffcc40}.hpX{background:#5c1a1a;color:#ff5050}
+#hp-score-row{display:flex;align-items:center;gap:6px;margin:3px 0 2px}
+#hp-score-bar-track{flex:1;height:3px;background:#555;border-radius:2px}
+#hp-score-bar-fill{height:100%;border-radius:2px;transition:width .6s}
+.hp-metric-row{display:flex;justify-content:space-between;font-size:11px;margin:1px 0}
+.hp-metric-row .hp-lbl{color:#888}.hp-metric-row .hp-val{color:#ddd}
+.hp-sep{border:none;border-top:1px solid rgba(255,255,255,.08);margin:4px 0}
+#hp-trend-section{}
+.hp-spark-row{display:flex;align-items:center;gap:4px;margin:2px 0}
+.hp-spark-row .hp-slbl{font-size:10px;color:#888;width:44px;flex-shrink:0}
+.hp-spark-row canvas{flex:1;height:28px;border-radius:2px;background:rgba(0,0,0,.3)}
+.hp-spark-mini{flex:1;height:16px !important;border-radius:2px;background:rgba(0,0,0,.3)}
+#hp-ref-row{display:flex;justify-content:space-between;align-items:center;gap:4px;margin-top:4px}
+#hp-ref-row button{font-family:'Courier New',monospace;font-size:10px;padding:2px 5px;
+  background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.15);color:#aaa;
+  border-radius:3px;cursor:pointer;pointer-events:auto;flex:1}
+#hp-ref-row button:hover{background:rgba(255,255,255,.13);color:#ddd}
+#hp-ref-age{font-size:10px;color:#555;text-align:right}
 </style>
 </head>
 <body>
 <img id="stream">
 <div id="fps"><span id="fps-num"></span><span id="fps-lbl">FPS</span><div id="fps-bar"><span></span><span></span><span></span><span></span><span></span></div></div>
+<div id="health-panel">
+  <div class="hp-hdr" onclick="hpToggle(this)">
+    <span>JOB HEALTH</span><span class="hp-chev open">▲</span>
+  </div>
+  <div class="hp-body" id="hp-body">
+    <div id="hp-score-row">
+      <span id="hp-verdict" class="hpC">CLEAN</span>
+      <div id="hp-score-bar-track"><div id="hp-score-bar-fill" style="width:0%;background:#60d080"></div></div>
+      <span id="hp-score-val" style="font-size:11px;color:#ddd;min-width:34px;text-align:right">0.000</span>
+    </div>
+    <div class="hp-metric-row"><span class="hp-lbl">Hot px</span><span id="hp-hot" class="hp-val">—</span></div>
+    <div class="hp-metric-row"><span class="hp-lbl">Strand</span><span id="hp-strand" class="hp-val">—</span></div>
+    <div class="hp-metric-row"><span class="hp-lbl">Edge</span><span id="hp-edge" class="hp-val">—</span></div>
+    <div class="hp-metric-row"><span class="hp-lbl">Diff</span><span id="hp-diff" class="hp-val">—</span></div>
+    <div class="hp-metric-row"><span class="hp-lbl">Layer</span><span id="hp-layer" class="hp-val">—</span></div>
+    <div class="hp-metric-row"><span class="hp-lbl">Progress</span><span id="hp-progress" class="hp-val">—</span></div>
+    <hr class="hp-sep">
+    <div id="hp-trend-section">
+      <div class="hp-spark-row"><span class="hp-slbl">SPAGHETTI</span><canvas id="hp-sp-canvas"></canvas></div>
+      <div class="hp-spark-row"><span class="hp-slbl">NOZZLE</span><canvas id="hp-nz-canvas" class="hp-spark-mini"></canvas></div>
+      <div class="hp-spark-row"><span class="hp-slbl">BED</span><canvas id="hp-bd-canvas" class="hp-spark-mini"></canvas></div>
+    </div>
+    <hr class="hp-sep">
+    <div id="hp-ref-row">
+      <button onclick="hpSetRef()">SET REF</button>
+      <button onclick="hpAnalyze()">ANALYZE</button>
+    </div>
+    <div id="hp-ref-age"></div>
+  </div>
+</div>
 <div id="hud">
   <div id="badge-row">
     <div id="badge" class="bIDLE">IDLE</div>
     <div id="speed-badge"></div>
   </div>
-  <div id="subtask" class="dim" style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:275px;margin-bottom:2px"></div>
+  <div id="subtask" style="font-size:13px;font-weight:600;color:#e0b84e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:275px;margin-bottom:2px"></div>
   <div class="row"><span class="lbl">Progress</span><span id="pct" class="val">\u2014</span></div>
   <div class="row"><span class="lbl">Layer</span><span id="layers" class="val">\u2014</span></div>
   <div id="progress-bar"><div id="progress-fill"></div></div>
@@ -109,16 +181,18 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
   <div id="time-row" class="row hidden"><span class="lbl">Elapsed</span><span id="elapsed" class="val">\u2014</span></div>
   <div id="remain-row" class="row hidden"><span class="lbl">Remain</span><span id="remain" class="val">\u2014</span></div>
   <div class="sep"></div>
-  <div class="hdr">Temps</div>
+  <div class="hdr" onclick="hudToggle(this,'sec-temps')">Temps<span class="hdr-chev open">▲</span></div>
+  <div class="hdr-section" id="sec-temps">
   <div id="nozzles"></div>
   <div id="filament-row" style="display:none"></div>
   <div class="row"><span class="lbl">Bed</span><span id="bed" class="dim">\u2014</span></div>
   <div id="chamber-row" class="row hidden"><span class="lbl">Chamber</span><span id="chamber" class="dim">\u2014</span></div>
   <div id="door-warn" style="display:none"></div>
+  </div>
   <div id="sec-fans" class="hidden">
     <div class="sep"></div>
-    <div class="hdr">Fans</div>
-    <div id="fans"></div>
+    <div class="hdr" onclick="hudToggle(this,'sec-fans-body')">Fans<span class="hdr-chev open">▲</span></div>
+    <div class="hdr-section" id="sec-fans-body"><div id="fans"></div></div>
   </div>
   <div id="humidity-row" style="display:none"></div>
   <div class="sep"></div>
@@ -127,13 +201,28 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
     <div id="errors" class="hidden"></div>
   </div>
 </div>
-<div id="thumb-wrap" class="img-panel hidden">
+<div id="thumb-wrap" class="img-panel hidden" onclick="imgPanelToggle(this)">
   <img id="thumb-img" src="" alt="3D preview">
 </div>
-<div id="layout-wrap" class="img-panel hidden">
+<div id="layout-wrap" class="img-panel hidden" onclick="imgPanelToggle(this)">
   <img id="layout-img" src="" alt="Plate layout">
 </div>
 <script>
+function hudToggle(hdr,secId){
+  var sec=document.getElementById(secId);
+  var chev=hdr.querySelector('.hdr-chev');
+  if(!sec)return;
+  if(sec.classList.contains('collapsed')){
+    sec.classList.remove('collapsed');
+    if(chev){chev.classList.add('open');}
+  }else{
+    sec.classList.add('collapsed');
+    if(chev){chev.classList.remove('open');}
+  }
+}
+function imgPanelToggle(el){
+  el.classList.toggle('expanded');
+}
 function fmtT(t,tgt){
   var s=t+'\u00b0C';
   if(tgt>0) s+=' / '+tgt+'\u00b0C';
@@ -300,30 +389,123 @@ function refreshImages(){
     } else { lw.classList.add('hidden'); }
   }).catch(function(){lw.classList.add('hidden');});
 }
-function poll(){fetch('/status').then(function(r){return r.json();}).then(function(d){
-  update(d);
-  var f=d.fps||0;
-  var fpsCont=document.getElementById('fps');
-  if(f>0){
-    fpsCont.style.display='flex';
-    var numEl=document.getElementById('fps-num');
-    numEl.textContent=f<2?f.toFixed(1):f;
-    var cap=d.fps_cap||30;
-    numEl.className=f>=cap*.8?'fps-hi':f>=cap*.4?'fps-mid':'fps-lo';
-    var bars=document.querySelectorAll('#fps-bar span');
-    var pct=Math.min(f/cap,1),lit=Math.round(pct*5);
-    var barCol=f>=cap*.8?'#39ff6e':f>=cap*.4?'#f5a623':'#ff4444';
-    var heights=['4px','7px','10px','7px','4px'];
-    bars.forEach(function(b,i){
-      if(i<lit){b.style.background=barCol;b.style.height=heights[i];}
-      else{b.style.background='rgba(255,255,255,.15)';b.style.height='3px';}
-    });
-  }else{fpsCont.style.display='none';}
-}).catch(function(){});}
-poll();
-setInterval(poll,2000);
+function poll(){_hpPoll();}
 refreshImages();
 setInterval(refreshImages,15000);
+// Health panel state
+var _hpScores=[];var _hpNozzles=[];var _hpBeds=[];var _hpMaxSamples=30;
+var _hpLastAnalyze=0;var _hpAnalyzeInterval=8000;
+function hpToggle(hdr){
+  var body=document.getElementById('hp-body');
+  var chev=hdr.querySelector('.hp-chev');
+  if(body.classList.contains('collapsed')){body.classList.remove('collapsed');chev.classList.add('open');}
+  else{body.classList.add('collapsed');chev.classList.remove('open');}
+}
+function hpUpdateSparkline(canvasId,data,color,minV,maxV){
+  var c=document.getElementById(canvasId);if(!c)return;
+  var ctx=c.getContext('2d');var w=c.offsetWidth||c.width;var h=c.offsetHeight||c.height;
+  if(!w||!h)return;
+  ctx.clearRect(0,0,w,h);
+  if(data.length<2)return;
+  var mn=minV!==undefined?minV:Math.min.apply(null,data);
+  var mx=maxV!==undefined?maxV:Math.max.apply(null,data);
+  if(mx===mn)mx=mn+1;
+  ctx.strokeStyle=color;ctx.lineWidth=1.5;ctx.beginPath();
+  data.forEach(function(v,i){
+    var x=i/(data.length-1)*w;
+    var y=h-(v-mn)/(mx-mn)*(h-2)-1;
+    if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+  });
+  ctx.stroke();
+  // Threshold hairlines for spaghetti
+  if(minV===0&&maxV===0.3){
+    ctx.setLineDash([2,2]);
+    ctx.strokeStyle='rgba(255,204,64,.4)';ctx.lineWidth=1;
+    var yw=h-(0.08-mn)/(mx-mn)*(h-2)-1;
+    ctx.beginPath();ctx.moveTo(0,yw);ctx.lineTo(w,yw);ctx.stroke();
+    ctx.strokeStyle='rgba(255,80,80,.4)';
+    var yc=h-(0.20-mn)/(mx-mn)*(h-2)-1;
+    ctx.beginPath();ctx.moveTo(0,yc);ctx.lineTo(w,yc);ctx.stroke();
+    ctx.setLineDash([]);
+  }
+}
+function hpUpdateFromResult(d){
+  var panel=document.getElementById('health-panel');
+  panel.style.display='flex';
+  var v=d.verdict||'clean';
+  var score=d.score||0;
+  var vEl=document.getElementById('hp-verdict');
+  vEl.textContent=v.toUpperCase();
+  vEl.className=v==='critical'?'hpX':v==='warning'?'hpW':'hpC';
+  document.getElementById('hp-score-val').textContent=score.toFixed(3);
+  var fillEl=document.getElementById('hp-score-bar-fill');
+  fillEl.style.width=Math.min(100,score*333)+'%';
+  fillEl.style.background=v==='critical'?'#ff5050':v==='warning'?'#ffcc40':'#60d080';
+  document.getElementById('hp-hot').textContent=d.hot_pct!==undefined?(d.hot_pct*100).toFixed(1)+'%':'—';
+  document.getElementById('hp-strand').textContent=d.strand_score!==undefined?d.strand_score.toFixed(4):'—';
+  document.getElementById('hp-edge').textContent=d.edge_density!==undefined?d.edge_density.toFixed(4):'—';
+  document.getElementById('hp-diff').textContent=d.diff_score!==null&&d.diff_score!==undefined?d.diff_score.toFixed(4):'—';
+  document.getElementById('hp-layer').textContent=(d.layer&&d.total_layers)?d.layer+'/'+d.total_layers:'—';
+  document.getElementById('hp-progress').textContent=d.progress_pct!==undefined?d.progress_pct+'%':'—';
+  if(d.reference_age_s!==null&&d.reference_age_s!==undefined){
+    var m=Math.floor(d.reference_age_s/60);var s=Math.round(d.reference_age_s%60);
+    document.getElementById('hp-ref-age').textContent='ref '+m+'m'+('0'+s).slice(-2)+'s ago';
+  }else{document.getElementById('hp-ref-age').textContent='';}
+  _hpScores.push(score);if(_hpScores.length>_hpMaxSamples)_hpScores.shift();
+  hpUpdateSparkline('hp-sp-canvas',_hpScores,'#60d080',0,0.3);
+}
+function hpPollJobState(){
+  var now=Date.now();
+  if(now-_hpLastAnalyze<_hpAnalyzeInterval)return;
+  _hpLastAnalyze=now;
+  fetch('/job_state').then(function(r){return r.json();}).then(function(d){
+    if(!d.error)hpUpdateFromResult(d);
+  }).catch(function(){});
+}
+function hpPollStatus(d){
+  // Update temp sparklines from /status poll data (free — no extra fetch)
+  var nozzle=d.nozzles&&d.nozzles.length?d.nozzles[0].temp:0;
+  var bed=d.bed_temp||0;
+  _hpNozzles.push(nozzle);if(_hpNozzles.length>_hpMaxSamples)_hpNozzles.shift();
+  _hpBeds.push(bed);if(_hpBeds.length>_hpMaxSamples)_hpBeds.shift();
+  hpUpdateSparkline('hp-nz-canvas',_hpNozzles,'#ff9040');
+  hpUpdateSparkline('hp-bd-canvas',_hpBeds,'#80a0ff');
+}
+function hpSetRef(){
+  fetch('/set_reference').then(function(r){return r.json();}).then(function(d){
+    _hpScores=[];
+    document.getElementById('hp-ref-age').textContent=d.ok?'ref stored':'ref failed';
+  }).catch(function(){
+    document.getElementById('hp-ref-age').textContent='ref failed';
+  });
+}
+function hpAnalyze(){_hpLastAnalyze=0;hpPollJobState();}
+// Wire hpPollStatus into existing poll
+var _origUpdate=typeof update==='function'?update:null;
+function _hpPoll(){
+  fetch('/status').then(function(r){return r.json();}).then(function(d){
+    if(_origUpdate)_origUpdate(d);
+    var f=d.fps||0;
+    var fpsCont=document.getElementById('fps');
+    if(f>0){
+      fpsCont.style.display='flex';
+      var numEl=document.getElementById('fps-num');
+      numEl.textContent=f<2?f.toFixed(1):f;
+      var cap=d.fps_cap||30;
+      numEl.className=f>=cap*.8?'fps-hi':f>=cap*.4?'fps-mid':'fps-lo';
+      var bars=document.querySelectorAll('#fps-bar span');
+      var pct=Math.min(f/cap,1),lit=Math.round(pct*5);
+      var barCol=f>=cap*.8?'#39ff6e':f>=cap*.4?'#f5a623':'#ff4444';
+      var heights=['4px','7px','10px','7px','4px'];
+      bars.forEach(function(b,i){
+        if(i<lit){b.style.background=barCol;b.style.height=heights[i];}
+        else{b.style.background='rgba(255,255,255,.15)';b.style.height='3px';}
+      });
+    }else{fpsCont.style.display='none';}
+    hpPollStatus(d);
+    hpPollJobState();
+  }).catch(function(){});}
+poll();setInterval(poll,2000);
 // Fetch-based MJPEG parser: bypasses Safari's broken <img src="multipart"> loader.
 // Reads the raw multipart stream via fetch(), parses Content-Length from each part
 // header, extracts the JPEG bytes, and sets img.src to a blob URL. Works in all browsers.
@@ -426,6 +608,10 @@ class _StreamHandler(BaseHTTPRequestHandler):
             self._serve_html()
         elif path == "/snapshot":
             self._serve_snapshot()
+        elif path == "/job_state":
+            self._serve_job_state()
+        elif path == "/set_reference":
+            self._serve_set_reference()
         else:
             self._serve_stream()
 
@@ -491,6 +677,166 @@ class _StreamHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(data)
+
+    def _serve_job_state(self):
+        """Return the active job state report as JSON (same schema as analyze_active_job MCP tool)."""
+        log.debug("_serve_job_state: requested by %s", self.client_address)
+        printer_name = getattr(self.server, "printer_name", None)
+        if not printer_name:
+            body = json.dumps({"error": "no_printer"}).encode()
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        try:
+            jpeg = next(iter(self.server.frame_factory()))
+        except Exception as e:
+            log.error("_serve_job_state: frame_factory raised: %s", e, exc_info=True)
+            body = json.dumps({"error": "stream_failed", "detail": str(e)}).encode()
+            self.send_response(503)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        try:
+            import base64
+            from camera.job_analyzer import analyze as _analyze, get_reference
+            from session_manager import session_manager
+
+            state  = session_manager.get_state(printer_name)
+            job    = session_manager.get_job(printer_name)
+            config = session_manager.get_config(printer_name)
+
+            if state is None:
+                body = json.dumps({"error": "not_connected"}).encode()
+                self.send_response(503)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            climate = state.climate
+            nozzles_list = [
+                {"id": e.id, "temp": e.temp, "target": e.temp_target}
+                for e in (state.extruders or [])
+            ]
+            nozzle = nozzles_list[0]["temp"] if nozzles_list else state.active_nozzle_temp
+            nozzle_target = nozzles_list[0]["target"] if nozzles_list else state.active_nozzle_temp_target
+
+            has_device_error = any(e.get("type") == "device_error" for e in (state.hms_errors or []))
+            hms_errors = [
+                {"code": e.get("code", ""), "msg": e.get("msg", ""), "is_critical": True}
+                for e in (state.hms_errors or [])
+                if e.get("type") == "device_hms" and has_device_error
+            ]
+            detectors = {}
+            if config:
+                detectors = {
+                    "spaghetti_detector": {
+                        "enabled": getattr(config, "spaghetti_detector", False),
+                        "sensitivity": getattr(config, "spaghetti_detector_sensitivity", "medium"),
+                    },
+                    "nozzleclumping_detector": {"enabled": getattr(config, "nozzleclumping_detector", False)},
+                    "airprinting_detector":    {"enabled": getattr(config, "airprinting_detector", False)},
+                }
+
+            active_ams_id = getattr(state, "active_ams_id", -1)
+            ams_hum = 0
+            if active_ams_id >= 0:
+                au = next((u for u in (getattr(state, "ams_units", None) or [])
+                           if u.ams_id == active_ams_id), None)
+                if au:
+                    ams_hum = getattr(au, "humidity_index", 0)
+
+            printer_context = {
+                "job_name":          (job.subtask_name or job.gcode_file or "") if job else "",
+                "gcode_state":       state.gcode_state if state else "IDLE",
+                "layer":             job.current_layer   if job else 0,
+                "total_layers":      job.total_layers    if job else 0,
+                "progress_pct":      job.print_percentage if job else 0,
+                "remaining_minutes": job.remaining_minutes if job else 0,
+                "nozzle_temp":       nozzle,
+                "nozzle_target":     nozzle_target,
+                "bed_temp":          climate.bed_temp        if climate else 0,
+                "bed_target":        climate.bed_temp_target if climate else 0,
+                "chamber_temp":      climate.chamber_temp    if climate else 0,
+                "part_fan_pct":      climate.part_cooling_fan_speed_percent if climate else 0,
+                "aux_fan_pct":       climate.aux_fan_speed_percent          if climate else 0,
+                "exhaust_fan_pct":   climate.exhaust_fan_speed_percent      if climate else 0,
+                "ams_humidity":      ams_hum,
+                "hms_errors":        hms_errors,
+                "detectors":         detectors,
+            }
+            ref_jpeg, ref_age = get_reference(printer_name)
+            report = _analyze(jpeg, printer_context, reference_jpeg=ref_jpeg,
+                              reference_age_s=ref_age, quality="auto")
+
+            def _uri(b):
+                return "data:image/png;base64," + base64.b64encode(b).decode() if b else None
+
+            from datetime import datetime, timezone
+            result = {
+                "verdict":                 report.verdict,
+                "score":                   round(report.score, 4),
+                "hot_pct":                 round(report.hot_pct, 4),
+                "strand_score":            round(report.strand_score, 4),
+                "edge_density":            round(report.edge_density, 4),
+                "diff_score":              round(report.diff_score, 4) if report.diff_score is not None else None,
+                "reference_age_s":         round(report.reference_age_s, 1) if report.reference_age_s is not None else None,
+                "quality":                 report.quality,
+                "layer":                   printer_context["layer"],
+                "total_layers":            printer_context["total_layers"],
+                "progress_pct":            printer_context["progress_pct"],
+                "timestamp":               datetime.now(timezone.utc).isoformat(),
+                "job_state_composite_png": _uri(report.job_state_composite_png),
+                "raw_png":                 _uri(report.raw_png),
+                "annotated_png":           _uri(report.annotated_png),
+                "health_panel_png":        _uri(report.health_panel_png),
+            }
+            body = json.dumps(result).encode()
+            log.debug("_serve_job_state: verdict=%s score=%.3f bytes=%d", report.verdict, report.score, len(body))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+        except Exception as e:
+            log.error("_serve_job_state: error: %s", e, exc_info=True)
+            body = json.dumps({"error": "analysis_failed", "detail": str(e)}).encode()
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    def _serve_set_reference(self):
+        """Capture a frame and store it as the reference for this printer (called from browser HUD)."""
+        try:
+            jpeg = next(iter(self.server.frame_factory()))
+        except Exception as e:
+            body = json.dumps({"ok": False, "error": str(e)}).encode()
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        from camera import job_analyzer
+        job_analyzer.store_reference(self.server.printer_name, jpeg)
+        body = json.dumps({"ok": True, "printer": self.server.printer_name}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
 
     def _serve_snapshot(self):
         """Return a single JPEG frame as image/jpeg and close the connection."""

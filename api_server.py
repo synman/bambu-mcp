@@ -323,6 +323,8 @@ _ROUTE_TAGS: dict[str, str] = {
     "download_file_from_printer": "Files",
     "get_3mf_props_for_file": "Files",
     "get_current_3mf_props": "Files",
+    # Camera
+    "analyze_active_job": "Camera",
 }
 
 _ROUTE_EXAMPLES: dict[str, dict] = {
@@ -572,6 +574,7 @@ _TAG_DESCRIPTIONS: dict[str, str] = {
     "AMS & Filament": "Filament loading, unloading, spool metadata, RFID refresh, and AMS settings.",
     "Hardware": "Nozzle configuration, AI vision detectors, and print option flags.",
     "Files": "SD card file listing, upload, download, delete, rename, and 3MF project metadata.",
+    "Camera": "Live camera snapshot, active job state report, and stream control.",
 }
 
 
@@ -1650,6 +1653,37 @@ def _build_app():
         """
         log.debug("set_spool_k_factor: called (stubbed)")
         return _ok()
+
+    @app.route("/api/analyze_active_job")
+    def analyze_active_job():
+        """Capture the live camera frame and produce a full active job state report.
+
+        Returns a suite of PNG assets (base64 data URIs) representing every
+        meaningful dimension of the active print job: project identity, live camera
+        reality, anomaly detection (spaghetti/strand sub-module), print health, and
+        a composite dashboard. All images use the HUD design system (dark palette,
+        verdict badges, zone overlays).
+
+        Query parameters:
+          printer         — printer name (required)
+          store_reference — "true" to store the current frame as the diff baseline
+          quality         — "auto" | "preview" | "standard" | "full"
+                            auto scales with verdict severity
+        """
+        log.debug("analyze_active_job: called")
+        import importlib
+        try:
+            printer_name = request.args.get("printer", "")
+            store_ref    = request.args.get("store_reference", "false").lower() == "true"
+            quality      = request.args.get("quality", "auto")
+            cam = importlib.import_module("tools.camera")
+            result = cam.analyze_active_job(printer_name, store_as_reference=store_ref, quality=quality)
+            if "error" in result:
+                return jsonify(result), 400
+            return jsonify(result)
+        except Exception as e:
+            log.error("analyze_active_job: error: %s", e, exc_info=True)
+            return jsonify({"status": "error", "message": str(e)}), 500
 
     # ── error handler ─────────────────────────────────────────────────────────
 
