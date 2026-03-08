@@ -108,8 +108,324 @@ def _extract_query_params(view_func: Callable) -> list[dict]:
     return params
 
 
+_ROUTE_TAGS: dict[str, str] = {
+    # System
+    "health_check": "System",
+    "get_printer_info": "System",
+    "trigger_printer_refresh": "System",
+    "toggle_session": "System",
+    "dump_log": "System",
+    "truncate_log": "System",
+    "server_info": "System",
+    "get_openapi_spec": "System",
+    "api_docs": "System",
+    # Climate
+    "set_tool_target_temp": "Climate",
+    "set_bed_target_temp": "Climate",
+    "set_chamber_target_temp": "Climate",
+    "set_aux_fan_speed_target": "Climate",
+    "set_exhaust_fan_speed_target": "Climate",
+    "set_fan_speed_target": "Climate",
+    "set_light_state": "Climate",
+    "toggle_active_tool": "Climate",
+    # Print Control
+    "resume_printing": "Print Control",
+    "pause_printing": "Print Control",
+    "stop_printing": "Print Control",
+    "print_3mf": "Print Control",
+    "skip_objects": "Print Control",
+    "set_speed_level": "Print Control",
+    "send_gcode": "Print Control",
+    # AMS & Filament
+    "load_filament": "AMS & Filament",
+    "unload_filament": "AMS & Filament",
+    "refresh_spool_rfid": "AMS & Filament",
+    "set_spool_details": "AMS & Filament",
+    "send_ams_control_command": "AMS & Filament",
+    "set_ams_user_setting": "AMS & Filament",
+    "set_spool_k_factor": "AMS & Filament",
+    # Hardware
+    "set_nozzle_details": "Hardware",
+    "refresh_nozzles": "Hardware",
+    "set_buildplate_marker_detector": "Hardware",
+    "set_spaghetti_detector": "Hardware",
+    "set_purgechutepileup_detector": "Hardware",
+    "set_nozzleclumping_detector": "Hardware",
+    "set_airprinting_detector": "Hardware",
+    "set_print_option": "Hardware",
+    # Files
+    "refresh_sdcard_3mf_files": "Files",
+    "get_sdcard_3mf_files": "Files",
+    "refresh_sdcard_contents": "Files",
+    "get_sdcard_contents": "Files",
+    "delete_sdcard_file": "Files",
+    "make_sdcard_directory": "Files",
+    "rename_sdcard_file": "Files",
+    "upload_file_to_host": "Files",
+    "upload_file_to_printer": "Files",
+    "download_file_from_printer": "Files",
+    "get_3mf_props_for_file": "Files",
+    "get_current_3mf_props": "Files",
+}
+
+_ROUTE_EXAMPLES: dict[str, dict] = {
+    "health_check": {
+        "response": {"status": "success", "printer": {"gcode_state": "RUNNING", "print_percentage": 42, "nozzle_temp": 220, "bed_temp": 35}},
+        "params": {"printer": "H2D"},
+    },
+    "get_printer_info": {
+        "response": {"gcode_state": "RUNNING", "print_percentage": 42, "nozzle_temp": 220, "nozzle_temp_target": 220, "bed_temp": 35, "bed_temp_target": 35, "chamber_temp": 21, "speed_level": "standard"},
+        "params": {"printer": "H2D"},
+    },
+    "toggle_active_tool": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D"},
+    },
+    "set_tool_target_temp": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D", "temp": "220"},
+    },
+    "set_bed_target_temp": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D", "temp": "35"},
+    },
+    "set_chamber_target_temp": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D", "temp": "45"},
+    },
+    "set_aux_fan_speed_target": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D", "percent": "70"},
+    },
+    "set_exhaust_fan_speed_target": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D", "percent": "50"},
+    },
+    "set_fan_speed_target": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D", "percent": "100"},
+    },
+    "set_light_state": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D", "state": "on"},
+    },
+    "set_speed_level": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D", "level": "standard"},
+    },
+    "unload_filament": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D"},
+    },
+    "load_filament": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D", "slot": "0"},
+    },
+    "refresh_spool_rfid": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D", "slot_id": "2", "ams_id": "0"},
+    },
+    "set_spool_details": {
+        "response": {"status": "success"},
+        "params": {
+            "printer": "H2D",
+            "tray_id": "1",
+            "tray_info_idx": "GFA00",
+            "tray_id_name": "Bambu PLA Basic",
+            "tray_type": "PLA",
+            "tray_color": "FF0000",
+            "nozzle_temp_min": "190",
+            "nozzle_temp_max": "240",
+        },
+    },
+    "resume_printing": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D"},
+    },
+    "pause_printing": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D"},
+    },
+    "stop_printing": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D"},
+    },
+    "print_3mf": {
+        "response": {"status": "success"},
+        "params": {
+            "printer": "H2D",
+            "filename": "/_jobs/myprint.gcode.3mf",
+            "platenum": "1",
+            "plate": "TEXTURED_PLATE",
+            "use_ams": "true",
+            "ams_mapping": "",
+            "bl": "true",
+            "flow": "false",
+            "tl": "false",
+        },
+    },
+    "skip_objects": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D", "objects": "1,3"},
+    },
+    "refresh_sdcard_3mf_files": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D"},
+    },
+    "get_sdcard_3mf_files": {
+        "response": ["/_jobs/myprint.gcode.3mf", "/cache/calibration.gcode.3mf"],
+        "params": {"printer": "H2D"},
+    },
+    "refresh_sdcard_contents": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D"},
+    },
+    "get_sdcard_contents": {
+        "response": {"/": ["_jobs", "cache"], "/_jobs": ["myprint.gcode.3mf"]},
+        "params": {"printer": "H2D"},
+    },
+    "delete_sdcard_file": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D", "file": "/_jobs/myprint.gcode.3mf"},
+    },
+    "make_sdcard_directory": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D", "dir": "/_jobs/archive"},
+    },
+    "rename_sdcard_file": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D", "src": "/_jobs/old.gcode.3mf", "dest": "/_jobs/new.gcode.3mf"},
+    },
+    "upload_file_to_host": {
+        "response": {"status": "success", "filename": "myprint.gcode.3mf"},
+        "params": {},
+    },
+    "upload_file_to_printer": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D", "src": "myprint.gcode.3mf", "dest": "/_jobs/myprint.gcode.3mf"},
+    },
+    "download_file_from_printer": {
+        "response": {},
+        "params": {"printer": "H2D", "src": "/_jobs/myprint.gcode.3mf"},
+    },
+    "set_buildplate_marker_detector": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D", "enabled": "true"},
+    },
+    "set_spaghetti_detector": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D", "enabled": "true", "sensitivity": "medium"},
+    },
+    "set_purgechutepileup_detector": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D", "enabled": "true", "sensitivity": "medium"},
+    },
+    "set_nozzleclumping_detector": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D", "enabled": "true", "sensitivity": "medium"},
+    },
+    "set_airprinting_detector": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D", "enabled": "true", "sensitivity": "medium"},
+    },
+    "set_print_option": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D", "option": "AUTO_RECOVERY", "enabled": "true"},
+    },
+    "send_gcode": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D", "gcode": "G28|G1 X100 Y100 F3000"},
+    },
+    "send_ams_control_command": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D", "cmd": "RESUME"},
+    },
+    "set_ams_user_setting": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D", "setting": "CALIBRATE_REMAIN_FLAG", "enabled": "true"},
+    },
+    "set_nozzle_details": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D", "nozzle_diameter": "0.4", "nozzle_type": "HARDENED_STEEL"},
+    },
+    "refresh_nozzles": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D"},
+    },
+    "get_3mf_props_for_file": {
+        "response": {
+            "id": "myprint",
+            "plates": [1],
+            "filaments": [{"type": "PLA", "color": "FF0000", "nozzle_temp_min": 190, "nozzle_temp_max": 240}],
+        },
+        "params": {"printer": "H2D", "file": "/_jobs/myprint.gcode.3mf", "plate": "1"},
+    },
+    "get_current_3mf_props": {
+        "response": {"id": "myprint", "status": "success", "plates": [1]},
+        "params": {"printer": "H2D"},
+    },
+    "trigger_printer_refresh": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D"},
+    },
+    "toggle_session": {
+        "response": {"status": "success", "state": "CONNECTED"},
+        "params": {"printer": "H2D"},
+    },
+    "dump_log": {
+        "response": "2024-01-01 12:00:00 INFO bambu-mcp started\n2024-01-01 12:00:01 INFO printer H2D connected",
+        "params": {},
+    },
+    "truncate_log": {
+        "response": {"status": "success"},
+        "params": {},
+    },
+    "server_info": {
+        "response": {
+            "api_port": 49153,
+            "api_url": "http://localhost:49153/api",
+            "pool_start": 49152,
+            "pool_end": 49251,
+            "pool_size": 100,
+            "pool_available": 98,
+            "pool_claimed": [49153, 49154],
+            "stream_count": 1,
+            "streams": {"H2D": {"port": 49154, "url": "http://localhost:49154/"}},
+        },
+        "params": {},
+    },
+    "set_spool_k_factor": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D"},
+    },
+    "get_openapi_spec": {
+        "response": {"openapi": "3.0.3", "info": {"title": "bambu-mcp API", "version": "1.0.0"}},
+        "params": {},
+    },
+    "api_docs": {
+        "response": {},
+        "params": {},
+    },
+}
+
+_TAG_DESCRIPTIONS: dict[str, str] = {
+    "System": "Health, session management, logging, and server information.",
+    "Climate": "Temperature targets, fan speeds, chamber light, and active tool selection.",
+    "Print Control": "Start, pause, resume, stop, speed, skip objects, and raw G-code.",
+    "AMS & Filament": "Filament loading, unloading, spool metadata, RFID refresh, and AMS settings.",
+    "Hardware": "Nozzle configuration, AI vision detectors, and print option flags.",
+    "Files": "SD card file listing, upload, download, delete, rename, and 3MF project metadata.",
+}
+
+
 def build_openapi_document(flask_app) -> dict:
     log.debug("build_openapi_document: called")
+    try:
+        from importlib.metadata import version as _pkg_version
+        _api_version = _pkg_version("bambu-mcp")
+    except Exception:
+        _api_version = "0.0.0"
+
     paths: dict = {}
     for rule in sorted(flask_app.url_map.iter_rules(), key=lambda r: r.rule):
         if not rule.rule.startswith("/api/"):
@@ -118,19 +434,51 @@ def build_openapi_document(flask_app) -> dict:
             continue
         vf = flask_app.view_functions[rule.endpoint]
         params = _extract_query_params(vf)
+        ep = rule.endpoint
+        ex = _ROUTE_EXAMPLES.get(ep, {})
+        param_examples = ex.get("params", {})
+        resp_example = ex.get("response")
+
+        # Enrich each extracted parameter schema with a realistic example value
+        for p in params:
+            pex = param_examples.get(p["name"])
+            if pex is not None:
+                p["schema"]["example"] = pex
+
+        # Build full description from the complete docstring (all lines, stripped)
+        raw_doc = vf.__doc__ or ""
+        doc_lines = [line.strip() for line in raw_doc.strip().splitlines()]
+        summary = doc_lines[0] if doc_lines else ep.replace("_", " ")
+        description = "\n".join(doc_lines).strip()
+
+        tag = _ROUTE_TAGS.get(ep, "System")
+
+        resp_schema: dict = {"type": "object"}
+        if resp_example is not None:
+            resp_schema["example"] = resp_example
+        resp_content = {"application/json": {"schema": resp_schema}}
+
         ops = paths.setdefault(rule.rule, {})
         for method in sorted(rule.methods - {"HEAD", "OPTIONS"}):
-            op = {
-                "operationId": rule.endpoint,
-                "summary": (vf.__doc__ or "").strip().split("\n")[0] if vf.__doc__ else rule.endpoint.replace("_", " "),
-                "responses": {"200": {"description": "Success", "content": {"application/json": {"schema": {"type": "object"}}}}},
+            op: dict = {
+                "operationId": ep,
+                "summary": summary,
+                "description": description,
+                "tags": [tag],
+                "responses": {"200": {"description": "Success", "content": resp_content}},
             }
             if params:
                 op["parameters"] = params
             ops[method.lower()] = op
+
     doc = {
         "openapi": "3.0.3",
-        "info": {"title": "bambu-mcp API", "version": "1.0.0", "description": "Bambu printer REST API backed by bambu-mcp session_manager."},
+        "info": {
+            "title": "bambu-mcp API",
+            "version": _api_version,
+            "description": "Bambu printer REST API backed by bambu-mcp session_manager.",
+        },
+        "tags": [{"name": name, "description": desc} for name, desc in _TAG_DESCRIPTIONS.items()],
         "paths": paths,
     }
     log.debug("build_openapi_document: → %d paths", len(paths))
