@@ -422,6 +422,8 @@ class _StreamHandler(BaseHTTPRequestHandler):
             self._serve_image(self.server.layout_fn)
         elif path in ("/", "/index.html"):
             self._serve_html()
+        elif path == "/snapshot":
+            self._serve_snapshot()
         else:
             self._serve_stream()
 
@@ -486,6 +488,29 @@ class _StreamHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(data)
+
+    def _serve_snapshot(self):
+        """Return a single JPEG frame as image/jpeg and close the connection."""
+        log.debug("_serve_snapshot: requested by %s", self.client_address)
+        try:
+            jpeg = next(iter(self.server.frame_factory()))
+        except StopIteration:
+            log.warning("_serve_snapshot: no frame available for %s", self.client_address)
+            self.send_response(503)
+            self.end_headers()
+            return
+        except Exception as e:
+            log.error("_serve_snapshot: frame_factory raised: %s", e, exc_info=True)
+            self.send_response(500)
+            self.end_headers()
+            return
+        log.debug("_serve_snapshot: serving %d bytes to %s", len(jpeg), self.client_address)
+        self.send_response(200)
+        self.send_header("Content-Type", "image/jpeg")
+        self.send_header("Content-Length", str(len(jpeg)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(jpeg)
 
     def _serve_stream(self):
         ua = self.headers.get("User-Agent", "unknown")
