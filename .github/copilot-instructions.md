@@ -199,6 +199,63 @@ All TCP listener components (REST API server + MJPEG camera stream servers) draw
 
 ---
 
+## Swagger / OpenAPI Maintenance Standard (Mandatory)
+
+Every route in `api_server.py` must carry a **complete multi-line docstring** at all times. The docstring is the sole source for the auto-generated `/api/openapi.json` spec and the Swagger UI at `/api/docs`.
+
+### Route docstring completeness requirements
+
+Every `api_server.py` route docstring MUST contain:
+1. **Summary line** — first line; concise verb phrase (e.g. "Pause the current print job.")
+2. **Full description** — 2–4 lines explaining behavior, constraints, and side effects
+3. **All query/body parameters** — name, type, required/optional, allowed values, example
+4. **Response shape** — key fields returned on success
+5. **⚠️ tag** — any irreversible operation (stop, delete, print_3mf, send_gcode, delete_sdcard_file) must have a visible `⚠️` warning in the docstring
+
+### Deprecated scaffolding annotation (mandatory)
+
+Any route whose underlying BPM method is marked `@deprecated` must include a `⚠️ DEPRECATED SCAFFOLDING:` paragraph in its docstring stating:
+- Which BPM method is deprecated and why
+- The confirmed replacement (or "no confirmed replacement yet" if none)
+- Whether the route is a functional stub or still calls the deprecated method
+
+**Currently deprecated routes** (as of `bambu-printer-manager` v1.0.0):
+| Route | BPM method | Status | Replacement |
+|-------|-----------|--------|-------------|
+| `GET /api/set_aux_fan_speed_target` | `set_aux_fan_speed_target_percent()` | Functional but deprecated | Unclear — BPM deprecation message appears to be a copy-paste error |
+| `GET /api/set_spool_k_factor` | `set_k_factor()` | Stubbed (no-op) — broken in recent firmware | `select_extrusion_calibration_profile()` |
+
+When BPM is updated and a replacement is confirmed: update the route implementation, update the docstring (remove the `⚠️ DEPRECATED SCAFFOLDING` paragraph), and update this table.
+
+### Dual-layer sync rule
+
+Whenever a route is **added, changed, or removed**, BOTH layers must be updated in the same commit:
+1. **`api_server.py` route docstring** — the developer-facing / Swagger UI source
+2. **`knowledge/http_api_*.py` sub-topic file** — the agent-facing reference
+
+A change to one layer without the other is an **incomplete change**.
+
+### New route checklist
+
+When adding a new route, the commit must include:
+- [ ] Route implementation
+- [ ] Multi-line docstring per standard above (summary + description + params + response + ⚠️ if irreversible)
+- [ ] Entry in `_ROUTE_EXAMPLES` (both `params` and `response` keys with realistic values)
+- [ ] Entry in `_ROUTE_TAGS` (correct category)
+- [ ] Corresponding `knowledge/http_api_*.py` update (or new sub-topic file if the category doesn't exist)
+- [ ] If new sub-topic file: add to `_KNOWN_TOPICS` + `_KNOWLEDGE_MAP` in `resources/knowledge.py` and `tools/knowledge_search.py`
+
+### Reconciliation gate
+
+Every reconciliation pass (Track 9) must include a Swagger audit:
+- Spot-check all routes added or changed since the last pass
+- Flag any single-line docstrings added since last pass
+- Verify `_ROUTE_EXAMPLES` has `params` + `response` for every route
+- Verify no deprecated route is missing its `⚠️ DEPRECATED SCAFFOLDING` annotation
+- Re-run `curl http://localhost:{api_port}/api/openapi.json | python3 -m json.tool | grep -c '"example"'` to confirm example count
+
+---
+
 ## Pervasive Logging Standard (Mandatory)
 
 All code in `bambu-mcp` must follow three dimensions of logging. Any new code or code change that does not carry all three forward is a defect.
