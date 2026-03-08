@@ -20,6 +20,7 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import pathlib
 import tempfile
 from datetime import datetime, timezone
 
@@ -390,6 +391,33 @@ def start_stream(name: str, port: int | None = None) -> dict:
         # Shared image cache — regenerated only when job (gcode_file + plate_num) changes
         _img_cache: dict = {"key": None, "thumbnail": None, "layout": None}
 
+        _plate_dir = pathlib.Path.home() / ".bambu-mcp"
+        _plate_dir.mkdir(parents=True, exist_ok=True)
+        _thumb_path  = _plate_dir / f"plate_thumb_{name}.png"
+        _layout_path = _plate_dir / f"plate_layout_{name}.png"
+
+        def _load_plate_disk():
+            """Return (thumbnail_bytes, layout_bytes) from disk, or (None, None)."""
+            try:
+                t = _thumb_path.read_bytes()  if _thumb_path.exists()  else None
+                l = _layout_path.read_bytes() if _layout_path.exists() else None
+                return t, l
+            except Exception:
+                return None, None
+
+        def _save_plate_disk(thumb: bytes | None, layout: bytes | None):
+            try:
+                if thumb:  _thumb_path.write_bytes(thumb)
+                if layout: _layout_path.write_bytes(layout)
+            except Exception as _e:
+                log.debug("_save_plate_disk: %s", _e)
+
+        # Pre-load from disk so panels appear immediately on stream start / MCP restart.
+        _disk_t, _disk_l = _load_plate_disk()
+        if _disk_t or _disk_l:
+            _img_cache["thumbnail"] = _disk_t
+            _img_cache["layout"]    = _disk_l
+
         def _get_images(n=name):
             """Return cached (thumbnail_bytes, layout_bytes), regenerating on job change."""
             import re, base64, json as _json, dataclasses
@@ -399,7 +427,8 @@ def start_stream(name: str, port: int | None = None) -> dict:
 
             job = session_manager.get_job(n)
             if job is None or not job.subtask_name:
-                return None, None
+                # No active job — return whatever is cached (disk-loaded or last known).
+                return _img_cache.get("thumbnail"), _img_cache.get("layout")
 
             # Derive the SD-card 3MF path from subtask_name (e.g. "H2D H2S main riser 2025-9-19"
             # → "/_jobs/H2D H2S main riser 2025-9-19.gcode.3mf") and plate_num from the
@@ -411,6 +440,16 @@ def start_stream(name: str, port: int | None = None) -> dict:
             cache_key = (tmf_path, plate_num)
             if _img_cache["key"] == cache_key and _img_cache["thumbnail"] is not None:
                 return _img_cache["thumbnail"], _img_cache["layout"]
+
+            # New job — clear stale disk images so old job doesn't bleed into new one.
+            if _img_cache["key"] is not None and _img_cache["key"] != cache_key:
+                try:
+                    if _thumb_path.exists():  _thumb_path.unlink()
+                    if _layout_path.exists(): _layout_path.unlink()
+                except Exception:
+                    pass
+                _img_cache["thumbnail"] = None
+                _img_cache["layout"]    = None
 
             p = session_manager.get_printer(n)
             if p is None:
@@ -446,9 +485,10 @@ def start_stream(name: str, port: int | None = None) -> dict:
                     if layout_uri:
                         layout_bytes = base64.b64decode(layout_uri.split(",", 1)[1])
 
-                _img_cache["key"] = cache_key
+                _img_cache["key"]       = cache_key
                 _img_cache["thumbnail"] = thumb_bytes
-                _img_cache["layout"] = layout_bytes
+                _img_cache["layout"]    = layout_bytes
+                _save_plate_disk(thumb_bytes, layout_bytes)
                 return thumb_bytes, layout_bytes
             except Exception as _e:
                 log.warning("_get_images: error fetching thumbnail/layout: %s", _e, exc_info=True)
