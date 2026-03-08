@@ -37,11 +37,11 @@ _HTML_PAGE = """\
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:#000;display:flex;align-items:center;justify-content:center;height:100vh;overflow:hidden}
 #stream{max-width:100%;max-height:100vh;display:block}
-#hud{position:fixed;top:16px;left:16px;background:rgba(0,0,0,.75);color:#ddd;
+#hud{position:fixed;top:16px;left:16px;background:rgba(0,0,0,.85);color:#ddd;
   font:14px/1.6 'Courier New',monospace;padding:10px 14px;border-radius:8px;
   pointer-events:none;min-width:230px;max-width:310px;
   border:1px solid rgba(255,255,255,.08)}
-.hud-hdr{font-size:10px;color:#555;letter-spacing:.08em;text-transform:uppercase;
+.hud-hdr{font-size:12px;color:#888;letter-spacing:.08em;text-transform:uppercase;
   display:flex;justify-content:space-between;align-items:center;
   cursor:pointer;user-select:none;pointer-events:auto;margin-bottom:4px}
 #hud-body{overflow:hidden;transition:max-height .25s ease}
@@ -53,7 +53,7 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
              max-height .35s cubic-bezier(.17,.67,.36,1.12),
              padding .35s ease}
 .img-panel.hidden{display:none}
-.img-panel-hdr{font:700 10px/1.4 'Courier New',monospace;color:#555;text-transform:uppercase;
+.img-panel-hdr{font:700 12px/1.4 'Courier New',monospace;color:#888;text-transform:uppercase;
   letter-spacing:.08em;display:flex;justify-content:space-between;align-items:center;
   cursor:pointer;user-select:none;padding-bottom:4px;pointer-events:auto}
 .img-panel-body{overflow:hidden;transition:max-height .35s cubic-bezier(.17,.67,.36,1.12);max-height:600px}
@@ -64,9 +64,10 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
 .img-panel.expanded img{max-width:570px;max-height:570px}
 #thumb-wrap{left:16px}
 #layout-wrap{right:16px}
-#hp-sec-anomaly img{display:block;width:100%;border-radius:4px;opacity:.92;margin-top:4px}
-#health-panel.hp-wide #hp-sec-anomaly img{max-height:calc(100vh - 200px);object-fit:contain}
-.hdr{font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.08em;
+#hp-sec-anomaly{overflow:hidden;transition:max-height .35s ease}
+#hp-sec-anomaly img{display:block;width:100%;aspect-ratio:16/9;border-radius:4px;opacity:.92;margin-top:4px}
+#health-panel.hp-wide #hp-sec-anomaly img{width:100%;object-fit:fill}
+.hdr{font-size:12px;color:#888;text-transform:uppercase;letter-spacing:.08em;
   border-bottom:1px solid rgba(255,255,255,.1);margin-bottom:3px;padding-bottom:2px;margin-top:6px;
   cursor:pointer;pointer-events:auto;display:flex;justify-content:space-between;align-items:center;
   user-select:none}
@@ -104,26 +105,26 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
 .error-link:hover{text-decoration:underline}
 @keyframes pulse{0%{opacity:1}50%{opacity:.42}100%{opacity:1}}
 .heating{animation:pulse 1.5s ease-in-out infinite}
-#badge-row{display:flex;align-items:center;gap:6px;margin-bottom:5px}
-#badge{margin-bottom:0}
 #speed-badge{display:none;font-size:11px;font-weight:700;padding:1px 6px;
   border-radius:3px;letter-spacing:.03em}
 .sQ{background:#2a2a2a;color:#666}.sS{background:#1a3a1a;color:#50b060}
 .sSP{background:#4a2e10;color:#e0902a}.sL{background:#4a1010;color:#e05050}
-#progress-bar{height:3px;background:rgba(255,255,255,.08);border-radius:2px;margin:3px 0 4px}
-#progress-fill{height:100%;border-radius:2px;transition:width .6s}
+#progress-bar{display:flex;align-items:center;gap:6px;margin:4px 0 5px}
+#progress-track{flex:1;height:3px;background:rgba(255,255,255,.18);border-radius:2px;overflow:hidden}
+#progress-fill{height:100%;border-radius:2px;transition:width .6s;width:0}
+#progress-pct{color:#ddd;font-family:'Courier New',monospace;white-space:nowrap;min-width:30px;text-align:right}
 #filament-row{margin:2px 0 1px;font-size:13px}
 #door-warn{font-size:12px;font-weight:700;margin-top:2px;padding:1px 0}
 #humidity-row{font-size:12px;margin-top:3px}
 #health-panel{position:fixed;top:118px;right:14px;width:180px;max-height:calc(100vh - 132px);overflow:hidden;
-  background:rgba(0,0,0,.75);border:1px solid rgba(255,255,255,.08);border-radius:6px;
+  background:rgba(0,0,0,.85);border:1px solid rgba(255,255,255,.08);border-radius:6px;
   padding:7px 10px 8px;display:none;flex-direction:column;gap:4px;pointer-events:auto;
-  font-family:'Courier New',monospace;
+  font-family:'Courier New',monospace;font-size:14px;
   transition:width .35s cubic-bezier(.17,.67,.36,1.12)}
-#health-panel.hp-wide{width:calc(100vw - 28px)}
-#health-panel .hp-hdr{font-size:10px;color:#555;letter-spacing:.08em;text-transform:uppercase;
+#health-panel.hp-wide{width:calc(100vw - 340px)}
+#health-panel .hp-hdr{font-size:12px;color:#888;letter-spacing:.08em;text-transform:uppercase;
   display:flex;justify-content:space-between;align-items:center;cursor:pointer;user-select:none}
-#health-panel .hp-hdr .hp-chev{font-size:12px;color:#555;transition:transform .2s}
+#health-panel .hp-hdr .hp-chev{font-size:12px;color:#888;transition:transform .2s}
 #health-panel .hp-hdr .hp-chev.open{transform:rotate(180deg)}
 #health-panel .hp-body{overflow:hidden;transition:max-height .25s ease}
 #health-panel .hp-body.collapsed{max-height:0}
@@ -133,14 +134,21 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
 #hp-score-row{display:flex;align-items:center;gap:6px;margin:3px 0 2px}
 #hp-score-bar-track{flex:1;height:3px;background:#555;border-radius:2px}
 #hp-score-bar-fill{height:100%;border-radius:2px;transition:width .6s}
-.hp-metric-row{display:flex;justify-content:space-between;font-size:11px;margin:1px 0}
+.hp-metric-row{display:flex;justify-content:space-between;font-size:14px;margin:1px 0}
 .hp-metric-row .hp-lbl{color:#888}.hp-metric-row .hp-val{color:#ddd}
 .hp-sep{border:none;border-top:1px solid rgba(255,255,255,.08);margin:4px 0}
 #hp-trend-section{}
-.hp-spark-row{display:flex;align-items:center;gap:4px;margin:2px 0}
-.hp-spark-row .hp-slbl{font-size:10px;color:#888;width:44px;flex-shrink:0}
-.hp-spark-row canvas{flex:1;height:28px;border-radius:2px;background:rgba(0,0,0,.3)}
-.hp-spark-mini{flex:1;height:16px !important;border-radius:2px;background:rgba(0,0,0,.3)}
+.hp-spark-row{display:flex;align-items:center;gap:6px;margin:3px 0}
+.hp-spark-row .hp-slbl{font-size:11px;color:#666;width:64px;flex-shrink:0;letter-spacing:.04em;text-transform:uppercase}
+.hp-spark-row canvas{flex:1;height:48px;border-radius:3px;background:rgba(255,255,255,.04)}
+.hp-spark-mini{flex:1;height:36px !important;border-radius:3px;background:rgba(255,255,255,.04)}
+#hp-det-legend{margin-top:5px;font-size:11px;font-family:'Courier New',monospace}
+.hp-det-row{display:flex;align-items:center;gap:5px;margin:2px 0}
+.hp-det-swatch{display:inline-block;width:12px;height:12px;border-radius:2px;border:1.5px solid transparent;flex-shrink:0}
+.hp-det-key{color:#888;min-width:52px;flex-shrink:0}
+.hp-det-val{color:#555;font-size:10px;flex:1}
+.hp-det-live{color:#ddd;min-width:44px;flex-shrink:0;font-weight:700}
+.hp-det-thresh{color:#444;font-size:10px;flex:1}
 </style>
 </head>
 <body>
@@ -148,14 +156,14 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
 <div id="fps"><span id="fps-num"></span><span id="fps-lbl">FPS</span><div id="fps-bar"><span></span><span></span><span></span><span></span><span></span></div></div>
 <div id="health-panel">
   <div class="hp-hdr" onclick="hpToggle(this)">
-    <span>JOB HEALTH</span><span class="hp-chev open">▲</span>
+    <span>JOB HEALTH</span><span class="hp-chev">▲</span>
   </div>
-  <div class="hp-body" id="hp-body">
-    <div id="hp-score-row">
-      <span id="hp-verdict" class="hpC">CLEAN</span>
-      <div id="hp-score-bar-track"><div id="hp-score-bar-fill" style="width:0%;background:#60d080"></div></div>
-      <span id="hp-score-val" style="font-size:11px;color:#ddd;min-width:34px;text-align:right">0.000</span>
-    </div>
+  <div id="hp-score-row">
+    <span id="hp-verdict" class="hpC">CLEAN</span>
+    <div id="hp-score-bar-track"><div id="hp-score-bar-fill" style="width:0%;background:#60d080"></div></div>
+    <span id="hp-score-val" style="font-size:14px;color:#ddd;min-width:34px;text-align:right">0.000</span>
+  </div>
+  <div class="hp-body collapsed" id="hp-body">
     <div class="hdr" onclick="hudToggle(this,'hp-sec-metrics')">Metrics<span class="hdr-chev open">▲</span></div>
     <div class="hdr-section" id="hp-sec-metrics">
       <div class="hp-metric-row"><span class="hp-lbl">Hot px</span><span id="hp-hot" class="hp-val">—</span></div>
@@ -167,33 +175,33 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
     </div>
     <div class="hdr" onclick="hudToggle(this,'hp-sec-trends')">Trends<span class="hdr-chev open">▲</span></div>
     <div class="hdr-section" id="hp-sec-trends">
-      <div class="hp-spark-row"><span class="hp-slbl">SPAGHETTI</span><canvas id="hp-sp-canvas"></canvas></div>
-      <div class="hp-spark-row"><span class="hp-slbl">NOZZLE</span><canvas id="hp-nz-canvas" class="hp-spark-mini"></canvas></div>
-      <div class="hp-spark-row"><span class="hp-slbl">BED</span><canvas id="hp-bd-canvas" class="hp-spark-mini"></canvas></div>
+      <div class="hp-spark-row"><span class="hp-slbl">Anomaly</span><canvas id="hp-sp-canvas"></canvas></div>
+      <div class="hp-spark-row"><span class="hp-slbl">Nozzle °C</span><canvas id="hp-nz-canvas" class="hp-spark-mini"></canvas></div>
+      <div class="hp-spark-row"><span class="hp-slbl">Bed °C</span><canvas id="hp-bd-canvas" class="hp-spark-mini"></canvas></div>
     </div>
     <div id="hp-anomaly-section" style="display:none">
-      <div class="hdr" onclick="hpAnomalyToggle(this)">Anomaly<span class="hdr-chev">▲</span></div>
-      <div class="hdr-section collapsed" id="hp-sec-anomaly">
+      <div class="hdr" onclick="hpAnomalyToggle(this)">AI Detection<span class="hdr-chev open">▲</span></div>
+      <div id="hp-sec-anomaly">
         <img id="hp-anomaly-img" src="" alt="Anomaly detection">
+        <div id="hp-det-legend">
+          <div class="hp-det-row"><span class="hp-det-swatch" style="border-color:#ffcc40"></span><span class="hp-det-key">Air Zone</span></div>
+          <div class="hp-det-row"><span class="hp-det-swatch" style="border-color:#60d080"></span><span class="hp-det-key">Plate Zone</span></div>
+          <div class="hp-det-row"><span class="hp-det-swatch" style="background:linear-gradient(90deg,#ff9040,#ff5050)"></span><span class="hp-det-key">Heat Map</span></div>
+        </div>
       </div>
     </div>
   </div>
 </div>
 <div id="hud">
   <div class="hud-hdr" onclick="hudBodyToggle(this)">
-    <span>JOB STATUS</span><span class="hp-chev open">▲</span>
+    <span>PRINTER STATUS</span><span class="hp-chev open">▲</span>
   </div>
+  <div id="progress-bar"><div id="progress-track"><div id="progress-fill"></div></div><span id="progress-pct"></span></div>
   <div id="hud-body">
-    <div class="hdr" onclick="hudToggle(this,'sec-print')">Print<span class="hdr-chev open">▲</span></div>
+    <div class="hdr" onclick="hudToggle(this,'sec-print')" style="align-items:baseline"><div id="badge" class="bIDLE">IDLE</div><div id="speed-badge" style="margin-left:4px"></div><span class="hdr-chev open" style="margin-left:auto">▲</span></div>
     <div class="hdr-section" id="sec-print">
-      <div id="badge-row">
-        <div id="badge" class="bIDLE">IDLE</div>
-        <div id="speed-badge"></div>
-      </div>
       <div id="subtask" style="font-size:13px;font-weight:600;color:#e0b84e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:275px;margin-bottom:2px"></div>
-      <div class="row"><span class="lbl">Progress</span><span id="pct" class="val">\u2014</span></div>
       <div class="row"><span class="lbl">Layer</span><span id="layers" class="val">\u2014</span></div>
-      <div id="progress-bar"><div id="progress-fill"></div></div>
       <div id="stage-row" class="row hidden"><span class="lbl">Stage</span><span id="stage" class="val" style="text-align:right;max-width:190px;font-size:12px">—</span></div>
       <div id="time-row" class="row hidden"><span class="lbl">Elapsed</span><span id="elapsed" class="val">\u2014</span></div>
       <div id="remain-row" class="row hidden"><span class="lbl">Remain</span><span id="remain" class="val">\u2014</span></div>
@@ -210,13 +218,10 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
       <div class="hdr" onclick="hudToggle(this,'sec-fans-body')">Fans<span class="hdr-chev open">▲</span></div>
       <div class="hdr-section" id="sec-fans-body"><div id="fans"></div></div>
     </div>
-    <div class="hdr" onclick="hudToggle(this,'sec-status')">Status<span class="hdr-chev open">▲</span></div>
+    <div class="hdr" id="hdr-status" style="align-items:center;cursor:default;pointer-events:none"><span id="wifi" class="dim"></span></div>
     <div class="hdr-section" id="sec-status">
       <div id="humidity-row" style="display:none"></div>
-      <div class="row" style="font-size:12px">
-        <span id="wifi" class="dim"></span>
-        <div id="errors" class="hidden"></div>
-      </div>
+      <div id="errors" class="hidden" style="font-size:12px;margin-top:2px"></div>
     </div>
   </div>
 </div>
@@ -281,19 +286,21 @@ function update(d){
   badge.className='b'+s;
 
   var active=s==='RUNNING'||s==='PREPARE'||s==='PAUSE';
-  document.getElementById('pct').textContent=active?d.print_percentage+'%':'\u2014';
+  var activeOrFinish=active||s==='FINISH';
 
-  var lEl=document.getElementById('layers');
-  lEl.textContent=(active&&d.total_layers>0)?d.current_layer+' / '+d.total_layers:'\u2014';
-
-  // E3 — progress bar
+  // E3 — progress bar + inline pct label
   var pfEl=document.getElementById('progress-fill');
   var stateColors={RUNNING:'#60d080',PREPARE:'#80a0ff',PAUSE:'#ffcc40',FAILED:'#ff6060',FINISH:'#60d0e0'};
-  pfEl.style.width=(active?(d.print_percentage||0):0)+'%';
+  var pct=active?(d.print_percentage||0):0;
+  pfEl.style.width=pct+'%';
   pfEl.style.background=stateColors[s]||'#555';
+  document.getElementById('progress-pct').textContent=active?pct+'%':'';
+
+  var lEl=document.getElementById('layers');
+  lEl.textContent=(activeOrFinish&&d.total_layers>0)?d.current_layer+' / '+d.total_layers:'\u2014';
 
   var sub=document.getElementById('subtask');
-  sub.textContent=(active&&d.subtask_name)?d.subtask_name:'';
+  sub.textContent=(activeOrFinish&&d.subtask_name)?d.subtask_name:'';
 
   // E6 — speed level badge
   var spdEl=document.getElementById('speed-badge');
@@ -311,7 +318,12 @@ function update(d){
 
   var tRow=document.getElementById('time-row');
   var rRow=document.getElementById('remain-row');
-  if(d.elapsed_minutes>0){document.getElementById('elapsed').textContent=fmtM(d.elapsed_minutes);tRow.classList.remove('hidden');}
+  var elapsedVal=d.elapsed_minutes||0;
+  var jobKey='elapsed_'+((d.subtask_name||d.gcode_file||'').replace(/[^a-zA-Z0-9]/g,'_'));
+  if(elapsedVal>0){localStorage.setItem(jobKey,elapsedVal);}
+  if(s==='IDLE'||s==='PREPARE'){localStorage.removeItem(jobKey);}
+  var displayElapsed=elapsedVal>0?elapsedVal:(s!=='IDLE'&&s!=='PREPARE'?parseInt(localStorage.getItem(jobKey)||'0'):0);
+  if(displayElapsed>0){document.getElementById('elapsed').textContent=fmtM(displayElapsed);tRow.classList.remove('hidden');}
   else tRow.classList.add('hidden');
   if(d.remaining_minutes>0){document.getElementById('remain').textContent=fmtM(d.remaining_minutes);rRow.classList.remove('hidden');}
   else rRow.classList.add('hidden');
@@ -408,6 +420,22 @@ function update(d){
     eEl.innerHTML=html;
     eEl.classList.remove('hidden');
   } else eEl.classList.add('hidden');
+
+  // Auto-expand health panel when printing or failed; collapse otherwise.
+  // Cleared on state transition so a new print always auto-expands fresh.
+  var hpBody=document.getElementById('hp-body');
+  var hpChev=document.querySelector('.hp-hdr .hp-chev');
+  var hpShouldExpand=(s==='RUNNING'||s==='PAUSE'||s==='FAILED');
+  if(s!==_hpPrevState){_hpUserOverride=false;_hpPrevState=s;}
+  if(!_hpUserOverride){
+    if(hpShouldExpand){
+      hpBody.classList.remove('collapsed');
+      if(hpChev)hpChev.classList.add('open');
+    } else {
+      hpBody.classList.add('collapsed');
+      if(hpChev)hpChev.classList.remove('open');
+    }
+  }
 }
 function refreshImages(){
   var t=Date.now();
@@ -438,46 +466,74 @@ setInterval(refreshImages,15000);
 // Health panel state
 var _hpScores=[];var _hpNozzles=[];var _hpBeds=[];var _hpMaxSamples=30;
 var _hpPollInterval=8000;var _hpLastPoll=0;
+var _hpUserOverride=false;var _hpPrevState=null;
 function hpToggle(hdr){
   var body=document.getElementById('hp-body');
   var chev=hdr.querySelector('.hp-chev');
   if(body.classList.contains('collapsed')){body.classList.remove('collapsed');chev.classList.add('open');}
   else{body.classList.add('collapsed');chev.classList.remove('open');}
+  _hpUserOverride=true;
 }
 function hpAnomalyToggle(hdr){
-  hudToggle(hdr,'hp-sec-anomaly');
-  var sec=document.getElementById('hp-sec-anomaly');
   var panel=document.getElementById('health-panel');
-  if(sec.classList.contains('collapsed')){panel.classList.remove('hp-wide');}
-  else{panel.classList.add('hp-wide');}
+  var chev=hdr.querySelector('.hdr-chev');
+  if(panel.classList.contains('hp-wide')){
+    panel.classList.remove('hp-wide');
+    chev.classList.remove('open');
+  } else {
+    panel.classList.add('hp-wide');
+    chev.classList.add('open');
+  }
 }
-function hpUpdateSparkline(canvasId,data,color,minV,maxV){
+function hpUpdateSparkline(canvasId,data,color,minV,maxV,valLabel){
   var c=document.getElementById(canvasId);if(!c)return;
-  var ctx=c.getContext('2d');var w=c.offsetWidth||c.width;var h=c.offsetHeight||c.height;
-  if(!w||!h)return;
+  c.width=c.offsetWidth||90;c.height=c.offsetHeight||48;
+  var ctx=c.getContext('2d');var w=c.width;var h=c.height;
   ctx.clearRect(0,0,w,h);
   if(data.length<2)return;
   var mn=minV!==undefined?minV:Math.min.apply(null,data);
   var mx=maxV!==undefined?maxV:Math.max.apply(null,data);
   if(mx===mn)mx=mn+1;
-  ctx.strokeStyle=color;ctx.lineWidth=1.5;ctx.beginPath();
+  function yOf(v){return h-(v-mn)/(mx-mn)*(h-4)-2;}
+  // Gradient fill
+  ctx.beginPath();
   data.forEach(function(v,i){
     var x=i/(data.length-1)*w;
-    var y=h-(v-mn)/(mx-mn)*(h-2)-1;
-    if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+    if(i===0)ctx.moveTo(x,yOf(v));else ctx.lineTo(x,yOf(v));
   });
-  ctx.stroke();
-  // Threshold hairlines for spaghetti
+  ctx.save();
+  ctx.lineTo(w,h);ctx.lineTo(0,h);ctx.closePath();
+  var grd=ctx.createLinearGradient(0,0,0,h);
+  grd.addColorStop(0,hexToRgba(color,.35));
+  grd.addColorStop(1,hexToRgba(color,.03));
+  ctx.fillStyle=grd;ctx.fill();ctx.restore();
+  // Stroke on top
+  ctx.beginPath();
+  data.forEach(function(v,i){
+    var x=i/(data.length-1)*w;
+    if(i===0)ctx.moveTo(x,yOf(v));else ctx.lineTo(x,yOf(v));
+  });
+  ctx.strokeStyle=color;ctx.lineWidth=1.5;ctx.stroke();
+  // Threshold hairlines for anomaly score
   if(minV===0&&maxV===0.3){
-    ctx.setLineDash([2,2]);
-    ctx.strokeStyle='rgba(255,204,64,.4)';ctx.lineWidth=1;
-    var yw=h-(0.08-mn)/(mx-mn)*(h-2)-1;
-    ctx.beginPath();ctx.moveTo(0,yw);ctx.lineTo(w,yw);ctx.stroke();
-    ctx.strokeStyle='rgba(255,80,80,.4)';
-    var yc=h-(0.20-mn)/(mx-mn)*(h-2)-1;
-    ctx.beginPath();ctx.moveTo(0,yc);ctx.lineTo(w,yc);ctx.stroke();
+    ctx.setLineDash([2,3]);ctx.lineWidth=1;
+    ctx.strokeStyle='rgba(255,204,64,.6)';ctx.beginPath();ctx.moveTo(0,yOf(0.08));ctx.lineTo(w,yOf(0.08));ctx.stroke();
+    ctx.strokeStyle='rgba(255,80,80,.6)';ctx.beginPath();ctx.moveTo(0,yOf(0.20));ctx.lineTo(w,yOf(0.20));ctx.stroke();
     ctx.setLineDash([]);
   }
+  // Current value label (top-right corner)
+  if(valLabel!==undefined){
+    ctx.font='bold 10px "Courier New",monospace';
+    ctx.textAlign='right';ctx.textBaseline='top';
+    ctx.fillStyle='rgba(0,0,0,.55)';
+    ctx.fillText(valLabel,w-1,2);
+    ctx.fillStyle=color;
+    ctx.fillText(valLabel,w-2,1);
+  }
+}
+function hexToRgba(hex,a){
+  var r=parseInt(hex.slice(1,3),16),g=parseInt(hex.slice(3,5),16),b=parseInt(hex.slice(5,7),16);
+  return 'rgba('+r+','+g+','+b+','+a+')';
 }
 function hpUpdateFromResult(d){
   var panel=document.getElementById('health-panel');
@@ -497,8 +553,9 @@ function hpUpdateFromResult(d){
   document.getElementById('hp-diff').textContent=d.diff_score!==null&&d.diff_score!==undefined?d.diff_score.toFixed(4):'—';
   document.getElementById('hp-layer').textContent=(d.layer&&d.total_layers)?d.layer+'/'+d.total_layers:'—';
   document.getElementById('hp-progress').textContent=d.progress_pct!==undefined?d.progress_pct+'%':'—';
+  var spColor=v==='critical'?'#ff5050':v==='warning'?'#ffcc40':'#60d080';
   _hpScores.push(score);if(_hpScores.length>_hpMaxSamples)_hpScores.shift();
-  hpUpdateSparkline('hp-sp-canvas',_hpScores,'#60d080',0,0.3);
+  hpUpdateSparkline('hp-sp-canvas',_hpScores,spColor,0,0.3,score.toFixed(3));
 }
 function hpPollJobState(){
   var now=Date.now();
@@ -531,13 +588,13 @@ function _hpPoll(){
         else{b.style.background='rgba(255,255,255,.15)';b.style.height='3px';}
       });
     }else{fpsCont.style.display='none';}
-    // Update temp sparklines
+    // Update temp sparklines (fixed scales: nozzle 0-310°C, bed 0-120°C)
     var nozzle=d.nozzles&&d.nozzles.length?d.nozzles[0].temp:0;
     var bed=d.bed_temp||0;
     _hpNozzles.push(nozzle);if(_hpNozzles.length>_hpMaxSamples)_hpNozzles.shift();
     _hpBeds.push(bed);if(_hpBeds.length>_hpMaxSamples)_hpBeds.shift();
-    hpUpdateSparkline('hp-nz-canvas',_hpNozzles,'#ff9040');
-    hpUpdateSparkline('hp-bd-canvas',_hpBeds,'#80a0ff');
+    hpUpdateSparkline('hp-nz-canvas',_hpNozzles,'#ff9040',0,310,Math.round(nozzle)+'°');
+    hpUpdateSparkline('hp-bd-canvas',_hpBeds,'#80a0ff',0,120,Math.round(bed)+'°');
     hpPollJobState();
   }).catch(function(){});}
 poll();setInterval(poll,2000);

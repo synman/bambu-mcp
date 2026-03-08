@@ -620,24 +620,50 @@ def analyze_active_job(
             },
         }
 
+    # Additional context for material-aware scoring
+    _printer_obj = session_manager.get_printer(name)
+    _model = getattr(getattr(_printer_obj, "config", None), "printer_model", None)
+    try:
+        from bambu_printer_manager import getPrinterSeriesByModel
+        _series = getPrinterSeriesByModel(_model).name if _model else "UNKNOWN"
+    except Exception:
+        _series = "UNKNOWN"
+    _active_nozzle = getattr(state, "active_nozzle", None) if state else None
+    _speed_raw = getattr(_printer_obj, "speed_level", 0) if _printer_obj else 0
+    _speed_name = getattr(_speed_raw, "name", str(_speed_raw)).upper()
+    _caps = getattr(getattr(_printer_obj, "config", None), "capabilities", None) if _printer_obj else None
+    _job_obj = session_manager.get_job(name)
+
     printer_context = {
-        "job_name":          (job.subtask_name or job.gcode_file or "") if job else "",
-        "gcode_state":       state.gcode_state if state else "IDLE",
-        "layer":             job.current_layer if job else 0,
-        "total_layers":      job.total_layers  if job else 0,
-        "progress_pct":      job.print_percentage if job else 0,
-        "remaining_minutes": job.remaining_minutes if job else 0,
-        "nozzle_temp":       nozzle,
-        "nozzle_target":     nozzle_target,
-        "bed_temp":          climate.bed_temp        if climate else 0,
-        "bed_target":        climate.bed_temp_target if climate else 0,
-        "chamber_temp":      climate.chamber_temp    if climate else 0,
-        "part_fan_pct":      climate.part_cooling_fan_speed_percent if climate else 0,
-        "aux_fan_pct":       climate.aux_fan_speed_percent          if climate else 0,
-        "exhaust_fan_pct":   climate.exhaust_fan_speed_percent      if climate else 0,
-        "ams_humidity":      status.get("ams_humidity_index", 0),
-        "hms_errors":        hms_errors,
-        "detectors":         detectors,
+        "job_name":              (job.subtask_name or job.gcode_file or "") if job else "",
+        "gcode_state":           state.gcode_state if state else "IDLE",
+        "layer":                 job.current_layer if job else 0,
+        "total_layers":          job.total_layers  if job else 0,
+        "progress_pct":          job.print_percentage if job else 0,
+        "remaining_minutes":     job.remaining_minutes if job else 0,
+        "nozzle_temp":           nozzle,
+        "nozzle_target":         nozzle_target,
+        "bed_temp":              climate.bed_temp        if climate else 0,
+        "bed_target":            climate.bed_temp_target if climate else 0,
+        "chamber_temp":          climate.chamber_temp    if climate else 0,
+        "part_fan_pct":          climate.part_cooling_fan_speed_percent if climate else 0,
+        "aux_fan_pct":           climate.aux_fan_speed_percent          if climate else 0,
+        "exhaust_fan_pct":       climate.exhaust_fan_speed_percent      if climate else 0,
+        "ams_humidity":          status.get("ams_humidity_index", 0),
+        "hms_errors":            hms_errors,
+        "detectors":             detectors,
+        # Material-aware scoring context
+        "active_filament":       status.get("active_filament"),
+        "stage_id":              getattr(_job_obj, "stage_id", 255) if _job_obj else 255,
+        "printer_series":        _series,
+        "nozzle_diameter_mm":    getattr(_active_nozzle, "diameter_mm", 0.4) if _active_nozzle else 0.4,
+        "nozzle_flow_type":      getattr(getattr(_active_nozzle, "flow_type", None), "name", "STANDARD") if _active_nozzle else "STANDARD",
+        "speed_level":           _speed_name,
+        "is_chamber_light_on":   getattr(_printer_obj, "light_state", False) if _printer_obj else False,
+        "is_chamber_door_open":  getattr(climate, "is_chamber_door_open", False) if climate else False,
+        "is_chamber_lid_open":   getattr(climate, "is_chamber_lid_open", False) if climate else False,
+        "has_chamber":           getattr(_caps, "has_chamber_temp", False) if _caps else False,
+        "print_settings":        getattr(getattr(_job_obj, "project_info", None), "metadata", {}).get("slicer_settings", {}),
     }
 
     # Fetch project info (thumbnail + layout) for the active job

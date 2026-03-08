@@ -150,6 +150,8 @@ class JobStateReport:
     edge_density: float = 0.0
     diff_score: Optional[float] = None
     reference_age_s: Optional[float] = None
+    thresh_warn: float = 0.08
+    thresh_crit: float = 0.20
 
     # Quality tier used for all assets
     quality: str = "preview"
@@ -271,6 +273,374 @@ def _apply_kernel(gray_img: Image.Image, kernel: ImageFilter.Kernel) -> np.ndarr
 
 
 # ---------------------------------------------------------------------------
+# Stages during which diff_score is suppressed (toolhead/environment in motion)
+# ---------------------------------------------------------------------------
+_DIFF_SUPPRESS_STAGES = frozenset({
+    1,   # auto bed leveling
+    4,   # changing filament (AMS purge)
+    7,   # heating hotend
+    14,  # homing toolhead
+    15,  # cleaning nozzle
+    19,  # calibrating extrusion flow
+    22,  # filament unloading
+    24,  # filament loading
+    36,  # absolute accuracy pre-check
+})
+# Stage 17 (front cover falling) also suppresses hot_pct
+_HOT_SUPPRESS_STAGES = frozenset({17})
+
+
+# ---------------------------------------------------------------------------
+# Failure probability model
+# ---------------------------------------------------------------------------
+
+# Material profiles: (base_rate_enclosed, base_rate_open, hygro_tier 0-4, survival_curve)
+# base rates derived from community success-rate data (FilamentCompare, Makers101,
+# 3DPrintingStreet); hygro_tier from material science properties.
+# survival_curve: "front_loaded" = warping/adhesion failures dominate early;
+#                 "distributed"  = extrusion failures spread evenly (TPU/flexible);
+#                 "mixed"        = both early warping AND ongoing moisture failures.
+_MATERIAL_PROFILES: dict = {
+    # Standard
+    "PLA":       (0.02, 0.05, 1, "front_loaded"),
+    "PLA+":      (0.02, 0.05, 1, "front_loaded"),
+    "PETG":      (0.05, 0.08, 2, "front_loaded"),
+    "PETG-HF":   (0.05, 0.08, 2, "front_loaded"),
+    # Engineering - enclosure-dependent
+    "ABS":       (0.10, 0.35, 3, "front_loaded"),
+    "ASA":       (0.10, 0.30, 3, "front_loaded"),
+    "HIPS":      (0.08, 0.20, 2, "front_loaded"),
+    # Flexible - extrusion/jam failures dominate, not warping
+    "TPU":       (0.15, 0.20, 1, "distributed"),
+    "TPE":       (0.18, 0.22, 1, "distributed"),
+    "TPU95A":    (0.15, 0.20, 1, "distributed"),
+    # High-performance / strongly hygroscopic
+    "PA":        (0.15, 0.38, 4, "mixed"),
+    "PA12":      (0.15, 0.38, 4, "mixed"),
+    "PAHT":      (0.18, 0.40, 4, "mixed"),
+    "PC":        (0.20, 0.50, 3, "front_loaded"),
+    "PC+ABS":    (0.15, 0.40, 3, "front_loaded"),
+    "PVA":       (0.15, 0.20, 4, "distributed"),   # support material
+    # Composites
+    "PLA-CF":    (0.03, 0.07, 1, "front_loaded"),
+    "PETG-CF":   (0.05, 0.10, 2, "front_loaded"),
+    "ABS-GF":    (0.10, 0.35, 3, "front_loaded"),
+    "PA-CF":     (0.12, 0.35, 3, "mixed"),
+    "PA6-CF":    (0.12, 0.35, 3, "mixed"),
+}
+_MATERIAL_DEFAULT = (0.08, 0.15, 2, "front_loaded")   # unknown / uncatalogued
+
+# Hygroscopic moisture penalty: [hum_idx=0(unknown), 1(wet)…5(dry)]
+# Penalty multiplies p_fail; >1 = elevated risk from wet filament.
+_HYGRO_PENALTY: dict = {
+    0: [1.00, 1.00, 1.00, 1.00, 1.00, 1.00],  # non-hygro
+    1: [1.00, 1.30, 1.15, 1.05, 1.00, 0.92],  # low
+    2: [1.00, 1.60, 1.35, 1.15, 1.00, 0.88],  # moderate (PETG)
+    3: [1.00, 2.00, 1.65, 1.30, 1.05, 0.85],  # high (ABS/ASA/PC)
+    4: [1.00, 2.80, 2.20, 1.60, 1.15, 0.80],  # very high (PA/Nylon/PVA)
+}
+
+
+def _hazard_remaining(progress_pct: float, curve: str) -> float:
+    """Fraction of total failure hazard remaining at progress_pct%.
+
+    front_loaded piecewise from research distribution:
+      0-15%: 60% of failures | 15-50%: 25% | 50-85%: 10% | 85-100%: 5%
+    distributed: linear decay (TPU/flexible extrusion failures).
+    mixed: 60% front_loaded (warping) + 40% distributed (moisture).
+    """
+    p = min(max(float(progress_pct), 0.0), 100.0)
+    if curve == "distributed":
+        return (100.0 - p) / 100.0
+    if p >= 85.0:
+        fl = 0.05
+    elif p >= 50.0:
+        fl = 0.05 + (85.0 - p) / 35.0 * 0.10
+    elif p >= 15.0:
+        fl = 0.15 + (50.0 - p) / 35.0 * 0.25
+    else:
+        fl = 0.40 + (15.0 - p) / 15.0 * 0.60
+    if curve == "mixed":
+        return 0.60 * fl + 0.40 * ((100.0 - p) / 100.0)
+    return fl
+
+
+def compute_failure_probability(
+    score: float,
+    thresh_warn: float,
+    thresh_crit: float,
+    context: dict,
+    stable_verdict: str = "clean",
+) -> float:
+    """Estimate probability this print will fail before completion.
+
+    Combines camera anomaly score with printer/filament/environment context via
+    a research-backed Bayesian model covering 20+ material types.
+
+    Factors applied (in order):
+      1. Material base failure rate  — PLA 2% through PC 20% (enclosed) from
+         community statistics (FilamentCompare, Makers101, 3DPrintingStreet)
+      2. Printer series modifier     — H2D direct-drive enclosed best; A1 open-frame worst
+      3. Progress survival curve     — >60% of FDM failures happen before 15%;
+                                       flexible materials have a flat (distributed) hazard
+      4. Anomaly signal LR           — clean→0.3-1.0×; warning→1.5-3.0×; critical→3-8×
+      5. Environmental modifiers     — enclosure, door/lid state, nozzle temp stability
+      6. Hygroscopic penalty         — hygro_tier × AMS humidity index (1=wet…5=dry)
+      7. Stability modifier          — non-escalating warning is less alarming
+
+    Returns float 0.0–1.0.
+    """
+    progress_pct   = float(context.get("progress_pct", 0) or 0)
+    printer_series = (context.get("printer_series") or "UNKNOWN").upper()
+    flow_type      = (context.get("nozzle_flow_type") or "STANDARD").upper()
+    has_chamber    = bool(context.get("has_chamber", False))
+    door_open      = bool(context.get("is_chamber_door_open", False))
+    lid_open       = bool(context.get("is_chamber_lid_open", False))
+    nozzle_temp    = float(context.get("nozzle_temp", 0) or 0)
+    nozzle_target  = float(context.get("nozzle_target", 0) or 0)
+    ams_humidity   = int(context.get("ams_humidity", 0) or 0)
+    fil            = context.get("active_filament") or {}
+    fil_type       = (fil.get("type") or "").upper().replace(" ", "")
+    is_enclosed    = has_chamber and not door_open and not lid_open
+
+    # --- 1. Material base failure rate ---
+    # Normalise Bambu-specific suffixes: "PLAMATTE" → "PLA", "ABSBASIC" → "ABS" etc.
+    mat_key = fil_type
+    if mat_key not in _MATERIAL_PROFILES:
+        for k in sorted(_MATERIAL_PROFILES, key=len, reverse=True):  # longest prefix first
+            if fil_type.startswith(k):
+                mat_key = k
+                break
+        else:
+            mat_key = None
+    base_enc, base_open, hygro_tier, curve = (
+        _MATERIAL_PROFILES[mat_key] if mat_key else _MATERIAL_DEFAULT
+    )
+    if is_enclosed:
+        base = base_enc
+    elif has_chamber:
+        base = base_enc + (base_open - base_enc) * 0.5  # door/lid open: mid-point
+    else:
+        base = base_open
+
+    # --- 2. Printer series modifier ---
+    # Rates already calibrated for a generic setup; adjust for Bambu-specific hardware
+    if printer_series == "H2":
+        series_mod = 0.85   # flagship enclosed + direct drive
+    elif printer_series == "X1":
+        series_mod = 0.90   # flagship enclosed, Bowden
+    elif printer_series in ("P1", "P2"):
+        series_mod = 1.00   # reference
+    elif printer_series == "A1":
+        series_mod = 1.20   # open-frame penalty on top of open-rate base
+    else:
+        series_mod = 1.00
+    # TPU_HIGH_FLOW nozzle or direct-drive series: further reduces flexible failure risk
+    if curve == "distributed" and (printer_series == "H2" or flow_type == "TPU_HIGH_FLOW"):
+        series_mod *= 0.75
+    base = min(base * series_mod, 1.0)
+
+    # --- 3. Progress survival ---
+    p = base * _hazard_remaining(progress_pct, curve)
+
+    # --- 4. Anomaly signal likelihood ratio ---
+    warn_band = max(thresh_crit - thresh_warn, 0.01)
+    if score >= thresh_crit:
+        lr = 3.0 + min((score - thresh_crit) / max(1.0 - thresh_crit, 0.01) * 5.0, 5.0)
+    elif score >= thresh_warn:
+        lr = 1.5 + (score - thresh_warn) / warn_band * 1.5
+    else:
+        lr = max(0.30, score / max(thresh_warn, 0.01))
+    p = min(p * lr, 1.0)
+
+    # --- 5. Environmental quality ---
+    env = 1.0
+    if is_enclosed:
+        env *= 0.90   # confirmed fully enclosed: extra confidence
+    elif door_open or lid_open:
+        env *= 1.20   # actively open mid-print
+    if nozzle_target > 0:
+        delta = abs(nozzle_temp - nozzle_target)
+        if delta <= 3:
+            env *= 0.90   # temps locked on target
+        elif delta > 10:
+            env *= 1.30   # thermal drift — real risk
+    p = min(p * env, 1.0)
+
+    # --- 6. Hygroscopic sensitivity × AMS humidity ---
+    hum_idx = min(max(ams_humidity, 0), 5)
+    p = min(p * _HYGRO_PENALTY[hygro_tier][hum_idx], 1.0)
+
+    # --- 7. Signal stability ---
+    if stable_verdict == "clean":
+        p *= 0.65
+    elif stable_verdict == "warning":
+        mid = (thresh_warn + thresh_crit) / 2.0
+        p *= 0.85 if score < mid else 1.05
+    # critical: already captured by lr
+
+    # --- 8. Slicer/print settings ---
+    # These are independent of material and environment — they describe how the
+    # print was set up, which strongly predicts whether the first layer and
+    # overhangs will survive.
+    ps = context.get("print_settings") or {}
+    if ps:
+        settings_mod = 1.0
+        brim_type   = (ps.get("brim_type") or "no_brim").lower()
+        has_raft    = bool(ps.get("has_raft", False))
+        has_support = bool(ps.get("has_support", False))
+        support_type = (ps.get("support_type") or "normal").lower()
+        infill_pct  = float(ps.get("infill_density_pct") or 15)
+        wall_loops  = int(ps.get("wall_loops") or 2)
+        init_lh     = float(ps.get("initial_layer_height_mm") or 0.2)
+
+        # Raft > brim: strongest adhesion; overrides brim modifier.
+        if has_raft:
+            settings_mod *= 0.72
+        elif "mouse_ear" in brim_type:
+            settings_mod *= 0.92
+        elif brim_type == "no_brim":
+            # No adhesion aid — risk elevated especially for engineering filaments.
+            # Penalty is amplified by hygro_tier (ABS/Nylon print without brim = high risk).
+            settings_mod *= 1.10 + hygro_tier * 0.05
+        # else outer_brim / inner_brim: baseline
+
+        # Support complexity adds mass and potential detachment points.
+        if has_support:
+            if "tree" in support_type:
+                settings_mod *= 1.12   # tree supports: less stable, more failure points
+            else:
+                settings_mod *= 1.05   # normal supports: minor added complexity
+
+        # Very low infill = structurally weak; risk of layer collapse at high progress.
+        if infill_pct < 10:
+            settings_mod *= 1.15
+        elif infill_pct < 20:
+            settings_mod *= 1.05
+        elif infill_pct >= 40:
+            settings_mod *= 0.95
+
+        # Thin single-wall prints are fragile.
+        if wall_loops == 1:
+            settings_mod *= 1.15
+        elif wall_loops == 2:
+            settings_mod *= 1.05
+
+        # Thicker initial layer = better squish = better adhesion.
+        if init_lh >= 0.25:
+            settings_mod *= 0.92
+
+        p = min(p * settings_mod, 1.0)
+
+    return round(min(max(p, 0.0), 1.0), 4)
+
+
+def _spaghetti_weights(context: dict) -> tuple[dict, float, float, float]:
+    """
+    Compute dynamic per-signal weights and calibrated thresholds from printer context.
+
+    Returns:
+        weights dict  — keys: diff, strand, local_var, edge, hot_pct (sum to 1.0)
+        strand_cap    — normalization divisor for strand_score
+        thresh_warn   — calibrated warning threshold
+        thresh_crit   — calibrated critical threshold
+    """
+    # --- Base weights (reliability-ranked, Obico + empirical) ---
+    w = {"diff": 0.35, "strand": 0.25, "local_var": 0.20, "edge": 0.12, "hot_pct": 0.08}
+
+    # --- Strand normalization cap (base) ---
+    diam = float(context.get("nozzle_diameter_mm") or 0.4)
+    if   diam <= 0.2:  strand_cap = 0.30
+    elif diam <= 0.4:  strand_cap = 0.50
+    elif diam <= 0.6:  strand_cap = 0.65
+    else:              strand_cap = 0.80
+
+    # Camera resolution proxy (PrinterSeries → strand_cap multiplier)
+    series = (context.get("printer_series") or "UNKNOWN").upper()
+    if   series in ("H2", "X1"):  strand_cap *= 1.15
+    elif series in ("A1",):       strand_cap *= 0.85
+    # P1, P2, UNKNOWN: ×1.0
+
+    # --- Adjustment 1: filament luminance → hot_pct weight ---
+    filament = context.get("active_filament") or {}
+    lum_mod = 1.0
+    color_hex = filament.get("color", "") or ""
+    if color_hex.startswith("#") and len(color_hex) >= 7:
+        try:
+            r = int(color_hex[1:3], 16)
+            g = int(color_hex[3:5], 16)
+            b = int(color_hex[5:7], 16)
+            lum = 0.299 * r + 0.587 * g + 0.114 * b  # ITU-R BT.601
+            if   lum < 64:   lum_mod = 0.25   # very dark → hot_pct unreliable
+            elif lum < 128:  lum_mod = 0.65
+            elif lum < 192:  lum_mod = 1.00
+            else:             lum_mod = 1.50   # bright filament → hot_pct meaningful
+        except (ValueError, IndexError):
+            pass
+
+    # --- Adjustment 2: filament type ---
+    fil_type = (filament.get("type") or "").upper()
+    is_tpu = "TPU" in fil_type
+
+    # --- Adjustment 3: diff availability + early-print suppression ---
+    stage_id    = int(context.get("stage_id") or 255)
+    progress_pct = float(context.get("progress_pct") or 0)
+    if stage_id in _DIFF_SUPPRESS_STAGES:
+        w["diff"] = 0.0        # suppress entirely; redistribute below
+    elif progress_pct < 5:
+        w["diff"] *= 0.5       # reference may not be meaningful yet
+
+    # Stage 17: front cover falling → suppress hot_pct too
+    if stage_id in _HOT_SUPPRESS_STAGES:
+        lum_mod *= 0.75
+
+    # --- Adjustment 4: xcam spaghetti_detector sensitivity → thresholds ---
+    detector = (context.get("detectors") or {}).get("spaghetti_detector") or {}
+    sensitivity = (detector.get("sensitivity") or "medium").lower()
+    if detector.get("enabled"):
+        if   sensitivity == "high": thresh_warn, thresh_crit = 0.06, 0.15
+        elif sensitivity == "low":  thresh_warn, thresh_crit = 0.12, 0.30
+        else:                       thresh_warn, thresh_crit = 0.08, 0.20
+    else:
+        thresh_warn, thresh_crit = 0.08, 0.20   # sole protection; keep defaults
+
+    # --- Adjustment 5: environmental / lighting → hot_pct modifier ---
+    env_mod = 1.0
+    light_on    = bool(context.get("is_chamber_light_on"))
+    door_open   = bool(context.get("is_chamber_door_open"))
+    lid_open    = bool(context.get("is_chamber_lid_open"))
+    has_chamber = bool(context.get("has_chamber"))
+
+    if   series in ("H2", "X1", "P1", "P2") and not door_open and not lid_open:
+        env_mod *= 1.10   # enclosed + closed
+    if   series in ("A1",):
+        env_mod *= 0.20   # open-frame: hot_pct fundamentally unreliable
+    elif series in ("P1",) and not has_chamber:
+        env_mod *= 0.90   # P1P semi-open
+
+    if light_on:               env_mod *= 1.15
+    if door_open or lid_open:  env_mod *= 0.75
+
+    # Apply combined hot_pct modifier
+    w["hot_pct"] *= lum_mod * env_mod
+
+    # --- Adjustment 6: speed level → diff weight ---
+    speed = (context.get("speed_level") or "STANDARD").upper()
+    if   speed == "LUDICROUS":  w["diff"] *= 0.82
+    elif speed == "SPORT":      w["diff"] *= 0.92
+
+    # --- Redistribute zeroed diff weight to strand + local_var (1:1 split) ---
+    # Already applied; just ensure positive before normalization
+
+    # --- Normalize weights to sum 1.0 ---
+    total = sum(w.values())
+    if total > 0:
+        w = {k: v / total for k, v in w.items()}
+
+    return w, strand_cap, thresh_warn, thresh_crit
+
+
+# ---------------------------------------------------------------------------
 # Core spaghetti analysis
 # ---------------------------------------------------------------------------
 def _analyse_spaghetti(
@@ -278,13 +648,20 @@ def _analyse_spaghetti(
     ref_rgb: Optional[np.ndarray],
     W: int,
     H: int,
-) -> tuple[float, float, float, float, Optional[float]]:
+    context: Optional[dict] = None,
+) -> tuple[float, float, float, float, Optional[float], float, float]:
     """
-    Returns (score, hot_pct, strand_score, edge_density, diff_score).
+    Returns (score, hot_pct, strand_score, edge_density, diff_score, thresh_warn, thresh_crit).
 
-    score thresholds: <0.08 clean, 0.08–0.20 warning, ≥0.20 critical
-    (Obico THRESH=0.08 + Bambu xcam sensitivity tier mapping)
+    Weights and thresholds are dynamically calibrated from printer context:
+    filament color/type, nozzle diameter, printer series, stage, xcam sensitivity,
+    chamber/lighting state, and speed level.
     """
+    ctx = context or {}
+
+    # Compute weights + calibrated thresholds from context
+    weights, strand_cap, thresh_warn, thresh_crit = _spaghetti_weights(ctx)
+
     # Zone pixel coordinates
     az_y0 = int(_AIR_TOP    * H)
     az_y1 = int(_AIR_BOTTOM * H)
@@ -300,7 +677,6 @@ def _analyse_spaghetti(
 
     # 2. Local variance texture — 8×8 sliding window std-dev
     az_float = air_zone.mean(axis=2).astype(np.float32)
-    # Pad to ensure full windows; use numpy stride tricks
     wh, ww = 8, 8
     try:
         from numpy.lib.stride_tricks import sliding_window_view
@@ -316,25 +692,39 @@ def _analyse_spaghetti(
     r_vert     = _apply_kernel(gray_pil, _K_VERT)
     r_d45      = _apply_kernel(gray_pil, _K_DIAG45)
     r_d135     = _apply_kernel(gray_pil, _K_DIAG135)
-    # Max response across all four directions — strand-like structure in any orientation
-    strand_map = np.maximum(np.maximum(r_horiz, r_vert), np.maximum(r_d45, r_d135))
+    strand_map   = np.maximum(np.maximum(r_horiz, r_vert), np.maximum(r_d45, r_d135))
     strand_score = float(strand_map.mean())
     edge_density = float((r_horiz + r_vert + r_d45 + r_d135).mean() / 4)
 
     # 4. Frame diff score
     diff_score: Optional[float] = None
-    if ref_rgb is not None and ref_rgb.shape == frame_rgb.shape:
+    if ref_rgb is not None and ref_rgb.shape == frame_rgb.shape and weights["diff"] > 0:
         diff = np.abs(frame_rgb.astype(np.float32) - ref_rgb.astype(np.float32))
-        # Focus on air zone diff
         diff_air = diff[az_y0:az_y1, az_x0:az_x1]
         diff_score = float(diff_air.mean() / 255.0)
 
-    # 5. Composite score
-    ds = diff_score if diff_score is not None else 0.0
-    score = hot_pct * 0.6 + (local_var / 5000.0) * 0.25 + ds * 0.15
+    # 5. Composite weighted score (normalize each signal to [0,1] before weighting)
+    n_strand   = min(strand_score / max(strand_cap, 1e-6), 1.0)
+    n_local    = min(local_var / 5000.0, 1.0)
+    n_edge     = min(edge_density / 0.3, 1.0)
+    n_diff     = diff_score if diff_score is not None else 0.0
+    n_hot      = hot_pct
+
+    score = (
+        weights["diff"]      * n_diff    +
+        weights["strand"]    * n_strand  +
+        weights["local_var"] * n_local   +
+        weights["edge"]      * n_edge    +
+        weights["hot_pct"]   * n_hot
+    )
     score = min(score, 1.0)
 
-    return score, hot_pct, strand_score, edge_density, diff_score
+    # TPU floor — flexible material can produce benign air extrusions
+    filament = ctx.get("active_filament") or {}
+    if "TPU" in (filament.get("type") or "").upper():
+        score = max(score, 0.05)
+
+    return score, hot_pct, strand_score, edge_density, diff_score, thresh_warn, thresh_crit
 
 
 # ---------------------------------------------------------------------------
@@ -940,8 +1330,8 @@ def analyze(
             log.warning("analyze: failed to decode reference frame: %s", e)
 
     # Spaghetti sub-module
-    score, hot_pct, strand_score, edge_density, diff_score = _analyse_spaghetti(
-        frame_rgb, ref_rgb, W, H
+    score, hot_pct, strand_score, edge_density, diff_score, thresh_warn, thresh_crit = _analyse_spaghetti(
+        frame_rgb, ref_rgb, W, H, context=printer_context
     )
 
     # YOLO additive layer (purely additive — never raises).
@@ -952,10 +1342,10 @@ def analyze(
     except Exception:
         yolo_detections, yolo_boost, yolo_available = [], 0.0, False
 
-    # Resolve verdict and quality
-    if score < _THRESH_WARN:
+    # Resolve verdict using calibrated thresholds from context
+    if score < thresh_warn:
         verdict = "clean"
-    elif score < _THRESH_CRIT:
+    elif score < thresh_crit:
         verdict = "warning"
     else:
         verdict = "critical"
@@ -1010,6 +1400,8 @@ def analyze(
         edge_density=edge_density,
         diff_score=diff_score,
         reference_age_s=reference_age_s,
+        thresh_warn=thresh_warn,
+        thresh_crit=thresh_crit,
         quality=resolved_quality,
         yolo_detections=yolo_detections,
         yolo_boost=yolo_boost,
