@@ -664,6 +664,17 @@ class MJPEGServer:
         log.debug("MJPEGServer.is_running: name=%s -> %s", name, result)
         return result
 
+    def get_active_streams(self) -> dict[str, dict]:
+        """Return {printer_name: {port, url}} for all active MJPEG streams."""
+        with self._lock:
+            return {
+                name: {
+                    "port": entry.port,
+                    "url": f"http://localhost:{entry.port}/",
+                }
+                for name, entry in self._servers.items()
+            }
+
 
 # Module-level singleton
 mjpeg_server = MJPEGServer()

@@ -1071,20 +1071,33 @@ def _build_app():
         No printer parameter required — this is server-level state.
 
         Returns:
-            api_port     — TCP port the REST API is currently bound to
-            pool_start   — first port in the shared ephemeral pool (default 49152)
-            pool_end     — last port in the shared ephemeral pool inclusive (default 49251)
-            pool_claimed — sorted list of all currently claimed port numbers (API + MJPEG streams)
+            api_port       — TCP port the REST API is currently bound to
+            api_url        — convenience base URL: http://localhost:{api_port}/api
+            pool_start     — first port in the shared ephemeral pool (default 49152)
+            pool_end       — last port in the shared ephemeral pool inclusive (default 49251)
+            pool_size      — total number of ports in the pool
+            pool_available — number of unclaimed ports remaining
+            pool_claimed   — sorted list of all currently claimed port numbers (API + MJPEG streams)
+            stream_count   — number of active MJPEG camera streams
+            streams        — {printer_name: {port, url}} for each active stream
         """
         log.debug("server_info: called")
         try:
             from port_pool import port_pool as _pp
+            from camera.mjpeg_server import mjpeg_server as _mjs
             state = _pp.get_state()
+            streams = _mjs.get_active_streams()
+            pool_size = state["pool_end"] - state["pool_start"] + 1
             result = {
-                "api_port": _port,
-                "pool_start": state["pool_start"],
-                "pool_end": state["pool_end"],
-                "pool_claimed": state["pool_claimed"],
+                "api_port":       _port,
+                "api_url":        f"http://localhost:{_port}/api",
+                "pool_start":     state["pool_start"],
+                "pool_end":       state["pool_end"],
+                "pool_size":      pool_size,
+                "pool_available": pool_size - len(state["pool_claimed"]),
+                "pool_claimed":   state["pool_claimed"],
+                "stream_count":   len(streams),
+                "streams":        streams,
             }
             log.debug("server_info: → %s", result)
             return jsonify(result)

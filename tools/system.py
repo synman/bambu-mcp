@@ -32,11 +32,16 @@ def get_server_info() -> dict:
     an HTTP request URL.  The REST API base URL is: http://localhost:{api_port}/api
 
     Returns:
-        api_port     — TCP port the REST API is currently bound to (0 if not running)
-        pool_start   — first port in the shared ephemeral pool (default 49152)
-        pool_end     — last port in the shared ephemeral pool inclusive (default 49251)
-        pool_claimed — sorted list of all currently claimed port numbers
-                       (includes the REST API port + all active MJPEG stream ports)
+        api_port      — TCP port the REST API is currently bound to (0 if not running)
+        api_url       — convenience base URL: http://localhost:{api_port}/api
+        pool_start    — first port in the shared ephemeral pool (default 49152)
+        pool_end      — last port in the shared ephemeral pool inclusive (default 49251)
+        pool_size     — total number of ports in the pool (pool_end - pool_start + 1)
+        pool_available — number of unclaimed ports remaining in the pool
+        pool_claimed  — sorted list of all currently claimed port numbers
+                        (includes the REST API port + all active MJPEG stream ports)
+        stream_count  — number of active MJPEG camera streams
+        streams       — dict of {printer_name: {port, url}} for each active stream
 
     Environment variables that control the pool:
         BAMBU_PORT_POOL_START  — override pool start (default 49152)
@@ -52,13 +57,21 @@ def get_server_info() -> dict:
     try:
         import api_server
         from port_pool import port_pool as _pp
+        from camera.mjpeg_server import mjpeg_server as _mjs
         api_port = api_server.get_port()
         state = _pp.get_state()
+        streams = _mjs.get_active_streams()
+        pool_size = state["pool_end"] - state["pool_start"] + 1
         result = {
-            "api_port":    api_port,
-            "pool_start":  state["pool_start"],
-            "pool_end":    state["pool_end"],
-            "pool_claimed": state["pool_claimed"],
+            "api_port":       api_port,
+            "api_url":        f"http://localhost:{api_port}/api",
+            "pool_start":     state["pool_start"],
+            "pool_end":       state["pool_end"],
+            "pool_size":      pool_size,
+            "pool_available": pool_size - len(state["pool_claimed"]),
+            "pool_claimed":   state["pool_claimed"],
+            "stream_count":   len(streams),
+            "streams":        streams,
         }
         log.debug("get_server_info: → %s", result)
         return result
