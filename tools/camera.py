@@ -333,9 +333,32 @@ def start_stream(name: str, port: int | None = None) -> dict:
     If a stream is already running for this printer, returns the existing server URL
     without starting a duplicate.
 
+    The served page includes a live HUD overlay with the following components:
+
+    Top-left HUD panel (dark semi-transparent, polls /status every 2 s):
+      - Badge row: state badge (IDLE/RUNNING/PAUSE/FINISH/FAILED — color-coded) +
+        speed badge (Quiet/Standard/Sport/Ludicrous — shown only while active)
+      - Subtask line: job/file name, truncated with ellipsis
+      - Progress bar: thin 3-px bar, color tracks state
+      - Rows (label + value pairs): Stage, Layers (current/total), Elapsed, Remaining
+      - Temps section: nozzle temp(s) (°C / target), bed temp, chamber temp
+      - Fans section: part cooling %, aux %, exhaust %
+      - Filament swatch: colored dot + type label for the active spool
+      - AMS humidity index
+      - Wi-Fi signal bars (unicode block chars, color-tiered by strength)
+      - HMS error links (clickable, open Bambu error page in popup)
+
+    Top-right FPS counter:
+      - Numeric FPS readout + 5-column animated bar graph (green/amber/red by rate)
+
+    Bottom image panels (appear when a print job is active):
+      - Thumbnail panel (bottom-left): isometric 3D render of the current job
+      - Layout panel (bottom-right): annotated top-down plate layout image
+
     Args:
       name — printer name
-      port — optional port override; defaults to next available starting at 8090
+      port — optional preferred port; defaults to next available port in the shared
+             ephemeral pool (IANA RFC 6335 range 49152–49251 by default)
 
     Returns:
       url      — http://localhost:{port}/ — open in any browser to watch live
@@ -473,13 +496,17 @@ def view_stream(name: str) -> dict:
     Uses Python's webbrowser.open() which delegates to the OS default browser — works
     on macOS, Linux, and Windows without any extra dependencies.
 
+    The browser page shows the live camera feed with a full HUD overlay. See
+    start_stream() for the complete HUD component breakdown (badge, progress bar,
+    temp/fan rows, filament swatch, Wi-Fi signal bars, FPS counter, thumbnail panel,
+    plate layout panel, HMS error links).
+
     Returns:
-      url           — the local MJPEG server URL that was opened
-      port          — the server port
-      protocol      — "rtsps" or "tcp_tls"
-      opened        — bool: True if the browser was launched successfully
-      overlay_active — bool: True when the stream includes live print status, thumbnail,
-                       and layout overlays (always True for streams started by this tool)
+      url            — the local MJPEG server URL that was opened
+      port           — the server port
+      protocol       — "rtsps" or "tcp_tls"
+      opened         — bool: True if the browser was launched successfully
+      overlay_active — always True; confirms HUD + image panels are active
     """
     import webbrowser
 

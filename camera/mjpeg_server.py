@@ -9,7 +9,8 @@ MJPEG is a standard HTTP streaming format where each frame is a complete JPEG im
 delivered as a multipart HTTP part. Any modern browser natively displays it as live
 video when the URL is opened directly.
 
-Port allocation: starts at BASE_PORT (8090), increments by 1 per additional stream.
+Port allocation: drawn from the shared ephemeral port pool (port_pool.py).
+Pool default range: 49152–49251 (IANA RFC 6335 Dynamic/Private range).
 URL format: http://localhost:{port}/
 """
 
@@ -18,7 +19,6 @@ from __future__ import annotations
 import collections
 import json
 import logging
-import socket
 import threading
 import time
 from dataclasses import dataclass
@@ -26,8 +26,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable, Iterator
 
 log = logging.getLogger(__name__)
-
-BASE_PORT = 8090
 
 _HTML_PAGE = """\
 <!DOCTYPE html>
@@ -556,6 +554,11 @@ class MJPEGServer:
 
         If a server is already running for this name, returns the existing URL.
         Returns the server URL: http://localhost:{port}/
+
+        Port is drawn from the shared ephemeral port pool (IANA RFC 6335 range
+        49152–49251 by default).  Caller may pass a preferred port; the pool will
+        try it first and rotate to the next available port if it is taken.
+
         frame_factory — callable returning a fresh Iterator[bytes] per client connection;
                         each browser tab gets its own independent RTSPS session.
         status_fn   — returns live printer state dict for /status (polled every 2s)
@@ -569,7 +572,8 @@ class MJPEGServer:
                 existing_port = self._servers[name].port
                 log.info("MJPEGServer.start: '%s' already running on port %d", name, existing_port)
                 return f"http://localhost:{existing_port}/"
-            allocated_port = port if port is not None else self._next_port()
+            from port_pool import port_pool as _pp
+            allocated_port = _pp.allocate(preferred=port)
             log.info("MJPEGServer.start: starting '%s' on port %d", name, allocated_port)
             server = _MJPEGHTTPServer(
                 ("", allocated_port), _StreamHandler, frame_factory,
@@ -587,6 +591,7 @@ class MJPEGServer:
         Stop the MJPEG server for the named printer.
 
         Returns True if a server was running and has been stopped.
+        Releases the port back to the shared ephemeral pool.
         """
         log.info("MJPEGServer.stop: stopping '%s'", name)
         with self._lock:
@@ -596,6 +601,12 @@ class MJPEGServer:
             return False
         entry.server._running = False
         entry.server.shutdown()
+        try:
+            from port_pool import port_pool as _pp
+            _pp.release(entry.port)
+            log.debug("MJPEGServer.stop: released port %d to pool", entry.port)
+        except Exception as e:
+            log.warning("MJPEGServer.stop: port release error for '%s': %s", name, e, exc_info=True)
         if entry.closer:
             log.debug("MJPEGServer.stop: calling closer for '%s'", name)
             entry.closer()
@@ -627,29 +638,6 @@ class MJPEGServer:
             result = name in self._servers
         log.debug("MJPEGServer.is_running: name=%s -> %s", name, result)
         return result
-
-    def _next_port(self) -> int:
-        """Find the next available port starting at BASE_PORT."""
-        log.debug("MJPEGServer._next_port: searching from BASE_PORT=%d", BASE_PORT)
-        used = {e.port for e in self._servers.values()}
-        port = BASE_PORT
-        while True:
-            if port not in used and _port_available(port):
-                log.debug("MJPEGServer._next_port: allocated port=%d", port)
-                return port
-            port += 1
-
-
-def _port_available(port: int) -> bool:
-    log.debug("_port_available: checking port=%d", port)
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        try:
-            s.bind(("", port))
-            log.debug("_port_available: port=%d is available", port)
-            return True
-        except OSError:
-            log.debug("_port_available: port=%d is in use", port, exc_info=True)
-            return False
 
 
 # Module-level singleton

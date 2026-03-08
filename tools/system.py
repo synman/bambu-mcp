@@ -20,6 +20,53 @@ def _permission_denied() -> str:
     return "Error: user_permission must be True to perform this action."
 
 
+def get_server_info() -> dict:
+    """
+    Return runtime port pool state for the bambu-mcp server.
+
+    The bambu-mcp HTTP REST API and all MJPEG camera stream servers draw ports from
+    a shared ephemeral pool anchored at port 49152 (IANA RFC 6335 Dynamic/Private range
+    49152–65535).  Ports are allocated on demand and released when listeners stop.
+
+    Use this tool to discover the actual REST API port at runtime before constructing
+    an HTTP request URL.  The REST API base URL is: http://localhost:{api_port}/api
+
+    Returns:
+        api_port     — TCP port the REST API is currently bound to (0 if not running)
+        pool_start   — first port in the shared ephemeral pool (default 49152)
+        pool_end     — last port in the shared ephemeral pool inclusive (default 49251)
+        pool_claimed — sorted list of all currently claimed port numbers
+                       (includes the REST API port + all active MJPEG stream ports)
+
+    Environment variables that control the pool:
+        BAMBU_PORT_POOL_START  — override pool start (default 49152)
+        BAMBU_PORT_POOL_END    — override pool end (default 49251)
+        BAMBU_API_PORT         — preferred port for the REST API (tried first; rotates
+                                 to next available pool port if taken)
+
+    Example — construct the REST API base URL:
+        info = get_server_info()
+        base_url = f"http://localhost:{info['api_port']}/api"
+    """
+    log.debug("get_server_info: called")
+    try:
+        import api_server
+        from port_pool import port_pool as _pp
+        api_port = api_server.get_port()
+        state = _pp.get_state()
+        result = {
+            "api_port":    api_port,
+            "pool_start":  state["pool_start"],
+            "pool_end":    state["pool_end"],
+            "pool_claimed": state["pool_claimed"],
+        }
+        log.debug("get_server_info: → %s", result)
+        return result
+    except Exception as e:
+        log.error("get_server_info: error: %s", e, exc_info=True)
+        return {"error": f"Error retrieving server info: {e}"}
+
+
 def get_session_status(name: str) -> dict:
     """
     Return the current MQTT session state and connectivity info for the named printer.

@@ -1,5 +1,16 @@
 # bambu-mcp Project Instructions
 
+## Git Flow (Agent-Managed)
+
+The agent is authorized to manage the full git lifecycle for bambu-mcp: stage, commit, and push changes without waiting for per-commit user approval. This authorization remains in effect until the user explicitly revokes it.
+
+**Commit standards:**
+- Always include the Co-authored-by trailer: `Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>`
+- Commit messages must be descriptive and scoped to the change
+- Push to `origin` after each logical unit of work (don't batch unrelated changes into one push)
+
+---
+
 ## ⚠️ DEPENDENCY UPDATES — HARD STOP, CONSULT USER FIRST
 
 **Never update, add, remove, or reinstall any bambu-mcp dependency without explicit user approval in the current conversation turn.**
@@ -32,7 +43,7 @@ This applies to:
 - After any version bump: (1) run `pip install -e .` so `importlib.metadata` reflects the new version, then (2) run `python make.py version-sync` to propagate the version to `README.md` and `PLAN.md`.
 - `server.py` reads the version via `importlib.metadata.version("bambu-mcp")` and sets it on `mcp._mcp_server.version`. **Do not hardcode the version string anywhere else.**
 - Bump version in the same commit as the change that warrants it. Never bump speculatively.
-- Current version: **0.1.1**
+- Current version: **0.3.0**
 
 ---
 
@@ -63,6 +74,11 @@ Restarting `server.py` is required after any code change to `bambu-mcp`. The pro
 
 ### Phase 1 — Kill and relaunch the server process
 
+0. **Force-reinstall BPM first** (mandatory — `bpm` is pinned to `@devel`, a moving ref; pip will not pick up new commits without this):
+   ```
+   cd ~/bambu-mcp && .venv/bin/pip install --force-reinstall "bambu-printer-manager @ git+https://github.com/synman/bambu-printer-manager.git@devel"
+   ```
+   Alternatively, `python make.py` runs the same force-reinstall as part of the full install/update procedure.
 1. **Find the running process**: `ps aux | grep "bambu-mcp.*server.py" | grep -v grep`
 2. **Kill it**: `kill <PID>`
 3. **Relaunch using the bash tool with `mode="async", detach=true`**:

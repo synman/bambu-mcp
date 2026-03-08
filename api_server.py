@@ -1,10 +1,38 @@
 """
-bambu-mcp-api — standalone HTTP API server mirroring bambu-printer-app/api/api.py.
+bambu-mcp-api — HTTP REST API server for the bambu-mcp MCP service.
 
-Routes are identical to the container API so existing clients work unchanged.
-Backed by session_manager / BambuPrinter; no connection to bambu-printer-app.
+Exposes 51 routes mirroring the bambu-printer-app container API so existing clients
+work unchanged. Backed directly by session_manager / BambuPrinter — no dependency
+on the bambu-printer-app container.
 
-Auto-started by server.py _startup() on port 8080 (BAMBU_API_PORT env to override).
+Service details:
+  Port:       Dynamically allocated from the shared ephemeral port pool (IANA RFC 6335
+              range 49152–65535).  If BAMBU_API_PORT is set it is used as a preferred-port
+              hint (tried first; rotates to next available pool port if taken).
+  Base URL:   http://localhost:{port}/api  — call get_server_info() or GET /api/server_info
+              to discover the actual port at runtime.
+  Auth:       HTTP Basic — credentials from BAMBU_API_USER / BAMBU_API_PASS env vars.
+  Swagger UI: http://localhost:{port}/api/docs
+  OpenAPI:    http://localhost:{port}/api/openapi.json
+
+Lifecycle:
+  Auto-started by server.py _startup() when the MCP server initialises.
+  start(port)  — launch in a background non-daemon thread; returns the bound port.
+  stop()       — shut down the wsgiref server and release the thread.
+  is_running() — True when the server thread is alive.
+  get_url()    — returns "http://localhost:{port}".
+  get_port()   — returns the currently bound port integer (0 if not running).
+
+Route categories (51 routes total):
+  Printer state  (6)  — full state, progress, temperatures, spools, nozzle, AMS
+  Print control  (8)  — print 3mf, pause, resume, stop, speed, skip objects, options
+  AMS/filament   (7)  — load, unload, set filament, dryer start/stop, RFID calibrate
+  Climate        (7)  — bed/nozzle/chamber temp, fan speeds, chamber light
+  Hardware       (8)  — nozzle config, refresh nozzles, 5 AI detector routes, swap tool
+  File mgmt     (12)  — list, upload, download, delete, rename, mkdir, project info, print
+  System         (6)  — health, session CRUD, printer discovery, OpenAPI docs
+
+Agent reference: call get_knowledge_topic('http_api') for the full route inventory.
 """
 
 from __future__ import annotations
@@ -35,7 +63,7 @@ _atexit.unregister(logging.shutdown)
 _flask_app = None
 _server_thread: threading.Thread | None = None
 _werkzeug_server = None  # holds make_server instance for clean shutdown
-_port: int = int(os.environ.get("BAMBU_API_PORT", "8080"))
+_port: int = 0           # set by start(); 0 = not running
 _UPLOADS = os.path.join(os.path.dirname(__file__), "uploads")
 
 DEFAULT_PRINTER = os.environ.get("BAMBU_API_PRINTER", "")
@@ -1033,6 +1061,37 @@ def _build_app():
             log.error("truncate_log: error: %s", e, exc_info=True)
             return _err(str(e))
 
+    # ── server info ───────────────────────────────────────────────────────────
+
+    @app.route("/api/server_info")
+    def server_info():
+        """
+        Return runtime port pool state for the bambu-mcp server.
+
+        No printer parameter required — this is server-level state.
+
+        Returns:
+            api_port     — TCP port the REST API is currently bound to
+            pool_start   — first port in the shared ephemeral pool (default 49152)
+            pool_end     — last port in the shared ephemeral pool inclusive (default 49251)
+            pool_claimed — sorted list of all currently claimed port numbers (API + MJPEG streams)
+        """
+        log.debug("server_info: called")
+        try:
+            from port_pool import port_pool as _pp
+            state = _pp.get_state()
+            result = {
+                "api_port": _port,
+                "pool_start": state["pool_start"],
+                "pool_end": state["pool_end"],
+                "pool_claimed": state["pool_claimed"],
+            }
+            log.debug("server_info: → %s", result)
+            return jsonify(result)
+        except Exception as e:
+            log.error("server_info: error: %s", e, exc_info=True)
+            return _err(str(e))
+
     # ── set k-factor (stubbed — not yet in session_manager) ──────────────────
 
     @app.route("/api/set_spool_k_factor")
@@ -1056,7 +1115,33 @@ def _build_app():
 # ── Server lifecycle ───────────────────────────────────────────────────────────
 
 def start(port: int | None = None) -> int:
-    """Start the bambu-mcp-api HTTP server in a non-daemon thread. Returns the port."""
+    """
+    Start the bambu-mcp-api HTTP server in a background non-daemon thread.
+
+    If the server is already running, returns the current port immediately without
+    starting a second instance. On first call, builds the Flask app, allocates a
+    port from the shared ephemeral pool (IANA RFC 6335 range 49152–65535), binds a
+    wsgiref WSGI server to 0.0.0.0:{port}, and starts the serve_forever loop in a
+    named thread ("bambu-mcp-api").
+
+    Port selection:
+      - If BAMBU_API_PORT env var is set, it is used as a preferred-port hint (tried
+        first; rotates to next available pool port if taken).
+      - The *port* argument overrides BAMBU_API_PORT when provided.
+      - Preferred values outside the pool range are still attempted before rotation.
+
+    Args:
+        port: Preferred TCP port.  If None, BAMBU_API_PORT env var is used as hint
+              (or pool rotation starts from BAMBU_PORT_POOL_START = 49152 by default).
+              Ignored if the server is already running.
+
+    Returns:
+        The port the server is (or was already) listening on.
+
+    Raises:
+        RuntimeError: If Flask is unavailable or the app fails to build.
+        OSError: If the port pool is exhausted (all 100 pool ports are in use).
+    """
     global _flask_app, _server_thread, _werkzeug_server, _port
     log.debug("start: called port=%s", port)
 
@@ -1064,9 +1149,14 @@ def start(port: int | None = None) -> int:
         log.info("start: already running on port %s", _port)
         return _port
 
-    if port is not None:
-        _port = port
+    # Resolve preferred port: explicit arg → env var → no preference
+    if port is None:
+        env_port = os.environ.get("BAMBU_API_PORT")
+        port = int(env_port) if env_port else None
 
+    from port_pool import port_pool as _pp
+    _port = _pp.allocate(preferred=port)
+    log.debug("start: allocated port %d from pool", _port)
     _flask_app = _build_app()
     if _flask_app is None:
         log.error("start: failed to build Flask app")
@@ -1123,8 +1213,16 @@ def start(port: int | None = None) -> int:
 
 
 def stop() -> None:
-    """Shut down the werkzeug server and release the non-daemon thread."""
-    global _server_thread, _werkzeug_server
+    """
+    Shut down the bambu-mcp-api HTTP server and release the server thread.
+
+    Calls shutdown() on the wsgiref server, which causes serve_forever() to return
+    and the server thread to exit. Releases the allocated port back to the shared
+    ephemeral pool so other listeners can reuse it.  Safe to call when not running
+    — no-op in that case.  After stop(), is_running() returns False and start() can
+    be called again.
+    """
+    global _server_thread, _werkzeug_server, _port
     log.debug("stop: called")
     if _werkzeug_server is not None:
         try:
@@ -1133,15 +1231,31 @@ def stop() -> None:
         except Exception as e:
             log.warning("stop: shutdown error: %s", e, exc_info=True)
         _werkzeug_server = None
+    if _port:
+        try:
+            from port_pool import port_pool as _pp
+            _pp.release(_port)
+            log.debug("stop: released port %d to pool", _port)
+        except Exception as e:
+            log.warning("stop: port release error: %s", e, exc_info=True)
+        _port = 0
     _server_thread = None
     log.info("stop: bambu-mcp-api stopped")
 
 
 def is_running() -> bool:
+    """Return True if the server thread exists and is currently alive."""
     log.debug("is_running: called → %s", _server_thread is not None and _server_thread.is_alive())
     return _server_thread is not None and _server_thread.is_alive()
 
 
 def get_url() -> str:
+    """Return the base URL of the HTTP API server (e.g. 'http://localhost:49152')."""
     log.debug("get_url: called → port=%s", _port)
     return f"http://localhost:{_port}"
+
+
+def get_port() -> int:
+    """Return the TCP port the HTTP API server is currently bound to (0 if not running)."""
+    log.debug("get_port: called → %d", _port)
+    return _port
