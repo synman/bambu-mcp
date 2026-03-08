@@ -21,10 +21,6 @@ def _permission_denied() -> str:
     return "Error: user_permission must be True to perform this action."
 
 
-# Speed level mapping: human-readable → firmware value string
-_SPEED_LEVELS = {"quiet": "1", "standard": "2", "sport": "3", "ludicrous": "4"}
-
-
 def pause_print(name: str, user_permission: bool = False) -> str:
     """
     Pause the current print job on the named printer.
@@ -175,14 +171,17 @@ def set_print_speed(
     if printer is None:
         log.warning("set_print_speed: printer not connected: %s", name)
         return _no_printer(name)
-    code = _SPEED_LEVELS.get(speed_level.lower())
-    if code is None:
-        return f"Error: Invalid speed_level '{speed_level}'. Choose from: {list(_SPEED_LEVELS)}"
     try:
-        log.debug("set_print_speed: calling printer.speed_level=%s for %s", code, name)
-        printer.speed_level = code
+        from bpm.bambutools import SpeedLevel
+        lvl = SpeedLevel[speed_level.upper()]
+    except KeyError:
+        valid = [e.name.lower() for e in SpeedLevel]
+        return f"Error: Invalid speed_level '{speed_level}'. Choose from: {valid}"
+    try:
+        log.debug("set_print_speed: calling printer.speed_level=%s for %s", lvl, name)
+        printer.speed_level = lvl
         log.debug("set_print_speed: command sent to %s", name)
-        return f"Speed level set to '{speed_level}' on '{name}'."
+        return f"Speed level set to '{lvl.name.lower()}' on '{name}'."
     except Exception as e:
         log.error("set_print_speed: error for %s: %s", name, e, exc_info=True)
         return f"Error setting speed on '{name}': {e}"

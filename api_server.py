@@ -109,7 +109,7 @@ def _bpm_enum_values(enum_cls_path: str, exclude: list | None = None) -> list:
 # are picked up automatically. Hardcoded lists are used only where no BPM enum exists.
 _ROUTE_ENUM_VALUES: dict[tuple[str, str], list] = {
     # ── Print control ──────────────────────────────────────────────────────────
-    ("set_speed_level",              "level"):         ["quiet", "standard", "sport", "ludicrous"],
+    ("set_speed_level",              "level"):         _bpm_enum_names("bpm.bambutools.SpeedLevel"),
     ("print_3mf",                    "plate"):         _bpm_enum_names("bpm.bambutools.PlateType", exclude=["NONE"]),
     # ── Climate ────────────────────────────────────────────────────────────────
     ("set_light_state",              "state"):         ["on", "off"],
@@ -787,11 +787,14 @@ def _build_app():
         if p is None:
             return _err("no printer")
         try:
-            level = str(request.args.get("level", "standard"))
+            from bpm.bambutools import SpeedLevel
+            level = request.args.get("level", "standard")
             log.debug("set_speed_level: level=%s", level)
-            p.speed_level = level
+            p.speed_level = SpeedLevel[level.upper()]
             log.debug("set_speed_level: → ok")
             return _ok()
+        except KeyError:
+            return _err(f"Invalid level '{level}'. Must be one of: quiet, standard, sport, ludicrous.")
         except Exception as e:
             log.error("set_speed_level: error: %s", e, exc_info=True)
             return _err(str(e))
