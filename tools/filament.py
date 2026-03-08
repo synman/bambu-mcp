@@ -431,3 +431,48 @@ def calibrate_ams_remaining(
     except Exception as e:
         log.error("calibrate_ams_remaining: error for %s: %s", name, e, exc_info=True)
         return f"Error triggering RFID scan on '{name}': {e}"
+
+
+def send_ams_control_command(
+    name: str,
+    cmd: str,
+    user_permission: bool = False,
+) -> str:
+    """
+    Send an AMS control command to pause, resume, or reset the AMS.
+
+    cmd must be one of: 'PAUSE', 'RESUME', 'RESET' (case-insensitive).
+
+    - 'PAUSE'  — pause the AMS feed mid-print.
+    - 'RESUME' — resume AMS feed after a pause. Note: when RESUME is sent,
+      the underlying BPM method automatically calls resume_printing() as well,
+      restarting the paused print job. This is a side effect of the BPM
+      implementation, not a separate call.
+    - 'RESET'  — reset the AMS to its idle/ready state.
+
+    Requires user_permission=True.
+    """
+    log.debug("send_ams_control_command: called for name=%s cmd=%s user_permission=%s", name, cmd, user_permission)
+    if not user_permission:
+        log.debug("send_ams_control_command: permission denied for %s", name)
+        return _permission_denied()
+    printer = session_manager.get_printer(name)
+    if printer is None:
+        log.warning("send_ams_control_command: printer not connected: %s", name)
+        return _no_printer(name)
+    try:
+        from bpm.bambutools import AMSControlCommand
+        cmd_upper = cmd.upper()
+        log.debug("send_ams_control_command: resolved cmd=%s for %s", cmd_upper, name)
+        ams_cmd = AMSControlCommand[cmd_upper]
+        log.debug("send_ams_control_command: calling printer.send_ams_control_command(%s) for %s", ams_cmd, name)
+        printer.send_ams_control_command(ams_cmd)
+        log.debug("send_ams_control_command: command sent to %s", name)
+        note = " (resume_printing() also called automatically)" if cmd_upper == "RESUME" else ""
+        return f"AMS control command {cmd_upper} sent to '{name}'.{(' ' + note) if note else ''}"
+    except KeyError:
+        log.error("send_ams_control_command: unknown cmd '%s' for %s", cmd, name)
+        return f"Error: Unknown AMS control command '{cmd}'. Must be one of: PAUSE, RESUME, RESET."
+    except Exception as e:
+        log.error("send_ams_control_command: error for %s: %s", name, e, exc_info=True)
+        return f"Error sending AMS control command to '{name}': {e}"

@@ -288,3 +288,40 @@ log.warning("fn: context: %s", e, exc_info=True)  # or log.error for unexpected 
 - Log file: `~/bambu-mcp/bambu-mcp.log` — written at DEBUG level when `BAMBU_MCP_DEBUG=1`.
 - `BAMBU_MCP_DEBUG=1` must be set in the live MCP config (`~/.copilot/mcp-config.json`) for DEBUG output to reach the log file. Without it, only INFO+ is logged.
 - Stderr always receives INFO+ regardless of `BAMBU_MCP_DEBUG`.
+
+---
+
+## BPM MCP Coverage Standard (Mandatory)
+
+**Every public BPM function that is reachable via an HTTP API route MUST also have a
+corresponding MCP tool.** The HTTP/OpenAPI REST API is a fallback layer only. If a BPM
+function is accessible only through the HTTP API and not via an MCP tool, that is a gap
+that must be closed.
+
+### Required audit on every BPM-touching PR
+
+When any of the following change, run the coverage audit and close any new gaps before merging:
+
+1. A new public BPM method is added (check: does it have an HTTP route? → add MCP tool)
+2. A new HTTP route is added (check: does it have an MCP tool? → add it)
+3. A new MCP tool is added (ensure it matches the BPM method it wraps — docstring parity)
+
+### Intentional non-gaps (documented exclusions)
+
+The following BPM methods are **intentionally not** exposed as MCP tools:
+
+| BPM Method / Property | Reason |
+|------------------------|--------|
+| `get_current_bind_list` | Internal H2D helper called only by `print_3mf_file`; not a user-facing operation |
+| `delete_all_contents` / `search_for_and_remove_*` | Internal FTPS helpers; not part of the public API |
+| `speed_level` (read) | Surfaced in `get_printer_state`; dedicated getter is redundant |
+| `set_spool_k_factor` | Firmware-broken, no-op stub; `select_extrusion_calibration` is the replacement |
+| `skipped_objects` property | `@deprecated("No replacement yet")`; internal state, not user-facing |
+
+### Coverage audit checklist
+
+Before closing any PR that adds/removes BPM methods or HTTP routes:
+- [ ] Every new HTTP route has a matching MCP tool (or is in the intentional exclusions table above)
+- [ ] Every new MCP tool correctly wraps its BPM method with matching semantics
+- [ ] Docstrings are present on both the HTTP route handler and the MCP tool function
+- [ ] `_ROUTE_TAGS` and `_ROUTE_EXAMPLES` entries added for any new HTTP routes (per Swagger standard)

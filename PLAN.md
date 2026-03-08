@@ -81,7 +81,7 @@ Version lives in one place: `pyproject.toml [project] version`. `server.py` read
 `importlib.metadata.version("bambu-mcp")` and sets `mcp._mcp_server.version` so clients
 see the correct version in every MCP `initialize` response.
 
-**Current version: 0.3.0**
+**Current version: 0.4.0**
 
 ---
 ## Installation

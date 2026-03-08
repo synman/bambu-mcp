@@ -366,3 +366,62 @@ def rename_printer(
     except Exception as e:
         log.error("rename_printer: error for %s: %s", name, e, exc_info=True)
         return f"Error renaming printer '{name}': {e}"
+
+
+def dump_log(tail_lines: int = 200) -> dict:
+    """
+    Return the bambu-mcp server log.
+
+    Reads the last tail_lines lines from ~/bambu-mcp/bambu-mcp.log.
+    No printer parameter required — this is a server-level operation.
+
+    The log file is only written at DEBUG level when BAMBU_MCP_DEBUG=1 is set
+    in the MCP config. Without it, only INFO+ entries appear. Use this tool to
+    diagnose connection issues, tool errors, or unexpected printer behavior.
+
+    Returns a dict with:
+    - lines: list of log lines (newest last)
+    - total_lines: number of lines returned
+    - log_path: absolute path to the log file
+    """
+    log.debug("dump_log: called with tail_lines=%s", tail_lines)
+    from pathlib import Path
+    log_path = Path(__file__).parent.parent / "bambu-mcp.log"
+    log.debug("dump_log: log_path=%s", log_path)
+    try:
+        if not log_path.exists():
+            log.debug("dump_log: log file does not exist at %s", log_path)
+            return {"lines": [], "total_lines": 0, "log_path": str(log_path), "note": "Log file does not exist. Set BAMBU_MCP_DEBUG=1 to enable file logging."}
+        with open(log_path, encoding="utf-8", errors="replace") as f:
+            all_lines = f.readlines()
+        lines = [l.rstrip("\n") for l in all_lines[-tail_lines:]]
+        log.debug("dump_log: returning %d lines (of %d total)", len(lines), len(all_lines))
+        return {"lines": lines, "total_lines": len(lines), "log_path": str(log_path)}
+    except Exception as e:
+        log.error("dump_log: error reading log: %s", e, exc_info=True)
+        return {"error": f"Error reading log file: {e}"}
+
+
+def truncate_log(user_permission: bool = False) -> dict:
+    """
+    Truncate the bambu-mcp server log.
+
+    Clears ~/bambu-mcp/bambu-mcp.log to 0 bytes. No printer parameter required.
+    Useful after a debugging session to start with a clean log.
+    Requires user_permission=True.
+    """
+    log.debug("truncate_log: called with user_permission=%s", user_permission)
+    if not user_permission:
+        log.debug("truncate_log: permission denied")
+        return {"error": "user_permission=True required to truncate the log."}
+    from pathlib import Path
+    log_path = Path(__file__).parent.parent / "bambu-mcp.log"
+    log.debug("truncate_log: log_path=%s", log_path)
+    try:
+        with open(log_path, "w") as f:
+            pass
+        log.info("truncate_log: log truncated at %s", log_path)
+        return {"success": True, "log_path": str(log_path)}
+    except Exception as e:
+        log.error("truncate_log: error truncating log: %s", e, exc_info=True)
+        return {"error": f"Error truncating log file: {e}"}

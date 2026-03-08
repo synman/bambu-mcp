@@ -950,3 +950,79 @@ def rename_sdcard_file(
     except Exception as e:
         log.error("rename_sdcard_file: error for %s: %s", name, e, exc_info=True)
         return {"error": f"Error renaming file on '{name}': {e}"}
+
+
+def get_current_job_project_info(name: str, include_images: bool = False) -> dict:
+    """
+    Return 3MF project properties for the currently active print job.
+
+    Reads the active gcode_file path from the printer's live job state and
+    returns project metadata for the corresponding plate. Equivalent to calling
+    get_project_info() with the active job's file path and plate number — but
+    without needing to know the file path in advance.
+
+    Returns {error: "no_active_job"} when gcode_state is IDLE, FINISH, or FAILED
+    (i.e. no print is running or paused). A PAUSED job still returns project info.
+
+    include_images=True embeds base64 thumbnail and top-view data URIs in the
+    response (large). See get_project_info() for full field documentation.
+    """
+    log.debug("get_current_job_project_info: called for name=%s include_images=%s", name, include_images)
+    printer = session_manager.get_printer(name)
+    if printer is None:
+        log.warning("get_current_job_project_info: printer not connected: %s", name)
+        return _no_printer(name)
+    try:
+        job = printer.active_job_info
+        gcode_state = getattr(job, "gcode_state", None) or ""
+        gcode_file = getattr(job, "gcode_file", None) or ""
+        plate_num = getattr(job, "plate_num", 1) or 1
+        log.debug("get_current_job_project_info: gcode_state=%s gcode_file=%s plate_num=%s", gcode_state, gcode_file, plate_num)
+        if not gcode_file or gcode_state.upper() in ("IDLE", "FINISH", "FAILED", ""):
+            log.debug("get_current_job_project_info: no active job for %s (state=%s file=%s)", name, gcode_state, gcode_file)
+            return {"error": "no_active_job", "gcode_state": gcode_state, "note": "No print is currently running or paused."}
+        log.debug("get_current_job_project_info: delegating to get_project_info for %s file=%s plate=%s", name, gcode_file, plate_num)
+        return get_project_info(name, gcode_file, plate_num=plate_num, include_images=include_images)
+    except Exception as e:
+        log.error("get_current_job_project_info: error for %s: %s", name, e, exc_info=True)
+        return {"error": f"Error retrieving current job project info for '{name}': {e}"}
+
+
+def refresh_sdcard(name: str, mode: str = "full") -> dict:
+    """
+    Force a fresh SD card listing from the printer.
+
+    Triggers an explicit re-read of the SD card contents over FTPS. Use this
+    before calling list_sdcard_files() when you need guaranteed up-to-date
+    results (e.g. after uploading a file or after a print completes).
+
+    mode must be one of:
+    - 'full' (default) — refresh the complete SD card directory tree via
+      printer.get_sdcard_contents(). Slower but comprehensive.
+    - '3mf' — refresh only the .3mf file list via printer.get_sdcard_3mf_files().
+      Faster; use this when you only need the printable file list.
+
+    After this call, use list_sdcard_files() to retrieve the updated listing.
+    The refresh is synchronous — the updated data is available immediately.
+    """
+    log.debug("refresh_sdcard: called for name=%s mode=%s", name, mode)
+    printer = session_manager.get_printer(name)
+    if printer is None:
+        log.warning("refresh_sdcard: printer not connected: %s", name)
+        return _no_printer(name)
+    mode_lower = mode.lower()
+    if mode_lower not in ("full", "3mf"):
+        return {"error": f"Unknown mode '{mode}'. Must be 'full' or '3mf'."}
+    try:
+        if mode_lower == "3mf":
+            log.debug("refresh_sdcard: calling printer.get_sdcard_3mf_files() for %s", name)
+            printer.get_sdcard_3mf_files()
+            log.debug("refresh_sdcard: 3mf refresh complete for %s", name)
+        else:
+            log.debug("refresh_sdcard: calling printer.get_sdcard_contents() for %s", name)
+            printer.get_sdcard_contents()
+            log.debug("refresh_sdcard: full refresh complete for %s", name)
+        return {"success": True, "mode": mode_lower, "printer": name}
+    except Exception as e:
+        log.error("refresh_sdcard: error for %s: %s", name, e, exc_info=True)
+        return {"error": f"Error refreshing SD card on '{name}': {e}"}
