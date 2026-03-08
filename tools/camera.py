@@ -887,7 +887,7 @@ def view_stream(name: str) -> dict:
     plate layout panel, HMS error links).
 
     Returns:
-      url            — the local MJPEG server URL that was opened
+      url            — the local MJPEG stream root URL (http://localhost:{port}/)
       port           — the server port
       protocol       — "rtsps" or "tcp_tls"
       opened         — bool: True if the browser was launched successfully
@@ -900,7 +900,8 @@ def view_stream(name: str) -> dict:
     if "error" in result:
         return result
     url = result["url"]
-    opened = webbrowser.open(url)
+    open_url = url.rstrip("/") + f"/open?name=bambu-{name}"
+    opened = webbrowser.open(open_url)
     log.debug("view_stream: browser open result=%s for url=%s", opened, url)
     return {
         "url": url,

@@ -725,6 +725,8 @@ class _StreamHandler(BaseHTTPRequestHandler):
             self._serve_snapshot()
         elif path == "/job_state":
             self._serve_job_state()
+        elif path == "/open":
+            self._serve_open()
         else:
             self._serve_stream()
 
@@ -882,6 +884,30 @@ class _StreamHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(jpeg)
 
+    def _serve_open(self):
+        """Serve a portal page that opens the stream in a named browser window/tab.
+
+        Called by view_stream() via webbrowser.open('/open?name=bambu-{printer}').
+        The page calls window.open('/', target) — browsers reuse an existing window
+        with that name on subsequent calls, achieving single-tab-per-printer behavior.
+        """
+        log.debug("_serve_open: serving portal to %s", self.client_address)
+        html = (
+            "<!doctype html><html><head><title>Opening Bambu Cam\u2026</title></head>"
+            "<body><script>"
+            "var n=new URLSearchParams(location.search).get('name')||'bambu-cam';"
+            "var w=window.open(location.origin+'/',n);"
+            "if(w){w.focus();setTimeout(function(){window.close();},150);}"
+            "else{location.replace('/');}"
+            "</script><p>Opening stream\u2026</p></body></html>"
+        ).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(html)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(html)
+
     def _serve_stream(self):
         ua = self.headers.get("User-Agent", "unknown")
         log.debug("_serve_stream: starting for client %s", self.client_address)
@@ -909,8 +935,8 @@ class _StreamHandler(BaseHTTPRequestHandler):
                     if fid != self.server._fps_last_frame_id:
                         self.server._fps_last_frame_id = fid
                         self.server._fps_times.append(time.monotonic())
-        except (BrokenPipeError, ConnectionResetError) as e:
-            log.warning("_serve_stream: client %s disconnected: %s", self.client_address, e, exc_info=True)
+        except (BrokenPipeError, ConnectionResetError, RuntimeError) as e:
+            log.warning("_serve_stream: client %s disconnected: %s", self.client_address, e)
         else:
             log.info("stream_disconnect: client=%s reason=normal", self.client_address[0])
         log.debug("_serve_stream: stream ended for client %s", self.client_address)

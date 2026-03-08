@@ -121,11 +121,16 @@ class RTSPSFrameBuffer:
         self._cond = threading.Condition(self._lock)
         self._last_frame: bytes | None = None
         self._last_frame_time: float = time.monotonic()
+        self._container_lock = threading.Lock()
+        self._container = None  # current av.InputContainer; written by reader, read by watchdog
         log.debug("RTSPSFrameBuffer.__init__: ip=%s timeout=%s", ip, timeout)
         self._thread = threading.Thread(target=self._reader_loop, daemon=True,
                                         name=f"rtsps-cam-{ip}")
         self._thread.start()
-        log.debug("RTSPSFrameBuffer.__init__: reader thread started tid=%s", self._thread.ident)
+        self._watchdog_thread = threading.Thread(target=self._watchdog_loop, daemon=True,
+                                                 name=f"rtsps-watchdog-{ip}")
+        self._watchdog_thread.start()
+        log.debug("RTSPSFrameBuffer.__init__: reader + watchdog threads started")
 
     def _reader_loop(self) -> None:
         """Background thread: all av.open / container.decode / _frame_to_jpeg calls happen here."""
@@ -144,6 +149,8 @@ class RTSPSFrameBuffer:
                 log.debug("_reader_loop: calling av.open url=rtsps://bblp:<redacted>@%s:322/...", self._ip)
                 container = av.open(url, options=options)
                 log.debug("_reader_loop: av.open succeeded")
+                with self._container_lock:
+                    self._container = container
                 frames_received = 0
 
                 for frame in container.decode(video=0):
@@ -162,6 +169,8 @@ class RTSPSFrameBuffer:
             except Exception as e:
                 log.warning("_reader_loop: error: %s — reconnecting in 1s", e, exc_info=True)
             finally:
+                with self._container_lock:
+                    self._container = None
                 if container is not None:
                     try:
                         container.close()
@@ -174,6 +183,34 @@ class RTSPSFrameBuffer:
                 time.sleep(1)
 
         log.debug("_reader_loop: exiting (running=False)")
+
+    def _watchdog_loop(self) -> None:
+        """Force-close the av container if no new frame arrives in 30 s.
+
+        Closing the container from outside interrupts the blocking container.decode()
+        call in the reader thread, causing it to catch the exception and reconnect.
+        This recovers from silent RTSPS freezes where the TCP connection stays open
+        but the server stops sending video frames.
+        """
+        log.debug("_watchdog_loop: starting for %s", self._ip)
+        while self._running:
+            time.sleep(5)
+            if not self._running:
+                break
+            stale_secs = time.monotonic() - self._last_frame_time
+            if stale_secs >= 30:
+                with self._container_lock:
+                    container = self._container
+                if container is not None:
+                    log.warning(
+                        "_watchdog_loop: no frame for %.0fs — closing container to force reconnect",
+                        stale_secs,
+                    )
+                    try:
+                        container.close()
+                    except Exception as e:
+                        log.debug("_watchdog_loop: error closing container: %s", e)
+        log.debug("_watchdog_loop: exiting (running=False)")
 
     def wait_first_frame(self, timeout: float = 15.0) -> bool:
         """Block until the first frame is available or timeout. Returns True if a frame arrived."""
@@ -214,8 +251,8 @@ class RTSPSFrameBuffer:
                 yield frame
             elif frame is last:
                 stale_secs = time.monotonic() - self._last_frame_time
-                if stale_secs > 15:
-                    log.warning("iter_frames: no new frame for %.0fs — stream stalled, raising to trigger browser retry", stale_secs)
+                if stale_secs > 60:
+                    log.warning("iter_frames: no new frame for %.0fs — watchdog failed, raising to trigger browser retry", stale_secs)
                     raise RuntimeError(f"RTSPSFrameBuffer stream stalled ({stale_secs:.0f}s)")
         log.debug("iter_frames: client detached after %d frames", frames_yielded)
 
