@@ -11,6 +11,8 @@ Tools:
   start_stream(name, port?) — start local MJPEG HTTP server, return URL
   stop_stream(name)         — stop the MJPEG server for this printer
   view_stream(name)         — start stream + open in system default browser
+  open_job_state(name)      — open latest background monitor diagnostic images in viewer
+  analyze_active_job(name)  — AI-facing: capture + analyze, return data_uri assets
 """
 
 from __future__ import annotations
@@ -526,7 +528,7 @@ def analyze_active_job(
 
     categories controls which image assets are returned (default: ["X"] — composite only).
     Pass multiple letters to include more assets. Estimated sizes at standard quality:
-      X only  (default) : ~25 KB total   — composite JPEG dashboard
+      X only  (default) : ~25 KB total   — composite image (camera + overlays + health strip)
       H                 : ~8 KB          — health strip
       C                 : ~35 KB         — raw + diff frames
       D                 : ~80 KB         — all anomaly detection images
@@ -534,8 +536,8 @@ def analyze_active_job(
       all               : ~160 KB total
 
     The composite (X) is encoded as JPEG for efficiency. All other assets are PNG.
-    The composite dashboard (job_state_composite_jpg) is the primary output for
-    quick inspection; individual category assets are included for detailed analysis.
+    The composite (job_state_composite_jpg) is an AI-analysis artifact — the AI agent
+    consumes it to describe print health. To open it for human viewing, call open_job_state().
 
     Returns {"error": "no_camera"} if this printer has no camera.
     Returns {"error": "not_connected"} if the MQTT session is not active.
@@ -727,6 +729,82 @@ def analyze_active_job(
         result["health_panel_png"] = _png_uri(report.health_panel_png)
 
     return result
+
+
+def open_job_state(name: str) -> dict:
+    """
+    Open the latest background monitor job state images in the system default viewer.
+
+    Reads the most recent result from the background print health monitor cache and
+    saves each image asset to /tmp, then opens the composite view in the default
+    image viewer. Use this when the human user wants to *see* the current print
+    health diagnostic output — anomaly detection overlays, health panel, and composite.
+
+    This is the human-facing counterpart to analyze_active_job():
+      - analyze_active_job() → AI agent consumes data_uri assets for analysis
+      - open_job_state()     → human user sees the same assets opened in a viewer
+
+    Images opened (all present in the latest background monitor result):
+      - composite  : full 3-panel diagnostic view (camera + overlays + health strip)
+      - annotated  : camera frame with anomaly detection markup
+      - health     : narrow health strip (verdict, score, hot_pct, stable_verdict)
+      - raw        : unprocessed camera frame for comparison
+
+    Returns {"error": "no_result"} if the background monitor has not yet produced
+    a result for this printer (first analysis runs ~60s after print start).
+    Returns {"error": "not_connected"} if the printer is not connected.
+    """
+    import base64
+    import subprocess
+    import webbrowser
+
+    log.debug("open_job_state: called for %s", name)
+    from camera import job_monitor
+
+    result = job_monitor.get_latest_result(name)
+    if result is None:
+        return {"error": "no_result", "detail": "Background monitor has not yet produced a result — wait ~60s after print start"}
+
+    image_fields = [
+        ("job_state_composite_png", "composite"),
+        ("annotated_png",           "annotated"),
+        ("health_panel_png",        "health"),
+        ("raw_png",                 "raw"),
+    ]
+
+    opened_paths = []
+    composite_path = None
+    for field, label in image_fields:
+        uri = result.get(field)
+        if not uri or not isinstance(uri, str) or not uri.startswith("data:"):
+            continue
+        _, b64 = uri.split(",", 1)
+        path = f"/tmp/bambu_job_state_{name}_{label}.png"
+        with open(path, "wb") as f:
+            f.write(base64.b64decode(b64))
+        opened_paths.append(path)
+        if label == "composite":
+            composite_path = path
+
+    if not opened_paths:
+        return {"error": "no_images", "detail": "Monitor result contains no image assets"}
+
+    # Open composite first (primary view), then remaining assets
+    for path in opened_paths:
+        subprocess.Popen(["open", path])
+
+    return {
+        "opened": len(opened_paths),
+        "composite_path": composite_path,
+        "paths": opened_paths,
+        "verdict": result.get("verdict"),
+        "stable_verdict": result.get("stable_verdict"),
+        "score": result.get("score"),
+        "layer": result.get("layer"),
+        "total_layers": result.get("total_layers"),
+        "progress_pct": result.get("progress_pct"),
+        "timestamp": result.get("timestamp"),
+    }
 
 
 def view_stream(name: str) -> dict:

@@ -40,9 +40,15 @@ The key question is **who is consuming the image — the AI or the human?**
   server left running.
 
 - **Full active job state report** ("check for spaghetti", "analyze the print", "is the
-  print healthy?", "job state", "print health"):
-  Use `analyze_active_job(name)`. Returns a composite dashboard (default categories=["X"]).
+  print healthy?", "job state", "print health") — **AI is the consumer**:
+  Use `analyze_active_job(name)`. The AI receives data_uri assets to analyze and describe.
   See the analyze_active_job section below for full guidance.
+
+- **Human wants to see the diagnostic images** ("show me the anomaly detection", "open the
+  print health view", "show me what the AI sees", "show me the composite"):
+  Use `open_job_state(name)`. Reads the latest background monitor result and opens all
+  diagnostic images (composite, annotated, health panel, raw frame) in the system viewer.
+  This is the human-facing counterpart to `analyze_active_job()`.
 
 - **Live stream — programmatic** (user wants to embed the URL, use it in automation, etc.):
   Use `start_stream(name)` to get the URL, then provide it to the user.
@@ -52,11 +58,9 @@ The key question is **who is consuming the image — the AI or the human?**
 
 ---
 
-## analyze_active_job — Background Monitor & Composite Report
+## analyze_active_job — Background Monitor
 
 `analyze_active_job(name, store_as_reference=False, quality="auto", categories=["X"])`
-
-### What it does
 
 Retrieves the latest result from the **background job monitor daemon**, which automatically:
 - Captures a reference frame when a print job starts (no manual `store_as_reference` needed)
@@ -66,7 +70,6 @@ Retrieves the latest result from the **background job monitor daemon**, which au
 - Skips analysis when the stage is not 255 (filament change, pause, heating, etc.)
 
 ### When to call it
-
 - User asks "check the print", "is anything wrong?", "spaghetti?", "job health"
 - Proactively when `get_hms_errors()` returns active errors during a print
 - Do NOT call it when gcode_state is IDLE, FINISH, or FAILED — returns `{"error": "no_active_job"}`
@@ -88,12 +91,12 @@ Retrieves the latest result from the **background job monitor daemon**, which au
 
 ### Categories parameter
 
-Default `categories=["X"]` returns only the composite JPEG dashboard (~25 KB at standard).
+Default `categories=["X"]` returns only the composite image (~25 KB at standard).
 Request more when needed:
 
 | categories | Content | Approx size (standard) |
 |------------|---------|------------------------|
-| `["X"]` | Composite JPEG dashboard | ~25 KB |
+| `["X"]` | Composite image (camera + overlays + health strip) | ~25 KB |
 | `["H"]` | Health panel (HMS, temps, fans, AMS) | ~8 KB |
 | `["C"]` | Raw camera frame + diff frame | ~35 KB |
 | `["D"]` | All anomaly detection images | ~80 KB |
@@ -142,8 +145,7 @@ Use this vocabulary when describing what the user sees or when explaining stream
 
 ## Cleanup
 
-- Call `stop_stream(name)` when the user indicates they are done watching, or when the
-  conversation is ending and a stream is known to be running.
+- Call `stop_stream(name)` when the user is done watching or the conversation is ending.
 - Do NOT leave streams running indefinitely — each stream holds an active TCP/TLS
   connection to the printer and occupies a local port.
 
@@ -180,14 +182,17 @@ the right choice.
 
 | Human intent | Correct tool |
 |---|---|
-| "show me", "open it", "let me see", "display it" | `view_stream()`, `open_plate_viewer()`, `open_plate_layout()` |
-| "what does it look like?", "describe it", "is there anything on the plate?" | `get_snapshot()`, `get_plate_thumbnail()`, `get_plate_topview()` — AI analyzes |
+| "show me the camera", "let me watch", "open the stream" | `view_stream()` |
+| "show me the print health", "show me what the AI sees", "open the composite" | `open_job_state()` |
+| "show me the plate", "open the project viewer" | `open_plate_viewer()`, `open_plate_layout()` |
+| "what does it look like?", "describe it", "is anything wrong?" | `get_snapshot()`, `analyze_active_job()` — AI analyzes |
+| "what's on the plate?", "describe the thumbnail" | `get_plate_thumbnail()`, `get_plate_topview()` — AI analyzes |
 
 The distinction:
-- **Human is the viewer** → browser-opening tool (`view_stream`, `open_plate_viewer`,
-  `open_plate_layout`)
+- **Human is the viewer** → browser-opening tool (`view_stream`, `open_job_state`,
+  `open_plate_viewer`, `open_plate_layout`)
 - **AI is the consumer** (to describe, analyze, compare, or pass to a vision model) →
-  raw-data tool (`get_snapshot`, `get_plate_thumbnail`, `get_plate_topview`)
+  raw-data tool (`get_snapshot`, `analyze_active_job`, `get_plate_thumbnail`, `get_plate_topview`)
 
 Returning a data_uri to the human in a chat or terminal context is never the right choice.
 Embedding it in Markdown (`![img](data:...)`) is also wrong — rely on the browser-opening
