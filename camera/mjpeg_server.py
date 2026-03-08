@@ -134,6 +134,9 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
 #hp-score-row{display:flex;align-items:center;gap:6px;margin:3px 0 2px}
 #hp-score-bar-track{flex:1;height:3px;background:#555;border-radius:2px}
 #hp-score-bar-fill{height:100%;border-radius:2px;transition:width .6s}
+#hp-phdc-row{display:flex;justify-content:space-between;align-items:center;margin:3px 0 2px}
+#hp-health-val{font-size:14px;font-weight:700;min-width:46px}
+#hp-conf-val{font-size:11px;color:#888;text-align:right}
 .hp-metric-row{display:flex;justify-content:space-between;font-size:14px;margin:1px 0}
 .hp-metric-row .hp-lbl{color:#888}.hp-metric-row .hp-val{color:#ddd}
 .hp-sep{border:none;border-top:1px solid rgba(255,255,255,.08);margin:4px 0}
@@ -162,6 +165,12 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
     <span id="hp-verdict" class="hpC">CLEAN</span>
     <div id="hp-score-bar-track"><div id="hp-score-bar-fill" style="width:0%;background:#60d080"></div></div>
     <span id="hp-score-val" style="font-size:14px;color:#ddd;min-width:34px;text-align:right">0.000</span>
+  </div>
+  <div id="hp-phdc-row">
+    <span style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.06em">Health</span>
+    <span id="hp-health-val" style="color:#60d080">—</span>
+    <span style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.06em">Conf</span>
+    <span id="hp-conf-val">—</span>
   </div>
   <div class="hp-body collapsed" id="hp-body">
     <div class="hdr" onclick="hudToggle(this,'hp-sec-metrics')">Metrics<span class="hdr-chev open">▲</span></div>
@@ -547,6 +556,16 @@ function hpUpdateFromResult(d){
   var fillEl=document.getElementById('hp-score-bar-fill');
   fillEl.style.width=Math.min(100,score*333)+'%';
   fillEl.style.background=v==='critical'?'#ff5050':v==='warning'?'#ffcc40':'#60d080';
+  var hColor=v==='critical'?'#ff5050':v==='warning'?'#ffcc40':'#60d080';
+  var hEl=document.getElementById('hp-health-val');
+  if(d.print_health!==null&&d.print_health!==undefined){
+    hEl.textContent=Math.round(d.print_health*100)+'%';
+    hEl.style.color=hColor;
+  }else{hEl.textContent='—';hEl.style.color='#888';}
+  var cEl=document.getElementById('hp-conf-val');
+  if(d.decision_confidence!==null&&d.decision_confidence!==undefined){
+    cEl.textContent=Math.round(d.decision_confidence*100)+'%';
+  }else{cEl.textContent='—';}
   document.getElementById('hp-hot').textContent=d.hot_pct!==undefined?(d.hot_pct*100).toFixed(1)+'%':'—';
   document.getElementById('hp-strand').textContent=d.strand_score!==undefined?d.strand_score.toFixed(4):'—';
   document.getElementById('hp-edge').textContent=d.edge_density!==undefined?d.edge_density.toFixed(4):'—';

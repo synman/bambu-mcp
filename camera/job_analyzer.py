@@ -535,6 +535,41 @@ def compute_failure_probability(
     return round(min(max(p, 0.0), 1.0), 4)
 
 
+def compute_decision_confidence(
+    window_size: int,
+    stage_gated: bool,
+    context: dict,
+) -> float:
+    """Estimate how much to trust the current print_health assessment.
+
+    Returns 0.0–1.0.  Low values (<0.4) indicate insufficient data — the
+    print_health figure is an early estimate, not a reliable verdict.  High
+    values (>0.7) indicate the system has enough context to act on print_health.
+
+    Factors (weighted additive, sum = 1.0):
+      0.30  Confidence window fill   — rises as repeated analysis cycles accumulate
+      0.25  Camera data available    — 0 when stage-gated (bed-leveling etc.)
+      0.15  Print settings loaded    — slicer context from the .3mf file
+      0.10  AMS humidity known       — moisture sensor reading available
+      0.10  Past early noise zone    — first 5% of a print is adhesion-uncertain
+      0.10  Filament type known      — material profile available for risk model
+    """
+    progress_pct = float(context.get("progress_pct", 0) or 0)
+    ams_humidity = int(context.get("ams_humidity", 0) or 0)
+    print_settings = context.get("print_settings") or {}
+    fil_type = (context.get("active_filament") or {}).get("type") or ""
+
+    confidence = (
+        0.30 * min(window_size / 5.0, 1.0)
+        + 0.25 * (0.0 if stage_gated else 1.0)
+        + 0.15 * (1.0 if print_settings else 0.5)
+        + 0.10 * (1.0 if 0 < ams_humidity <= 5 else 0.7)
+        + 0.10 * min(progress_pct / 5.0, 1.0)
+        + 0.10 * (1.0 if fil_type else 0.5)
+    )
+    return round(min(max(confidence, 0.0), 1.0), 4)
+
+
 def _spaghetti_weights(context: dict) -> tuple[dict, float, float, float]:
     """
     Compute dynamic per-signal weights and calibrated thresholds from printer context.

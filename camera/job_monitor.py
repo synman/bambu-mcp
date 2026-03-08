@@ -393,6 +393,14 @@ class _PrinterMonitor:
     def _store_gated_result(self, stage: int, stage_name: str) -> None:
         """Store a stage-gated result (no camera analysis performed)."""
         from datetime import datetime, timezone
+        from camera.job_analyzer import compute_decision_confidence
+        try:
+            from session_manager import session_manager
+            state = session_manager.get_state(self.name)
+            ctx = _build_printer_context(self.name, state) if state else {}
+        except Exception:
+            ctx = {}
+        dc = compute_decision_confidence(0, True, ctx)
         result = {
             "stage":        stage,
             "stage_name":   stage_name,
@@ -403,6 +411,8 @@ class _PrinterMonitor:
             "stable_verdict":        None,
             "confidence_window":     [],
             "confidence_window_size": 0,
+            "print_health":          None,
+            "decision_confidence":   dc,
         }
         with self._lock:
             self._latest_result = result
@@ -462,7 +472,7 @@ class _PrinterMonitor:
         stage_name = _STAGE_NAMES.get(stage, "setup")
 
         # Failure probability — Bayesian model, updated every analysis cycle.
-        from camera.job_analyzer import compute_failure_probability
+        from camera.job_analyzer import compute_failure_probability, compute_decision_confidence
         try:
             fp = compute_failure_probability(
                 report.score, report.thresh_warn, report.thresh_crit,
@@ -471,6 +481,9 @@ class _PrinterMonitor:
         except Exception as e:
             log.debug("job_monitor[%s]: failure_probability error: %s", printer_name, e)
             fp = None
+
+        ph = round(1.0 - fp, 4) if fp is not None else None
+        dc = compute_decision_confidence(len(window_snapshot), False, printer_context)
 
         with self._lock:
             if fp is not None:
@@ -502,11 +515,14 @@ class _PrinterMonitor:
             # pre-check
             "precheck_hot_pct":     round(precheck_hot_pct, 4) if precheck_hot_pct is not None else None,
             "precheck_triggered":   (precheck_hot_pct is not None and precheck_hot_pct >= PRECHECK_HOT_PCT_TRIGGER),
-            # confidence
+            # primary health indicators (use these for agent decisions)
+            "print_health":          ph,
+            "decision_confidence":   dc,
+            # confidence internals (implementation detail — feeds print_health)
             "stable_verdict":         sv,
             "confidence_window":      window_snapshot,
             "confidence_window_size": len(window_snapshot),
-            # failure probability (updated every cycle, trends over rolling window)
+            # failure probability (implementation detail — 1 - print_health)
             "failure_probability":       fp,
             "failure_probability_trend": fp_trend,
             "failure_probability_peak":  round(fp_peak, 4) if fp_peak is not None else None,

@@ -66,15 +66,41 @@ class JobStateReport:
 `job_monitor.get_latest_result(name)` returns a plain dict that extends JobStateReport fields
 with background monitor metadata. Key additions:
 
+### Primary decision fields (use these first)
+
+| Field | Type | Range | Description |
+|-------|------|-------|-------------|
+| `print_health` | float \| None | 0.0–1.0 | **The single number to watch.** 1.0 = fully healthy, 0.0 = likely failing. Higher is better. None before first analysis cycle. |
+| `decision_confidence` | float | 0.0–1.0 | **How much to trust print_health.** < 0.4 = insufficient data; > 0.7 = reliable. Low early in a print — rises as data accumulates. |
+
+### Remaining fields (implementation detail)
+
 | Field | Type | Description |
 |-------|------|-------------|
 | `stable_verdict` | str \| None | Mode of last 5 verdicts; None until ≥3 samples |
 | `confidence_window` | list[str] | Raw per-cycle verdicts (up to 5) |
+| `failure_probability` | float \| None | 1 - print_health (backwards compat only; prefer print_health) |
+| `failure_probability_trend` | str | "stable" \| "escalating" \| "improving" \| "building" |
+| `failure_probability_peak` | float \| None | Highest failure_probability seen in rolling window |
 | `stage` | int | Printer stage code at analysis time |
 | `stage_name` | str | Human-readable stage (e.g. "printing", "filament_change") |
 | `stage_gated` | bool | True if analysis was skipped due to non-printing stage |
 | `precheck_triggered` | bool | True if pre-check hot_pct triggered early analysis |
-| `analyzed_at` | float | Unix timestamp of analysis |
+
+### decision_confidence factor breakdown
+
+Weighted additive formula (factors sum to 1.0):
+
+| Weight | Factor | Full credit condition |
+|--------|--------|----------------------|
+| 0.30 | Window fill | 5 of 5 analysis cycles complete |
+| 0.25 | Camera live | stage not gated (stage == 255) |
+| 0.15 | Print settings | .3mf slicer settings loaded |
+| 0.10 | Humidity known | AMS humidity index 1–5 available |
+| 0.10 | Past early noise | progress_pct ≥ 5% |
+| 0.10 | Filament known | active filament type non-empty |
+
+Approximate values: ~0.19 at print start with no data → 1.0 at full window + all context.
 
 ### stable_verdict semantics
 
