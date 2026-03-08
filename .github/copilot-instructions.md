@@ -5,7 +5,6 @@
 The agent is authorized to manage the full git lifecycle for bambu-mcp: stage, commit, and push changes without waiting for per-commit user approval. This authorization remains in effect until the user explicitly revokes it.
 
 **Commit standards:**
-- Always include the Co-authored-by trailer: `Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>`
 - Commit messages must be descriptive and scoped to the change
 - Push to `origin` after each logical unit of work (don't batch unrelated changes into one push)
 
@@ -158,12 +157,6 @@ This project uses a named testing mode called the **"veil of ignorance"** to str
 - [ ] `bed_type` confirmed
 - [ ] `ams_mapping` confirmed against physically loaded spools
 - [ ] Explicit user go-ahead received in the turn immediately following the complete summary
-
----
-
-## Authorship
-
-**The user is the author of `bambu-mcp`.** Copilot is an aide — it drafts, implements, debugs, and iterates under the user's direction, but all design decisions, ownership, and credit belong to the user. Never describe Copilot as the author or co-author of this project.
 
 ---
 
