@@ -87,6 +87,11 @@ def get_ams_units(name: str) -> dict:
       'AMS_2_PRO', 'AMS_HT'). See the enums knowledge module for all values.
     - On H2D: AMS 2 Pro (chip_id 0, unit_id 0) feeds the RIGHT extruder (extruder 0);
       AMS HT (chip_id 128, unit_id 1) feeds the LEFT extruder (extruder 1).
+    - humidity_index scale: 1=WET (alert, filament needs drying), 5=DRY (good, no action
+      needed). IMPORTANT: higher numbers mean DRIER — the scale is counterintuitive.
+      Only humidity_index values of 1 or 2 indicate a moisture problem. A value of 5
+      means the filament is completely dry. 0 means the sensor reading is unavailable
+      (uninitialized or not supported by this AMS model — do not treat as wet).
     """
     log.debug("get_ams_units: called for name=%s", name)
     state = session_manager.get_state(name)

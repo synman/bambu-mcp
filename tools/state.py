@@ -221,6 +221,11 @@ def get_ams_status(name: str) -> dict:
 
     Each unit includes temperature, humidity, heater state, drying state, and
     tray-existence flags. The global AMS status string is also included.
+
+    humidity_index scale: 1=WET (alert, filament needs drying), 5=DRY (good, no
+    action needed). Higher numbers mean DRIER — the scale is counterintuitive.
+    Only values of 1 or 2 indicate a moisture problem. Value 5 = completely dry.
+    Value 0 = sensor reading unavailable (do not treat as wet).
     """
     log.debug("get_ams_status: called for printer=%s", name)
     state = session_manager.get_state(name)
