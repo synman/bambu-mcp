@@ -61,7 +61,7 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
   cursor:pointer;pointer-events:auto;display:flex;justify-content:space-between;align-items:center;
   user-select:none}
 .hdr:first-child{margin-top:0}
-.hdr-chev{font-size:9px;color:#444;transition:transform .2s;margin-left:4px}
+.hdr-chev{font-size:12px;color:#444;transition:transform .2s;margin-left:4px}
 .hdr-chev.open{transform:rotate(180deg)}
 .hdr-section{overflow:hidden;transition:max-height .25s ease}
 .hdr-section.collapsed{max-height:0}
@@ -113,7 +113,7 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
 #health-panel.hp-wide{width:calc(100vw - 28px)}
 #health-panel .hp-hdr{font-size:10px;color:#555;letter-spacing:.08em;text-transform:uppercase;
   display:flex;justify-content:space-between;align-items:center;cursor:pointer;user-select:none}
-#health-panel .hp-hdr .hp-chev{font-size:9px;color:#555;transition:transform .2s}
+#health-panel .hp-hdr .hp-chev{font-size:12px;color:#555;transition:transform .2s}
 #health-panel .hp-hdr .hp-chev.open{transform:rotate(180deg)}
 #health-panel .hp-body{overflow:hidden;transition:max-height .25s ease}
 #health-panel .hp-body.collapsed{max-height:0}
@@ -162,8 +162,8 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
       <div class="hp-spark-row"><span class="hp-slbl">BED</span><canvas id="hp-bd-canvas" class="hp-spark-mini"></canvas></div>
     </div>
     <div id="hp-anomaly-section" style="display:none">
-      <div class="hdr" onclick="hpAnomalyToggle(this)">Anomaly<span class="hdr-chev open">▲</span></div>
-      <div class="hdr-section" id="hp-sec-anomaly">
+      <div class="hdr" onclick="hpAnomalyToggle(this)">Anomaly<span class="hdr-chev">▲</span></div>
+      <div class="hdr-section collapsed" id="hp-sec-anomaly">
         <img id="hp-anomaly-img" src="" alt="Anomaly detection">
       </div>
     </div>
