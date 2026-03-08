@@ -39,11 +39,75 @@ The key question is **who is consuming the image — the AI or the human?**
   Use `get_snapshot(name)`. The AI consumes the image data directly. Fast, no background
   server left running.
 
+- **Full active job state report** ("check for spaghetti", "analyze the print", "is the
+  print healthy?", "job state", "print health"):
+  Use `analyze_active_job(name)`. Returns a composite dashboard (default categories=["X"]).
+  See the analyze_active_job section below for full guidance.
+
 - **Live stream — programmatic** (user wants to embed the URL, use it in automation, etc.):
   Use `start_stream(name)` to get the URL, then provide it to the user.
 
 - **Check stream state without connecting**:
   Use `get_stream_url(name)` — returns URLs and streaming status without touching the camera.
+
+---
+
+## analyze_active_job — Background Monitor & Composite Report
+
+`analyze_active_job(name, store_as_reference=False, quality="auto", categories=["X"])`
+
+### What it does
+
+Retrieves the latest result from the **background job monitor daemon**, which automatically:
+- Captures a reference frame when a print job starts (no manual `store_as_reference` needed)
+- Runs full analysis every 60 seconds while stage == 255 (printing)
+- Runs a lightweight pre-check every 10 seconds
+- Accumulates a 5-sample confidence window; `stable_verdict` is reliable after 3 cycles
+- Skips analysis when the stage is not 255 (filament change, pause, heating, etc.)
+
+### When to call it
+
+- User asks "check the print", "is anything wrong?", "spaghetti?", "job health"
+- Proactively when `get_hms_errors()` returns active errors during a print
+- Do NOT call it when gcode_state is IDLE, FINISH, or FAILED — returns `{"error": "no_active_job"}`
+
+### Interpreting the result
+
+**`verdict`** — single-frame heuristic result: "clean" | "warning" | "critical"
+  Thresholds (Obico-derived): clean < 0.08, warning 0.08–0.20, critical ≥ 0.20
+
+**`stable_verdict`** — statistical mode of last 5 verdicts; None for first 2 cycles.
+  This is the authoritative verdict to report to the user — not the raw single-frame one.
+  When stable_verdict is None, report "still building confidence (N/5 samples)".
+
+**`yolo_available`** — True if YOLOv11s ONNX model is loaded. False = no ML layer, heuristic only.
+**`yolo_boost`** — score addend from YOLO spaghetti detections (max 0.3 per detection above 0.5 conf).
+**`yolo_detections`** — list of {class, confidence, bbox} — raw ONNX output, not re-derived.
+
+**`stage_gated`** — True when analysis was skipped due to stage != 255. No score or images.
+
+### Categories parameter
+
+Default `categories=["X"]` returns only the composite JPEG dashboard (~25 KB at standard).
+Request more when needed:
+
+| categories | Content | Approx size (standard) |
+|------------|---------|------------------------|
+| `["X"]` | Composite JPEG dashboard | ~25 KB |
+| `["H"]` | Health panel (HMS, temps, fans, AMS) | ~8 KB |
+| `["C"]` | Raw camera frame + diff frame | ~35 KB |
+| `["D"]` | All anomaly detection images | ~80 KB |
+| `["P"]` | Project thumbnail + plate layout | ~20 KB |
+| all | Full suite | ~160 KB |
+
+**Never request all categories from an AI agent context** — the total exceeds MCP size limits
+at standard quality. Only the MJPEG stream browser endpoint requests all categories safely.
+
+### Response field note
+
+The composite image is returned as `job_state_composite_jpg` (JPEG, not PNG).
+PNG assets use `*_png` suffix. This is intentional — JPEG encoding reduces composite
+size from ~600 KB to ~22 KB at standard quality.
 
 ---
 

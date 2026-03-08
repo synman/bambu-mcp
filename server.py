@@ -207,7 +207,7 @@ def _bambu_system_context_prompt() -> str:
 
 # ── Lifecycle ──────────────────────────────────────────────────────────────────
 def _startup() -> None:
-    """Start MQTT sessions for all configured printers and wire data_collector."""
+    """Start MQTT sessions for all configured printers and wire data_collector + job_monitor."""
     try:
         from session_manager import session_manager
         from data_collector import data_collector
@@ -226,6 +226,18 @@ def _startup() -> None:
                 lambda n=name: data_collector.on_update(n, session_manager.get_printer(n))
             )
 
+        # Wire job monitor — auto-reference + 60s analysis loop per printer.
+        try:
+            from camera import job_monitor
+            for name in printer_names:
+                job_monitor.register(name)
+                session_manager.register_update_callback(
+                    lambda n=name: job_monitor.on_update(n)
+                )
+                log.info("job_monitor: registered for %s", name)
+        except Exception as exc:
+            log.warning("job_monitor startup error (monitor disabled): %s", exc)
+
         log.info(f"Started sessions for {len(printer_names)} printer(s): {printer_names}")
 
     except Exception as exc:
@@ -239,10 +251,15 @@ def _startup() -> None:
 
 
 def _shutdown() -> None:
-    """Stop all MQTT sessions and camera streams on exit."""
+    """Stop all MQTT sessions, camera streams, and job monitors on exit."""
     # api_server runs autonomously in a non-daemon thread — do not stop it here.
     # It keeps the process alive after the MCP stdio transport exits, and is
     # terminated only when the process is explicitly killed.
+    try:
+        from camera import job_monitor
+        job_monitor.stop_all()
+    except Exception as exc:
+        log.warning(f"job_monitor shutdown error: {exc}")
     try:
         from camera.mjpeg_server import mjpeg_server
         mjpeg_server.stop_all()

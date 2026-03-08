@@ -154,6 +154,11 @@ class JobStateReport:
     # Quality tier used for all assets
     quality: str = "preview"
 
+    # YOLO detections (additive layer)
+    yolo_detections: list = field(default_factory=list)
+    yolo_boost: float = 0.0
+    yolo_available: bool = False
+
     # P — Project Identity
     project_thumbnail_png: Optional[bytes] = None
     project_layout_png: Optional[bytes] = None
@@ -939,6 +944,14 @@ def analyze(
         frame_rgb, ref_rgb, W, H
     )
 
+    # YOLO additive layer (purely additive — never raises).
+    try:
+        from camera.yolo_detector import detect as _yolo_detect
+        yolo_detections, yolo_boost, yolo_available = _yolo_detect(frame_jpeg)
+        score = min(score + yolo_boost, 1.0)
+    except Exception:
+        yolo_detections, yolo_boost, yolo_available = [], 0.0, False
+
     # Resolve verdict and quality
     if score < _THRESH_WARN:
         verdict = "clean"
@@ -998,6 +1011,9 @@ def analyze(
         diff_score=diff_score,
         reference_age_s=reference_age_s,
         quality=resolved_quality,
+        yolo_detections=yolo_detections,
+        yolo_boost=yolo_boost,
+        yolo_available=yolo_available,
         project_thumbnail_png=project_thumbnail_png,
         project_layout_png=project_layout_png,
         raw_png=raw_png,

@@ -142,4 +142,72 @@ dev_name, dev_connect, dev_bind, dev_version, dev_seclink, dev_cap.
 | get_file_md5 | (file_path: str or Path) | str |
 | jsonSerializer | (obj: Any) [for json.dumps default=] | Any |
 | parseExtruderTrayState | (extruder: int, hotend, slot) | int |
+
+---
+
+## JobStateReport (dataclass)
+
+Located at: bambu-mcp/camera/job_analyzer.py
+
+The complete result of `analyze_active_job()`. All image assets are `bytes` (raw PNG/JPEG).
+When returned through the MCP tool, image bytes are base64-encoded as data URIs.
+
+```python
+@dataclass
+class JobStateReport:
+    # Core spaghetti detection metrics
+    verdict: str                    # "clean" | "warning" | "critical"
+                                    # Thresholds (Obico-derived): clean<0.08, warn<0.20, crit≥0.20
+    score: float                    # Composite heuristic score (0.0–1.0)
+    hot_pct: float                  # Fraction of air-zone pixels above brightness threshold
+    strand_score: float             # Directional kernel response (strand-like structures)
+    edge_density: float             # Mean magnitude across 4-direction edge kernels
+    diff_score: float | None        # Mean absolute difference from reference frame (None if no ref)
+    reference_age_s: float | None   # Seconds since reference was captured (None if no ref)
+    quality: str                    # Resolved quality tier: "preview" | "standard" | "full"
+
+    # YOLO additive layer (YOLOv11s, HuggingFace ApatheticWithoutTheA, mAP@50-95=0.82)
+    yolo_detections: list           # [{class, confidence, bbox:[x1,y1,x2,y2]}] raw ONNX output
+    yolo_boost: float               # Score addend from spaghetti detections > 0.5 conf (× 0.3)
+    yolo_available: bool            # True only if model loaded and inference ran successfully
+
+    # P — Project Identity
+    project_thumbnail_png: bytes | None   # 3MF isometric render (from project cache)
+    project_layout_png: bytes | None      # Annotated top-down plate layout
+
+    # C — Live Camera
+    raw_png: bytes                  # Unprocessed camera frame — no overlays
+    diff_png: bytes | None          # Temporal diff magnitude × direction (only with reference)
+
+    # D — Anomaly Detection
+    air_zone_png: bytes             # Air zone crop enlarged to tier resolution (no overlays)
+    mask_png: bytes                 # Binary threshold mask — algorithm transparency
+    annotated_png: bytes            # Multi-layer detection overlay + score inset panel
+    heat_png: bytes                 # Brightness × strand-likelihood heatmap (air zone)
+    edge_png: bytes                 # Multi-orientation edge/direction map (air zone)
+
+    # H — Print Health
+    health_panel_png: bytes         # HMS errors, detector states, temps, fans, AMS
+
+    # X — Composite
+    job_state_composite_png: bytes  # Full 3×2 dashboard (raw bytes are PNG; MCP tool encodes as JPEG)
+```
+
+### Key semantics
+
+**`stable_verdict`** is NOT a field of JobStateReport — it is computed by the background
+monitor (`job_monitor.py`) across multiple analysis cycles and stored in the cached result dict.
+It is the statistical mode of the last 5 `verdict` values. Tie-breaks to most severe.
+`stable_verdict = None` until ≥3 samples in the window.
+
+**`yolo_boost` formula**: `score += confidence × 0.3` only when class=="spaghetti" AND
+confidence > 0.5. Sourced from Obico multi-frame weighting design. YOLO is purely additive —
+if model unavailable, score is unchanged and yolo_available=False.
+
+**`job_state_composite_png`** internal bytes are PNG. The MCP tool `analyze_active_job()`
+re-encodes this as JPEG and returns it as `job_state_composite_jpg` for compact transport.
+MJPEG stream cache serves raw PNG.
+
+**`confidence_window`** and **`stable_verdict`** live in the background monitor result dict,
+not in JobStateReport. They are appended to the result when `get_latest_result()` is called.
 """

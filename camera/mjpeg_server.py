@@ -127,12 +127,6 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
 .hp-spark-row .hp-slbl{font-size:10px;color:#888;width:44px;flex-shrink:0}
 .hp-spark-row canvas{flex:1;height:28px;border-radius:2px;background:rgba(0,0,0,.3)}
 .hp-spark-mini{flex:1;height:16px !important;border-radius:2px;background:rgba(0,0,0,.3)}
-#hp-ref-row{display:flex;justify-content:space-between;align-items:center;gap:4px;margin-top:4px}
-#hp-ref-row button{font-family:'Courier New',monospace;font-size:10px;padding:2px 5px;
-  background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.15);color:#aaa;
-  border-radius:3px;cursor:pointer;pointer-events:auto;flex:1}
-#hp-ref-row button:hover{background:rgba(255,255,255,.13);color:#ddd}
-#hp-ref-age{font-size:10px;color:#555;text-align:right}
 </style>
 </head>
 <body>
@@ -160,12 +154,6 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
       <div class="hp-spark-row"><span class="hp-slbl">NOZZLE</span><canvas id="hp-nz-canvas" class="hp-spark-mini"></canvas></div>
       <div class="hp-spark-row"><span class="hp-slbl">BED</span><canvas id="hp-bd-canvas" class="hp-spark-mini"></canvas></div>
     </div>
-    <hr class="hp-sep">
-    <div id="hp-ref-row">
-      <button onclick="hpSetRef()">SET REF</button>
-      <button onclick="hpAnalyze()">ANALYZE</button>
-    </div>
-    <div id="hp-ref-age"></div>
   </div>
 </div>
 <div id="hud">
@@ -394,7 +382,7 @@ refreshImages();
 setInterval(refreshImages,15000);
 // Health panel state
 var _hpScores=[];var _hpNozzles=[];var _hpBeds=[];var _hpMaxSamples=30;
-var _hpLastAnalyze=0;var _hpAnalyzeInterval=8000;
+var _hpPollInterval=8000;var _hpLastPoll=0;
 function hpToggle(hdr){
   var body=document.getElementById('hp-body');
   var chev=hdr.querySelector('.hp-chev');
@@ -447,40 +435,18 @@ function hpUpdateFromResult(d){
   document.getElementById('hp-diff').textContent=d.diff_score!==null&&d.diff_score!==undefined?d.diff_score.toFixed(4):'—';
   document.getElementById('hp-layer').textContent=(d.layer&&d.total_layers)?d.layer+'/'+d.total_layers:'—';
   document.getElementById('hp-progress').textContent=d.progress_pct!==undefined?d.progress_pct+'%':'—';
-  if(d.reference_age_s!==null&&d.reference_age_s!==undefined){
-    var m=Math.floor(d.reference_age_s/60);var s=Math.round(d.reference_age_s%60);
-    document.getElementById('hp-ref-age').textContent='ref '+m+'m'+('0'+s).slice(-2)+'s ago';
-  }else{document.getElementById('hp-ref-age').textContent='';}
   _hpScores.push(score);if(_hpScores.length>_hpMaxSamples)_hpScores.shift();
   hpUpdateSparkline('hp-sp-canvas',_hpScores,'#60d080',0,0.3);
 }
 function hpPollJobState(){
   var now=Date.now();
-  if(now-_hpLastAnalyze<_hpAnalyzeInterval)return;
-  _hpLastAnalyze=now;
+  if(now-_hpLastPoll<_hpPollInterval)return;
+  _hpLastPoll=now;
   fetch('/job_state').then(function(r){return r.json();}).then(function(d){
-    if(!d.error)hpUpdateFromResult(d);
+    if(!d.error&&!d.status)hpUpdateFromResult(d);
   }).catch(function(){});
 }
-function hpPollStatus(d){
-  // Update temp sparklines from /status poll data (free — no extra fetch)
-  var nozzle=d.nozzles&&d.nozzles.length?d.nozzles[0].temp:0;
-  var bed=d.bed_temp||0;
-  _hpNozzles.push(nozzle);if(_hpNozzles.length>_hpMaxSamples)_hpNozzles.shift();
-  _hpBeds.push(bed);if(_hpBeds.length>_hpMaxSamples)_hpBeds.shift();
-  hpUpdateSparkline('hp-nz-canvas',_hpNozzles,'#ff9040');
-  hpUpdateSparkline('hp-bd-canvas',_hpBeds,'#80a0ff');
-}
-function hpSetRef(){
-  fetch('/set_reference').then(function(r){return r.json();}).then(function(d){
-    _hpScores=[];
-    document.getElementById('hp-ref-age').textContent=d.ok?'ref stored':'ref failed';
-  }).catch(function(){
-    document.getElementById('hp-ref-age').textContent='ref failed';
-  });
-}
-function hpAnalyze(){_hpLastAnalyze=0;hpPollJobState();}
-// Wire hpPollStatus into existing poll
+// Wire sparkline updates into existing status poll
 var _origUpdate=typeof update==='function'?update:null;
 function _hpPoll(){
   fetch('/status').then(function(r){return r.json();}).then(function(d){
@@ -502,7 +468,13 @@ function _hpPoll(){
         else{b.style.background='rgba(255,255,255,.15)';b.style.height='3px';}
       });
     }else{fpsCont.style.display='none';}
-    hpPollStatus(d);
+    // Update temp sparklines
+    var nozzle=d.nozzles&&d.nozzles.length?d.nozzles[0].temp:0;
+    var bed=d.bed_temp||0;
+    _hpNozzles.push(nozzle);if(_hpNozzles.length>_hpMaxSamples)_hpNozzles.shift();
+    _hpBeds.push(bed);if(_hpBeds.length>_hpMaxSamples)_hpBeds.shift();
+    hpUpdateSparkline('hp-nz-canvas',_hpNozzles,'#ff9040');
+    hpUpdateSparkline('hp-bd-canvas',_hpBeds,'#80a0ff');
     hpPollJobState();
   }).catch(function(){});}
 poll();setInterval(poll,2000);
@@ -610,8 +582,6 @@ class _StreamHandler(BaseHTTPRequestHandler):
             self._serve_snapshot()
         elif path == "/job_state":
             self._serve_job_state()
-        elif path == "/set_reference":
-            self._serve_set_reference()
         else:
             self._serve_stream()
 
@@ -679,7 +649,7 @@ class _StreamHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _serve_job_state(self):
-        """Return the active job state report as JSON (same schema as analyze_active_job MCP tool)."""
+        """Return the cached active job state report from the background monitor."""
         log.debug("_serve_job_state: requested by %s", self.client_address)
         printer_name = getattr(self.server, "printer_name", None)
         if not printer_name:
@@ -691,114 +661,18 @@ class _StreamHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
         try:
-            jpeg = next(iter(self.server.frame_factory()))
-        except Exception as e:
-            log.error("_serve_job_state: frame_factory raised: %s", e, exc_info=True)
-            body = json.dumps({"error": "stream_failed", "detail": str(e)}).encode()
-            self.send_response(503)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-            return
-        try:
-            import base64
-            from camera.job_analyzer import analyze as _analyze, get_reference
-            from session_manager import session_manager
-
-            state  = session_manager.get_state(printer_name)
-            job    = session_manager.get_job(printer_name)
-            config = session_manager.get_config(printer_name)
-
-            if state is None:
-                body = json.dumps({"error": "not_connected"}).encode()
+            from camera import job_monitor
+            result = job_monitor.get_latest_result(printer_name)
+            if result is None:
+                body = json.dumps({"status": "no_data", "printer": printer_name}).encode()
                 self.send_response(503)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
                 return
-
-            climate = state.climate
-            nozzles_list = [
-                {"id": e.id, "temp": e.temp, "target": e.temp_target}
-                for e in (state.extruders or [])
-            ]
-            nozzle = nozzles_list[0]["temp"] if nozzles_list else state.active_nozzle_temp
-            nozzle_target = nozzles_list[0]["target"] if nozzles_list else state.active_nozzle_temp_target
-
-            has_device_error = any(e.get("type") == "device_error" for e in (state.hms_errors or []))
-            hms_errors = [
-                {"code": e.get("code", ""), "msg": e.get("msg", ""), "is_critical": True}
-                for e in (state.hms_errors or [])
-                if e.get("type") == "device_hms" and has_device_error
-            ]
-            detectors = {}
-            if config:
-                detectors = {
-                    "spaghetti_detector": {
-                        "enabled": getattr(config, "spaghetti_detector", False),
-                        "sensitivity": getattr(config, "spaghetti_detector_sensitivity", "medium"),
-                    },
-                    "nozzleclumping_detector": {"enabled": getattr(config, "nozzleclumping_detector", False)},
-                    "airprinting_detector":    {"enabled": getattr(config, "airprinting_detector", False)},
-                }
-
-            active_ams_id = getattr(state, "active_ams_id", -1)
-            ams_hum = 0
-            if active_ams_id >= 0:
-                au = next((u for u in (getattr(state, "ams_units", None) or [])
-                           if u.ams_id == active_ams_id), None)
-                if au:
-                    ams_hum = getattr(au, "humidity_index", 0)
-
-            printer_context = {
-                "job_name":          (job.subtask_name or job.gcode_file or "") if job else "",
-                "gcode_state":       state.gcode_state if state else "IDLE",
-                "layer":             job.current_layer   if job else 0,
-                "total_layers":      job.total_layers    if job else 0,
-                "progress_pct":      job.print_percentage if job else 0,
-                "remaining_minutes": job.remaining_minutes if job else 0,
-                "nozzle_temp":       nozzle,
-                "nozzle_target":     nozzle_target,
-                "bed_temp":          climate.bed_temp        if climate else 0,
-                "bed_target":        climate.bed_temp_target if climate else 0,
-                "chamber_temp":      climate.chamber_temp    if climate else 0,
-                "part_fan_pct":      climate.part_cooling_fan_speed_percent if climate else 0,
-                "aux_fan_pct":       climate.aux_fan_speed_percent          if climate else 0,
-                "exhaust_fan_pct":   climate.exhaust_fan_speed_percent      if climate else 0,
-                "ams_humidity":      ams_hum,
-                "hms_errors":        hms_errors,
-                "detectors":         detectors,
-            }
-            ref_jpeg, ref_age = get_reference(printer_name)
-            report = _analyze(jpeg, printer_context, reference_jpeg=ref_jpeg,
-                              reference_age_s=ref_age, quality="auto")
-
-            def _uri(b):
-                return "data:image/png;base64," + base64.b64encode(b).decode() if b else None
-
-            from datetime import datetime, timezone
-            result = {
-                "verdict":                 report.verdict,
-                "score":                   round(report.score, 4),
-                "hot_pct":                 round(report.hot_pct, 4),
-                "strand_score":            round(report.strand_score, 4),
-                "edge_density":            round(report.edge_density, 4),
-                "diff_score":              round(report.diff_score, 4) if report.diff_score is not None else None,
-                "reference_age_s":         round(report.reference_age_s, 1) if report.reference_age_s is not None else None,
-                "quality":                 report.quality,
-                "layer":                   printer_context["layer"],
-                "total_layers":            printer_context["total_layers"],
-                "progress_pct":            printer_context["progress_pct"],
-                "timestamp":               datetime.now(timezone.utc).isoformat(),
-                "job_state_composite_png": _uri(report.job_state_composite_png),
-                "raw_png":                 _uri(report.raw_png),
-                "annotated_png":           _uri(report.annotated_png),
-                "health_panel_png":        _uri(report.health_panel_png),
-            }
             body = json.dumps(result).encode()
-            log.debug("_serve_job_state: verdict=%s score=%.3f bytes=%d", report.verdict, report.score, len(body))
+            log.debug("_serve_job_state: cached result for %s (%d bytes)", printer_name, len(body))
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -807,36 +681,15 @@ class _StreamHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
         except Exception as e:
             log.error("_serve_job_state: error: %s", e, exc_info=True)
-            body = json.dumps({"error": "analysis_failed", "detail": str(e)}).encode()
+            body = json.dumps({"error": "internal_error", "detail": str(e)}).encode()
             self.send_response(500)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
 
-    def _serve_set_reference(self):
-        """Capture a frame and store it as the reference for this printer (called from browser HUD)."""
-        try:
-            jpeg = next(iter(self.server.frame_factory()))
-        except Exception as e:
-            body = json.dumps({"ok": False, "error": str(e)}).encode()
-            self.send_response(500)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(body)
-            return
-        from camera import job_analyzer
-        job_analyzer.store_reference(self.server.printer_name, jpeg)
-        body = json.dumps({"ok": True, "printer": self.server.printer_name}).encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(body)
+
+
 
     def _serve_snapshot(self):
         """Return a single JPEG frame as image/jpeg and close the connection."""

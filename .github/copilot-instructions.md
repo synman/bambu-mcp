@@ -332,3 +332,124 @@ Before closing any PR that adds/removes BPM methods or HTTP routes:
 - [ ] Every new MCP tool correctly wraps its BPM method with matching semantics
 - [ ] Docstrings are present on both the HTTP route handler and the MCP tool function
 - [ ] `_ROUTE_TAGS` and `_ROUTE_EXAMPLES` entries added for any new HTTP routes (per Swagger standard)
+
+---
+
+## Camera Feature Tier Parity (Mandatory)
+
+**Extension of the BPM Coverage Standard to include the MJPEG camera stream tier.**
+
+bambu-mcp has three distinct listener tiers: MCP tools, HTTP REST API, and MJPEG stream endpoints.
+A camera feature is not fully implemented until it is reachable from all three.
+
+**Hard requirements:**
+- Any new camera analysis or diagnostic feature must be accessible via:
+  1. An MCP tool function in `tools/camera.py`
+  2. An HTTP REST route in `api_server.py`
+  3. A path in `camera/mjpeg_server.py` `do_GET` — either a new endpoint or via the cached `/job_state` result
+- All three tiers must return the same schema fields (modulo encoding — MJPEG may include all categories since browsers have no payload limit).
+- Camera features that are MCP-only or HTTP-only are **incomplete by definition**.
+
+**Coverage audit checklist (run when adding any camera feature):**
+- [ ] MCP tool added to `tools/camera.py`
+- [ ] HTTP route added to `api_server.py` with OpenAPI docstring
+- [ ] MJPEG stream endpoint added or feature surfaced via `/job_state` cache
+- [ ] Same response schema fields across all three tiers
+
+---
+
+## Visual Design Baseline (Mandatory)
+
+**The HUD in `camera/mjpeg_server.py` is the design source of truth for all PIL-rendered PNG assets.**
+
+All new PIL-rendered images in bambu-mcp must use the exact colour tokens, typography, panel anatomy,
+and overlay alphas extracted from the HUD CSS. Do not introduce custom palettes, white backgrounds,
+or system-default widget aesthetics.
+
+**Hard requirements:**
+- All backgrounds: `C_BG_PAGE = (0, 0, 0)` — black. No white, no grey, no system default.
+- Panel overlays: `C_BG_PANEL = (0, 0, 0, 192)` — `rgba(0,0,0,.75)`.
+- Panel borders: `C_BORDER = (255, 255, 255, 20)` — `rgba(255,255,255,.08)`.
+- Verdict badge colours: match HUD badges exactly — clean→`(26,92,42)`/`C_OK`, warning→`(92,74,26)`/`C_WARN`, critical→`(92,26,26)`/`C_CRIT`.
+- Font stack: Courier New → Helvetica.ttc → `ImageFont.load_default()` — matches HUD `'Courier New', monospace`.
+- Overlay alpha values: fill=40/255, outline=230/255 — matches `tools/files.py` plate renderer.
+- Heatmap ramps: use HUD semantic colours (`C_DIM → C_HOT → C_CRIT`) — not matplotlib colormaps.
+- Panel separators: 2px `C_DIM`. No outer padding on composites.
+
+**Before shipping any new PIL-rendered image:**
+- [ ] Background is black, not white or grey
+- [ ] Panel overlays and borders use the extracted HUD RGBA values above
+- [ ] All verdict badges use the exact HUD bg/fg colour pairs
+- [ ] Font resolves Courier New → Helvetica fallback — no hardcoded single font
+
+---
+
+## FastMCP Response Size Constraint (Mandatory)
+
+**Any MCP tool returning image data must default to the minimum viable asset set.**
+
+FastMCP has a practical ~1 MB message size limit. A composite PNG at standard quality is ~600 KB
+base64-encoded. Returning all 11 images unconditionally exceeds the limit at full quality.
+
+**Hard requirements:**
+- Tools that return multiple images MUST have a `categories` parameter (default: minimum useful set).
+- The default must return a single JPEG-encoded composite, not all assets.
+- Composite and health panel images must be encoded as JPEG (not PNG) when returned via MCP tool.
+- Field name convention: JPEG-encoded images use `*_jpg` suffix; PNG-encoded use `*_png`.
+
+**Estimated sizes at standard quality (required in docstring for any image-returning tool):**
+
+| categories | Approx response |
+|------------|----------------|
+| `["X"]` (default) | ~25 KB |
+| `["H"]` | ~8 KB |
+| `["C"]` | ~35 KB |
+| `["D"]` | ~80 KB |
+| `["P"]` | ~20 KB |
+| all categories | ~160 KB |
+
+**MJPEG stream endpoints are exempt** — browsers have no payload size constraints; stream endpoints
+may return all categories unconditionally.
+
+---
+
+## Knowledge Module Maintenance Standard (Mandatory)
+
+**New features are not complete until their knowledge is in the correct modules.**
+
+bambu-mcp uses a two-level knowledge hierarchy:
+- `behavioral_rules_*.py` — agent guidance: when to call, how to interpret results, escalation paths.
+- `api_reference_*.py` — data structures: field names, types, semantics, return shapes.
+
+**Hard requirements:**
+- Any new MCP tool must have its primary guidance in `behavioral_rules_camera.py` (or the relevant sub-module) AND its return schema in `api_reference_dataclasses.py`.
+- Stage codes, threshold values, and enum tables appear in exactly one module — not duplicated.
+- No knowledge module may exceed 200 lines. Split by sub-topic if it does.
+- After any new feature is committed, `get_knowledge_topic('behavioral_rules/camera')` must include the new tool name and guidance.
+- Docstring size estimates, stable_verdict semantics, confidence window interpretation — these belong in the knowledge layer, not repeated in tool docstrings.
+
+**Knowledge update checklist (run on every feature commit):**
+- [ ] `behavioral_rules_camera.py` updated with agent guidance for any new tool
+- [ ] `api_reference_dataclasses.py` updated with new dataclass fields and semantics
+- [ ] No content duplicated across knowledge modules
+- [ ] `get_knowledge_topic()` returns the new content when called
+
+---
+
+## Veil Threshold Citation Requirement (Mandatory)
+
+**Extension of the Veil of Ignorance testing protocol.**
+
+Any threshold value, zone definition, or detection parameter in `camera/` must cite its authoritative
+source. Values derived from training data are veil violations.
+
+**Hard requirements:**
+- Every numeric threshold in camera analysis code must have a source comment: either a first-principles derivation or a named authoritative reference (e.g. "Obico THRESH=0.08", "Bambu xcam sensitivity tiers").
+- Zone definitions (air zone = top 40% × inner 80%) must cite the rationale (geometry, camera FOV) not printer-specific knowledge.
+- If a value was chosen empirically, document it as `# empirical — see session 2026-03-XX` rather than leaving it unexplained.
+- No threshold or zone parameter may be introduced without a source comment. An unexplained numeric constant is a veil violation on its face.
+
+**Verification (add to veil audit checklist):**
+- [ ] Every `THRESH_*`, `*_TRIGGER`, `*_PCT` constant in `camera/` has a source comment
+- [ ] Zone boundary constants have rationale comments
+- [ ] No camera analysis constant is a bare magic number without explanation

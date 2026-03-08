@@ -8,13 +8,15 @@ exclude = ["bambu_mcp.egg-info*", "*.egg-info"]
 
 [project]
 name = "bambu-mcp"
-version = "0.4.0"
+version = "0.4.1"
 requires-python = ">=3.12"
 dependencies = [
     "mcp[cli]==1.26.0",
     "cryptography",
     "av>=14.0",
     "pillow",
+    "numpy",
+    "onnxruntime>=1.17.0",
     "bambu-printer-manager @ git+https://github.com/synman/bambu-printer-manager.git@devel",
     "flask>=3.0",
     "flask-cors>=4.0",

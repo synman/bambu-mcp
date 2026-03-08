@@ -492,6 +492,7 @@ def analyze_active_job(
     name: str,
     store_as_reference: bool = False,
     quality: str = "auto",
+    categories: list = None,
 ) -> dict:
     """
     Capture the live camera frame and produce a full active job state report.
@@ -523,8 +524,17 @@ def analyze_active_job(
       "standard" — 640×360, ~16 KB per asset
       "full"     — original camera resolution
 
-    All images are returned as PNG base64 data URIs (data:image/png;base64,...).
-    The composite dashboard (job_state_composite_png) is the primary output for
+    categories controls which image assets are returned (default: ["X"] — composite only).
+    Pass multiple letters to include more assets. Estimated sizes at standard quality:
+      X only  (default) : ~25 KB total   — composite JPEG dashboard
+      H                 : ~8 KB          — health strip
+      C                 : ~35 KB         — raw + diff frames
+      D                 : ~80 KB         — all anomaly detection images
+      P                 : ~20 KB         — project thumbnail + layout
+      all               : ~160 KB total
+
+    The composite (X) is encoded as JPEG for efficiency. All other assets are PNG.
+    The composite dashboard (job_state_composite_jpg) is the primary output for
     quick inspection; individual category assets are included for detailed analysis.
 
     Returns {"error": "no_camera"} if this printer has no camera.
@@ -534,7 +544,12 @@ def analyze_active_job(
     import base64
     from datetime import datetime, timezone
 
-    log.info("analyze_active_job: called for %s store_ref=%s quality=%s", name, store_as_reference, quality)
+    if categories is None:
+        categories = ["X"]
+    cats = set(c.upper() for c in categories)
+
+    log.info("analyze_active_job: called for %s store_ref=%s quality=%s cats=%s",
+             name, store_as_reference, quality, sorted(cats))
     printer, err = _get_printer_checked(name)
     if err:
         return err
@@ -661,7 +676,21 @@ def analyze_active_job(
             return None
         return "data:image/png;base64," + base64.b64encode(data).decode("ascii")
 
-    return {
+    def _jpg_uri(data: bytes | None) -> str | None:
+        if not data:
+            return None
+        try:
+            from PIL import Image as _PILImage
+            import io as _io
+            img = _PILImage.open(_io.BytesIO(data)).convert("RGB")
+            buf = _io.BytesIO()
+            q = {"preview": 70, "standard": 78, "full": 85}.get(report.quality, 78)
+            img.save(buf, format="JPEG", quality=q, optimize=True)
+            return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+        except Exception:
+            return "data:image/png;base64," + base64.b64encode(data).decode("ascii")
+
+    result = {
         "verdict":               report.verdict,
         "score":                 round(report.score, 4),
         "hot_pct":               round(report.hot_pct, 4),
@@ -670,22 +699,33 @@ def analyze_active_job(
         "diff_score":            round(report.diff_score, 4) if report.diff_score is not None else None,
         "reference_age_s":       round(report.reference_age_s, 1) if report.reference_age_s is not None else None,
         "quality":               report.quality,
+        "yolo_available":        report.yolo_available,
+        "yolo_boost":            round(report.yolo_boost, 4),
+        "yolo_detections":       report.yolo_detections,
         "layer":                 printer_context["layer"],
         "total_layers":          printer_context["total_layers"],
         "progress_pct":          printer_context["progress_pct"],
         "timestamp":             datetime.now(timezone.utc).isoformat(),
-        "job_state_composite_png": _png_uri(report.job_state_composite_png),
-        "raw_png":               _png_uri(report.raw_png),
-        "air_zone_png":          _png_uri(report.air_zone_png),
-        "mask_png":              _png_uri(report.mask_png),
-        "annotated_png":         _png_uri(report.annotated_png),
-        "heat_png":              _png_uri(report.heat_png),
-        "edge_png":              _png_uri(report.edge_png),
-        "diff_png":              _png_uri(report.diff_png),
-        "project_thumbnail_png": _png_uri(report.project_thumbnail_png),
-        "project_layout_png":    _png_uri(report.project_layout_png),
-        "health_panel_png":      _png_uri(report.health_panel_png),
     }
+
+    if "X" in cats:
+        result["job_state_composite_jpg"] = _jpg_uri(report.job_state_composite_png)
+    if "P" in cats:
+        result["project_thumbnail_png"] = _png_uri(report.project_thumbnail_png)
+        result["project_layout_png"]    = _png_uri(report.project_layout_png)
+    if "C" in cats:
+        result["raw_png"]  = _png_uri(report.raw_png)
+        result["diff_png"] = _png_uri(report.diff_png)
+    if "D" in cats:
+        result["air_zone_png"]  = _png_uri(report.air_zone_png)
+        result["mask_png"]      = _png_uri(report.mask_png)
+        result["annotated_png"] = _png_uri(report.annotated_png)
+        result["heat_png"]      = _png_uri(report.heat_png)
+        result["edge_png"]      = _png_uri(report.edge_png)
+    if "H" in cats:
+        result["health_panel_png"] = _png_uri(report.health_panel_png)
+
+    return result
 
 
 def view_stream(name: str) -> dict:

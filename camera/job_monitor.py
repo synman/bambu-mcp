@@ -1,0 +1,452 @@
+"""
+camera/job_monitor.py — Background per-printer job health monitor.
+
+Responsibilities:
+  1. Detect job start: when gcode_state transitions into RUNNING/PAUSE from
+     IDLE/FINISH/FAILED (or on MCP startup when a job is already active), capture
+     the first available camera frame and store it as the diff reference.
+  2. Every 60 seconds while a job is active (RUNNING or PAUSE), run the full
+     analyze() pipeline and cache the resulting JobStateReport.
+  3. Expose get_latest_report(printer_name) so /job_state can serve the cache
+     instantly without triggering a live analysis on every browser poll.
+
+This module is completely independent of the MJPEG stream — it runs even when
+no browser has the stream page open.
+"""
+
+from __future__ import annotations
+
+import logging
+import threading
+import time
+from collections import Counter, deque
+from typing import Optional
+
+log = logging.getLogger(__name__)
+
+# How often to run full analysis while a job is active (seconds).
+ANALYZE_INTERVAL = 60
+# How often to run the fast hot-pixel pre-check (seconds).
+PRECHECK_INTERVAL = 10
+# Hot-pixel threshold that triggers a forced full-analysis cycle.
+PRECHECK_HOT_PCT_TRIGGER = 0.06  # ~Obico warning-grade; sourced from Obico threshold 0.08 minus margin
+
+# States considered "job active".
+_ACTIVE_STATES = {"RUNNING", "PAUSE"}
+# States considered "job idle" (transition from these triggers reference capture).
+_IDLE_STATES = {"IDLE", "FINISH", "FAILED"}
+
+# Stage codes that mean "printing normally" (full analysis runs only in this state).
+# All other codes = gated.  Sources: firmware stage table in get_job_info docstring.
+_STAGE_PRINTING = 255
+_STAGE_NAMES: dict[int, str] = {
+    255: "printing",
+    4:   "filament change",
+    6:   "M400 pause",
+    17:  "user pause",
+    8:   "heating nozzle",
+    1:   "auto-leveling",
+    2:   "heatbed preheat",
+    15:  "nozzle clean",
+    0:   "idle",
+}
+
+# Confidence accumulation: severity ordering for tie-breaking.
+_VERDICT_SEVERITY: dict[str, int] = {"clean": 0, "warning": 1, "critical": 2}
+
+
+def _stable_verdict(window: deque) -> Optional[str]:
+    """Return the mode verdict from the window (min 3 samples); tie-break = more severe."""
+    if len(window) < 3:
+        return None
+    counts = Counter(window)
+    max_count = max(counts.values())
+    # All verdicts tied at the max count — pick most severe.
+    candidates = [v for v, c in counts.items() if c == max_count]
+    return max(candidates, key=lambda v: _VERDICT_SEVERITY.get(v, 0))
+
+# States considered "job finished / idle".
+_IDLE_STATES = {"IDLE", "FINISH", "FAILED", "SLICING", "INIT", ""}
+
+
+class _PrinterMonitor:
+    """Tracks one printer's job state and runs background analysis."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self._lock = threading.Lock()
+        self._last_gcode_state: Optional[str] = None
+        self._latest_report: Optional[object] = None   # JobStateReport
+        self._latest_result: Optional[dict] = None     # serialisable JSON dict
+        self._last_analyze_time: float = 0.0
+        self._last_precheck_time: float = 0.0
+        self._last_precheck_hot_pct: Optional[float] = None
+        self._confidence_window: deque = deque(maxlen=5)
+        self._thread: Optional[threading.Thread] = None
+        self._stop_event = threading.Event()
+
+    # ── Public API ────────────────────────────────────────────────────────────
+
+    def get_latest_result(self) -> Optional[dict]:
+        with self._lock:
+            return self._latest_result
+
+    def start(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._run, name=f"job-monitor-{self.name}", daemon=True
+        )
+        self._thread.start()
+        log.info("job_monitor: started for %s", self.name)
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=5)
+        log.info("job_monitor: stopped for %s", self.name)
+
+    def on_update(self) -> None:
+        """Called by session_manager update callback — fast, non-blocking."""
+        try:
+            from session_manager import session_manager
+            state = session_manager.get_state(self.name)
+            if state is None:
+                return
+            new_state = state.gcode_state or ""
+            prev_state = self._last_gcode_state
+
+            if prev_state == new_state:
+                return
+
+            log.debug("job_monitor[%s]: gcode_state %s → %s", self.name, prev_state, new_state)
+            self._last_gcode_state = new_state
+
+            # Job just became active — store a reference frame immediately.
+            if new_state in _ACTIVE_STATES and (prev_state is None or prev_state in _IDLE_STATES):
+                log.info("job_monitor[%s]: job started (%s) — scheduling initial reference capture", self.name, new_state)
+                # Reset analyze timer so next loop tick triggers immediately.
+                self._last_analyze_time = 0.0
+
+        except Exception as e:
+            log.debug("job_monitor[%s]: on_update error: %s", self.name, e)
+
+    # ── Background loop ───────────────────────────────────────────────────────
+
+    def _run(self) -> None:
+        """Main monitor loop — runs in a daemon thread."""
+        # Give sessions a moment to connect on startup.
+        time.sleep(5)
+
+        # On startup: if a job is already active, treat it as a fresh start.
+        try:
+            from session_manager import session_manager
+            state = session_manager.get_state(self.name)
+            if state and state.gcode_state in _ACTIVE_STATES:
+                log.info("job_monitor[%s]: job already active at startup (%s) — capturing initial reference", self.name, state.gcode_state)
+                self._last_gcode_state = state.gcode_state
+                self._last_analyze_time = 0.0  # run immediately on first tick
+        except Exception as e:
+            log.debug("job_monitor[%s]: startup state check error: %s", self.name, e)
+
+        while not self._stop_event.is_set():
+            try:
+                self._tick()
+            except Exception as e:
+                log.warning("job_monitor[%s]: tick error: %s", self.name, e)
+            # Sleep in short increments so stop_event is responsive.
+            for _ in range(10):
+                if self._stop_event.is_set():
+                    break
+                time.sleep(1)
+
+    def _tick(self) -> None:
+        from session_manager import session_manager
+        state = session_manager.get_state(self.name)
+        if state is None:
+            return
+
+        gcode_state = state.gcode_state or ""
+        if gcode_state not in _ACTIVE_STATES:
+            return  # nothing to do while idle
+
+        now = time.monotonic()
+        stage = getattr(state, "stage", _STAGE_PRINTING)
+        stage_name = _STAGE_NAMES.get(stage, "setup")
+
+        # --- Stage gating ---
+        if stage != _STAGE_PRINTING:
+            # Publish a gated result without running the camera pipeline.
+            if now - self._last_analyze_time >= ANALYZE_INTERVAL:
+                self._last_analyze_time = now
+                self._store_gated_result(stage, stage_name)
+            return
+
+        # --- Fast pre-check (10s) ---
+        precheck_triggered = False
+        if now - self._last_precheck_time >= PRECHECK_INTERVAL:
+            self._last_precheck_time = now
+            precheck_triggered = self._run_precheck()
+
+        # --- Full analysis (60s, or immediately on pre-check trigger) ---
+        due_for_analysis = (now - self._last_analyze_time >= ANALYZE_INTERVAL)
+        if due_for_analysis or precheck_triggered:
+            self._last_analyze_time = now
+            self._run_analyze(state)
+
+    def _run_precheck(self) -> bool:
+        """Lightweight hot-pixel scan.  Returns True if threshold exceeded (triggers full analysis)."""
+        try:
+            jpeg = _capture_one_frame(self.name)
+            if not jpeg:
+                return False
+            import numpy as np
+            from PIL import Image
+            import io
+
+            img  = Image.open(io.BytesIO(jpeg)).convert("RGB")
+            arr  = np.array(img)
+            h, w = arr.shape[:2]
+            # Air zone: top 40% × inner 80%
+            r0, r1 = 0, int(h * 0.40)
+            c0, c1 = int(w * 0.10), int(w * 0.90)
+            zone = arr[r0:r1, c0:c1]
+            brightness = zone.mean(axis=2)
+            hot_pct = float((brightness > 120).sum()) / brightness.size
+
+            with self._lock:
+                self._last_precheck_hot_pct = hot_pct
+
+            triggered = hot_pct >= PRECHECK_HOT_PCT_TRIGGER
+            if triggered:
+                log.info("job_monitor[%s]: pre-check triggered (hot_pct=%.3f ≥ %.3f) — forcing full analysis",
+                         self.name, hot_pct, PRECHECK_HOT_PCT_TRIGGER)
+            return triggered
+        except Exception as e:
+            log.debug("job_monitor[%s]: pre-check error: %s", self.name, e)
+            return False
+
+    def _store_gated_result(self, stage: int, stage_name: str) -> None:
+        """Store a stage-gated result (no camera analysis performed)."""
+        from datetime import datetime, timezone
+        result = {
+            "stage":        stage,
+            "stage_name":   stage_name,
+            "stage_gated":  True,
+            "verdict":      "clean",
+            "score":        0.0,
+            "timestamp":    datetime.now(timezone.utc).isoformat(),
+            "stable_verdict":        None,
+            "confidence_window":     [],
+            "confidence_window_size": 0,
+        }
+        with self._lock:
+            self._latest_result = result
+        log.debug("job_monitor[%s]: stage-gated result stored (stage=%d %s)", self.name, stage, stage_name)
+
+    def _run_analyze(self, state) -> None:
+        """Capture a frame and run the full analysis pipeline."""
+        from camera.job_analyzer import analyze as _analyze, store_reference, get_reference
+        from session_manager import session_manager
+        import base64
+        from datetime import datetime, timezone
+
+        printer_name = self.name
+
+        # Capture frame directly — no dependency on an active MJPEG stream.
+        jpeg: Optional[bytes] = None
+        try:
+            jpeg = _capture_one_frame(printer_name)
+        except Exception as e:
+            log.warning("job_monitor[%s]: frame capture failed: %s", printer_name, e)
+            return
+
+        if not jpeg:
+            log.debug("job_monitor[%s]: no frame available, skipping tick", printer_name)
+            return
+
+        # If no reference is stored yet for this printer, this IS the reference.
+        ref_jpeg, ref_age = get_reference(printer_name)
+        if ref_jpeg is None:
+            log.info("job_monitor[%s]: storing initial reference frame", printer_name)
+            store_reference(printer_name, jpeg)
+            ref_jpeg, ref_age = get_reference(printer_name)
+
+        # Build printer context (mirrors _serve_job_state / analyze_active_job).
+        try:
+            printer_context = _build_context(printer_name, state)
+        except Exception as e:
+            log.warning("job_monitor[%s]: context build failed: %s", printer_name, e)
+            return
+
+        try:
+            report = _analyze(jpeg, printer_context, reference_jpeg=ref_jpeg,
+                              reference_age_s=ref_age, quality="auto")
+        except Exception as e:
+            log.warning("job_monitor[%s]: analyze failed: %s", printer_name, e)
+            return
+
+        # Confidence accumulation — deque(maxlen=5), stable after 3+ samples.
+        with self._lock:
+            self._confidence_window.append(report.verdict)
+            window_snapshot = list(self._confidence_window)
+            precheck_hot_pct = self._last_precheck_hot_pct
+
+        sv = _stable_verdict(self._confidence_window)
+        stage = getattr(state, "stage", _STAGE_PRINTING)
+        stage_name = _STAGE_NAMES.get(stage, "setup")
+
+        def _uri(b):
+            return "data:image/png;base64," + base64.b64encode(b).decode() if b else None
+
+        result = {
+            # core scoring
+            "verdict":        report.verdict,
+            "score":          round(report.score, 4),
+            "hot_pct":        round(report.hot_pct, 4),
+            "strand_score":   round(report.strand_score, 4),
+            "edge_density":   round(report.edge_density, 4),
+            "diff_score":     round(report.diff_score, 4) if report.diff_score is not None else None,
+            "reference_age_s": round(report.reference_age_s, 1) if report.reference_age_s is not None else None,
+            "quality":        report.quality,
+            # stage
+            "stage":          stage,
+            "stage_name":     stage_name,
+            "stage_gated":    False,
+            # pre-check
+            "precheck_hot_pct":     round(precheck_hot_pct, 4) if precheck_hot_pct is not None else None,
+            "precheck_triggered":   (precheck_hot_pct is not None and precheck_hot_pct >= PRECHECK_HOT_PCT_TRIGGER),
+            # confidence
+            "stable_verdict":         sv,
+            "confidence_window":      window_snapshot,
+            "confidence_window_size": len(window_snapshot),
+            # job context
+            "layer":         printer_context.get("layer", 0),
+            "total_layers":  printer_context.get("total_layers", 0),
+            "progress_pct":  printer_context.get("progress_pct", 0),
+            "timestamp":     datetime.now(timezone.utc).isoformat(),
+            # image assets
+            "job_state_composite_png": _uri(report.job_state_composite_png),
+            "raw_png":                 _uri(report.raw_png),
+            "annotated_png":           _uri(report.annotated_png),
+            "health_panel_png":        _uri(report.health_panel_png),
+        }
+
+        with self._lock:
+            self._latest_report = report
+            self._latest_result = result
+
+        log.info("job_monitor[%s]: analysis complete — verdict=%s stable=%s score=%.3f layer=%s/%s",
+                 printer_name, report.verdict, sv or "building",
+                 report.score, printer_context.get("layer", "?"), printer_context.get("total_layers", "?"))
+
+
+# ── Module-level singleton registry ───────────────────────────────────────────
+
+_monitors: dict[str, _PrinterMonitor] = {}
+_registry_lock = threading.Lock()
+
+
+def register(printer_name: str) -> None:
+    """Create and start a monitor for a printer (idempotent)."""
+    with _registry_lock:
+        if printer_name not in _monitors:
+            m = _PrinterMonitor(printer_name)
+            _monitors[printer_name] = m
+            m.start()
+            log.info("job_monitor: registered %s", printer_name)
+
+
+def on_update(printer_name: str) -> None:
+    """Forward a session_manager update event to the relevant monitor."""
+    m = _monitors.get(printer_name)
+    if m:
+        m.on_update()
+
+
+def get_latest_result(printer_name: str) -> Optional[dict]:
+    """Return the most recent cached analysis result, or None if not yet available."""
+    m = _monitors.get(printer_name)
+    return m.get_latest_result() if m else None
+
+
+def stop_all() -> None:
+    """Stop all monitors (called on server shutdown)."""
+    with _registry_lock:
+        for m in _monitors.values():
+            m.stop()
+        _monitors.clear()
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _capture_one_frame(printer_name: str) -> Optional[bytes]:
+    """Capture one JPEG frame using the correct protocol for this printer."""
+    from session_manager import session_manager
+    from tools.camera import _capture_jpeg
+
+    printer = session_manager.get_printer(printer_name)
+    if printer is None:
+        log.debug("job_monitor[%s]: no printer session for frame capture", printer_name)
+        return None
+    return _capture_jpeg(printer)
+
+
+def _build_context(printer_name: str, state) -> dict:
+    """Build the printer_context dict expected by job_analyzer.analyze()."""
+    from session_manager import session_manager
+    job    = session_manager.get_job(printer_name)
+    config = session_manager.get_config(printer_name)
+
+    climate = state.climate
+    nozzles_list = [
+        {"id": e.id, "temp": e.temp, "target": e.temp_target}
+        for e in (state.extruders or [])
+    ]
+    nozzle        = nozzles_list[0]["temp"]   if nozzles_list else getattr(state, "active_nozzle_temp", 0)
+    nozzle_target = nozzles_list[0]["target"] if nozzles_list else getattr(state, "active_nozzle_temp_target", 0)
+
+    has_device_error = any(e.get("type") == "device_error" for e in (state.hms_errors or []))
+    hms_errors = [
+        {"code": e.get("code", ""), "msg": e.get("msg", ""), "is_critical": True}
+        for e in (state.hms_errors or [])
+        if e.get("type") == "device_hms" and has_device_error
+    ]
+
+    detectors = {}
+    if config:
+        detectors = {
+            "spaghetti_detector":      {"enabled": getattr(config, "spaghetti_detector", False),
+                                        "sensitivity": getattr(config, "spaghetti_detector_sensitivity", "medium")},
+            "nozzleclumping_detector": {"enabled": getattr(config, "nozzleclumping_detector", False)},
+            "airprinting_detector":    {"enabled": getattr(config, "airprinting_detector", False)},
+        }
+
+    active_ams_id = getattr(state, "active_ams_id", -1)
+    ams_hum = 0
+    if active_ams_id >= 0:
+        au = next((u for u in (getattr(state, "ams_units", None) or [])
+                   if u.ams_id == active_ams_id), None)
+        if au:
+            ams_hum = getattr(au, "humidity_index", 0)
+
+    return {
+        "job_name":          (job.subtask_name or job.gcode_file or "") if job else "",
+        "gcode_state":       state.gcode_state or "IDLE",
+        "layer":             job.current_layer    if job else 0,
+        "total_layers":      job.total_layers     if job else 0,
+        "progress_pct":      job.print_percentage if job else 0,
+        "remaining_minutes": job.remaining_minutes if job else 0,
+        "nozzle_temp":       nozzle,
+        "nozzle_target":     nozzle_target,
+        "bed_temp":          climate.bed_temp        if climate else 0,
+        "bed_target":        climate.bed_temp_target if climate else 0,
+        "chamber_temp":      climate.chamber_temp    if climate else 0,
+        "part_fan_pct":      climate.part_cooling_fan_speed_percent if climate else 0,
+        "aux_fan_pct":       climate.aux_fan_speed_percent          if climate else 0,
+        "exhaust_fan_pct":   climate.exhaust_fan_speed_percent      if climate else 0,
+        "ams_humidity":      ams_hum,
+        "hms_errors":        hms_errors,
+        "detectors":         detectors,
+    }
