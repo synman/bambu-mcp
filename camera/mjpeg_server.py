@@ -393,7 +393,8 @@ class _MJPEGHTTPServer(ThreadingHTTPServer):
                  status_fn: Callable[[], dict] | None = None,
                  thumbnail_fn: Callable[[], bytes | None] | None = None,
                  layout_fn: Callable[[], bytes | None] | None = None,
-                 fps_cap: float = 30):
+                 fps_cap: float = 30,
+                 printer_name: str = ""):
         super().__init__(addr, handler_class)
         log.debug("_MJPEGHTTPServer.__init__: starting on port %s", addr[1])
         self.frame_factory = frame_factory
@@ -401,6 +402,7 @@ class _MJPEGHTTPServer(ThreadingHTTPServer):
         self.thumbnail_fn = thumbnail_fn
         self.layout_fn = layout_fn
         self.fps_cap = fps_cap
+        self.printer_name = printer_name
         self._running = True
         # FPS tracking — rolling 10s window of frame timestamps; deduplicated by frame id
         self._fps_lock = threading.Lock()
@@ -429,7 +431,8 @@ class _StreamHandler(BaseHTTPRequestHandler):
 
     def _serve_html(self):
         log.debug("_serve_html: serving HTML to %s", self.client_address)
-        body = _HTML_PAGE.encode()
+        title = f"Bambu Cam — {self.server.printer_name}" if self.server.printer_name else "Bambu Cam"
+        body = _HTML_PAGE.replace("<title>Bambu Cam</title>", f"<title>{title}</title>", 1).encode()
         log.debug("_serve_html: %d bytes", len(body))
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -603,7 +606,7 @@ class MJPEGServer:
             server = _MJPEGHTTPServer(
                 ("", allocated_port), _StreamHandler, frame_factory,
                 status_fn=status_fn, thumbnail_fn=thumbnail_fn, layout_fn=layout_fn,
-                fps_cap=fps_cap,
+                fps_cap=fps_cap, printer_name=name,
             )
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
