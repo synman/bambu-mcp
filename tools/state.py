@@ -7,12 +7,48 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import math
 from enum import Enum
+
+import webcolors
+from bpm.bambucommands import FILAMENT_CATALOG
 
 log = logging.getLogger(__name__)
 
 from session_manager import session_manager
 from data_collector import data_collector
+
+# Pre-build CSS3 color lookup: {(r, g, b): name}
+_CSS3_COLORS: dict[tuple, str] = {
+    tuple(webcolors.hex_to_rgb(webcolors.name_to_hex(n))): n
+    for n in webcolors.names("css3")
+}
+
+
+def _hex_to_color_name(hex_color: str) -> str:
+    """Convert a hex color (#RRGGBB or #RRGGBBAA) to the nearest CSS3 color name."""
+    if not hex_color or not hex_color.startswith("#"):
+        return hex_color or ""
+    # Strip alpha channel if present (#RRGGBBAA → #RRGGBB)
+    h = hex_color.lstrip("#")
+    if len(h) == 8:
+        h = h[:6]
+    if len(h) != 6:
+        return hex_color
+    try:
+        rgb = webcolors.hex_to_rgb(f"#{h}")
+    except ValueError:
+        return hex_color
+    # Exact match first
+    exact = _CSS3_COLORS.get(tuple(rgb))
+    if exact:
+        return exact
+    # Nearest neighbor by Euclidean distance in RGB space
+    nearest = min(
+        _CSS3_COLORS.items(),
+        key=lambda item: math.dist(item[0], rgb),
+    )
+    return nearest[1]
 
 
 def _to_dict(obj):
@@ -184,6 +220,27 @@ def get_fan_speeds(name: str) -> dict:
     }
 
 
+# Simple tray_info_idx → display name lookup derived from the canonical BPM catalog.
+_FILAMENT_LOOKUP: dict[str, str] = {e["tray_info_idx"]: e["name"] for e in FILAMENT_CATALOG}
+
+
+def _spool_display_name(spool: dict) -> str:
+    """Synthesize a human-readable name: catalog name + color_name, or type + color_name as fallback."""
+    catalog = _FILAMENT_LOOKUP.get(spool.get("tray_info_idx", ""), "")
+    profile = catalog or spool.get("type", "")
+    color = spool.get("color_name") or spool.get("color", "")
+    if profile and color:
+        return f"{profile} ({color})"
+    return profile or color or ""
+
+
+def _enrich_spool(spool: dict) -> dict:
+    """Add color_name and display_name fields to a serialized spool dict."""
+    spool["color_name"] = _hex_to_color_name(spool.get("color", ""))
+    spool["display_name"] = _spool_display_name(spool)
+    return spool
+
+
 def get_spool_info(name: str) -> dict:
     """
     Return the active spool and a list of all spools associated with the printer.
@@ -199,17 +256,27 @@ def get_spool_info(name: str) -> dict:
     - active_tray_id: slot index within the AMS (0–3). 254 = external spool holder.
     - Each spool dict: filament_type (str), color (hex string e.g. '#FF0000'),
       remaining_pct (0–100), nozzle_temp_min/max (°C), dry_temp (°C), dry_time (hours).
+    - name (if present): Bambu Lab vendor-specific brand label (e.g. "Bambu PLA Basic").
+      Not present on third-party spools and not a reliable identifier. The true identity
+      of a spool is color + tray_info_idx (base profile catalog code, e.g. "GFA00").
+      When name is absent, the vendor name can be derived from tray_info_idx:
+      GFA00="Bambu PLA Basic", GFA01="Bambu PLA Matte", GFB00="Bambu ABS", GFB01="Bambu ASA".
+    - display_name: synthesized human-readable label always present in each spool dict.
+      Rule: "{catalog or type} ({color_name})".
+    - color_name: nearest CSS3 color name for the spool color hex (e.g. "darkorange").
+      Derived from color field; alpha channel stripped before lookup. Use color for
+      programmatic/swatch use; use color_name for human-readable descriptions.
     """
     log.debug("get_spool_info: called for printer=%s", name)
     state = session_manager.get_state(name)
     if state is None:
         log.warning("get_spool_info: printer %s not connected", name)
         return _no_printer(name)
-    all_spools = [_serialize(s) for s in (state.spools or [])]
+    all_spools = [_enrich_spool(_serialize(s)) for s in (state.spools or [])]
     active = None
     for s in (state.spools or []):
         if s.ams_id == state.active_ams_id and s.slot_id == state.active_tray_id:
-            active = _serialize(s)
+            active = _enrich_spool(_serialize(s))
             break
     log.debug("get_spool_info: returning result for %s", name)
     return {"active_spool": active, "spools": all_spools}

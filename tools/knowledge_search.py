@@ -9,12 +9,43 @@ import logging
 log = logging.getLogger(__name__)
 
 _KNOWN_TOPICS: dict[str, tuple[str, str]] = {
+    # Top-level topics
     "behavioral_rules": ("knowledge.behavioral_rules", "BEHAVIORAL_RULES_TEXT"),
     "protocol":         ("knowledge.protocol",          "PROTOCOL_TEXT"),
     "enums":            ("knowledge.enums",             "ENUMS_TEXT"),
     "api_reference":    ("knowledge.api_reference",     "API_REFERENCE_TEXT"),
     "references":       ("knowledge.references",        "REFERENCES_TEXT"),
     "fallback_strategy":("knowledge.fallback_strategy", "ESCALATION_POLICY_TEXT"),
+    "http_api":         ("knowledge.http_api",          "HTTP_API_TEXT"),
+    # behavioral_rules sub-topics
+    "behavioral_rules/camera":      ("knowledge.behavioral_rules_camera",      "BEHAVIORAL_RULES_CAMERA_TEXT"),
+    "behavioral_rules/print_state": ("knowledge.behavioral_rules_print_state", "BEHAVIORAL_RULES_PRINT_STATE_TEXT"),
+    "behavioral_rules/methodology": ("knowledge.behavioral_rules_methodology", "BEHAVIORAL_RULES_METHODOLOGY_TEXT"),
+    "behavioral_rules/mcp_patterns":("knowledge.behavioral_rules_mcp_patterns","BEHAVIORAL_RULES_MCP_PATTERNS_TEXT"),
+    # api_reference sub-topics
+    "api_reference/session":        ("knowledge.api_reference_session",        "API_REFERENCE_SESSION_TEXT"),
+    "api_reference/files":          ("knowledge.api_reference_files",          "API_REFERENCE_FILES_TEXT"),
+    "api_reference/print":          ("knowledge.api_reference_print",          "API_REFERENCE_PRINT_TEXT"),
+    "api_reference/ams":            ("knowledge.api_reference_ams",            "API_REFERENCE_AMS_TEXT"),
+    "api_reference/state":          ("knowledge.api_reference_state",          "API_REFERENCE_STATE_TEXT"),
+    "api_reference/dataclasses":    ("knowledge.api_reference_dataclasses",    "API_REFERENCE_DATACLASSES_TEXT"),
+    # protocol sub-topics
+    "protocol/concepts":            ("knowledge.protocol_concepts",            "PROTOCOL_CONCEPTS_TEXT"),
+    "protocol/mqtt":                ("knowledge.protocol_mqtt",                "PROTOCOL_MQTT_TEXT"),
+    "protocol/hms":                 ("knowledge.protocol_hms",                 "PROTOCOL_HMS_TEXT"),
+    "protocol/3mf":                 ("knowledge.protocol_3mf",                 "PROTOCOL_3MF_TEXT"),
+    # enums sub-topics
+    "enums/printer":                ("knowledge.enums_printer",                "ENUMS_PRINTER_TEXT"),
+    "enums/ams":                    ("knowledge.enums_ams",                    "ENUMS_AMS_TEXT"),
+    "enums/filament":               ("knowledge.enums_filament",               "ENUMS_FILAMENT_TEXT"),
+    # http_api sub-topics
+    "http_api/printer":  ("knowledge.http_api_printer",  "HTTP_API_PRINTER_TEXT"),
+    "http_api/print":    ("knowledge.http_api_print",    "HTTP_API_PRINT_TEXT"),
+    "http_api/ams":      ("knowledge.http_api_ams",      "HTTP_API_AMS_TEXT"),
+    "http_api/climate":  ("knowledge.http_api_climate",  "HTTP_API_CLIMATE_TEXT"),
+    "http_api/hardware": ("knowledge.http_api_hardware", "HTTP_API_HARDWARE_TEXT"),
+    "http_api/files":    ("knowledge.http_api_files",    "HTTP_API_FILES_TEXT"),
+    "http_api/system":   ("knowledge.http_api_system",   "HTTP_API_SYSTEM_TEXT"),
 }
 
 
@@ -86,10 +117,36 @@ def get_knowledge_topic(topic: str) -> dict | str:
     Return the full text of a knowledge module by topic name.
 
     topic must be one of: behavioral_rules, protocol, enums, api_reference,
-    references, fallback_strategy. Returns a list of available topics if the
+    references, fallback_strategy, http_api. Returns a list of available topics if the
     given topic is not recognized.
     Returns the full text of the named knowledge module as a string. Returns a list
     of available topic names if the given topic is not recognized.
+
+    Sub-topics use slash notation and return focused content slices (≤10 KB each):
+    - behavioral_rules/camera — camera tools, stream HUD overlay, data_uri handling
+    - behavioral_rules/print_state — gcode_state FAILED, HMS active/historical, stage codes
+    - behavioral_rules/methodology — KISS, quality-first, verification, parity, cross-model
+    - behavioral_rules/mcp_patterns — array param pattern, multi-level hierarchy, compressed responses
+    - api_reference/session — BambuPrinter session management and raw command methods
+    - api_reference/files — FTPS file management methods
+    - api_reference/print — print control, temperature, and fan methods
+    - api_reference/ams — AMS, spool, calibration, hardware, and xcam detector methods
+    - api_reference/state — properties, BambuConfig, PrinterCapabilities, BambuState
+    - api_reference/dataclasses — BambuSpool, ProjectInfo, ActiveJobInfo, utility functions
+    - protocol/concepts — Bambu Lab protocol glossary and terminology
+    - protocol/mqtt — MQTT topics, message types, home_flag bitfield, xcam fields
+    - protocol/hms — HMS error structure and firmware upgrade state fields
+    - protocol/3mf — 3MF structure, SSDP, AMS info parsing, FTPS, extruder block
+    - enums/printer — PrinterModel, PrinterSeries, ActiveTool, ServiceState, AirConditioningMode
+    - enums/ams — AMS, TrayState, ExtruderInfoState, ExtruderStatus enums
+    - enums/filament — NozzleDiameter, NozzleType, PlateType, PrintOption, Stage enums
+    - http_api/printer — printer state and session management REST routes
+    - http_api/print — print control REST routes (start, pause, stop, speed, skip, gcode)
+    - http_api/ams — AMS and filament REST routes
+    - http_api/climate — temperature, fan, and lighting REST routes
+    - http_api/hardware — nozzle config and AI vision detector REST routes
+    - http_api/files — SD card file management REST routes
+    - http_api/system — system, diagnostics, and API documentation REST routes
     """
     log.debug("get_knowledge_topic: topic=%s", topic)
     if topic not in _KNOWN_TOPICS:

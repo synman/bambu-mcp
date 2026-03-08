@@ -125,8 +125,12 @@ def set_ams_filament_setting(
     filament_id is the Bambu Lab tray_info_idx (e.g. 'GFA00'). Pass 'no_filament' to
     clear the slot. color may be a CSS name or RRGGBB hex string.
     filament_id is the Bambu Lab catalog material code (tray_info_idx), e.g. 'GFA00' for
-    Bambu PLA Basic. This is a lookup key from Bambu's filament database and determines
-    temperature profiles and color defaults. Pass 'no_filament' to mark the slot as empty.
+    Bambu PLA Basic. This is a primary identity field — a lookup key from Bambu's filament
+    database that encodes temperature profiles, drying parameters, and flow characteristics.
+    Pass 'no_filament' to mark the slot as empty.
+    filament_name is a Bambu Lab vendor-specific brand label (e.g. 'Bambu PLA Basic').
+    It is optional, absent on third-party spools, and NOT a reliable spool identifier.
+    The true identity of a spool is color + filament_id (base profile), not this name field.
     Pass -1 for nozzle_temp_min or nozzle_temp_max to keep the existing value or let the
     printer use the filament_id defaults.
     Requires user_permission=True.
@@ -345,10 +349,13 @@ def set_ams_user_setting(
     Supported settings: 'calibrate_remain_flag' (spool-weight based remaining
     estimation), 'startup_read_option' (RFID scan on power-on), 'tray_read_option'
     (RFID scan on spool insert). Requires user_permission=True.
-    'calibrate_remain_flag' = estimate remaining filament by spool weight (requires AMS with
-    weight sensors). 'startup_read_option' = scan RFID tags on all loaded spools when the
-    printer powers on (to detect filament changes while powered off). 'tray_read_option' = scan
-    RFID tag when a spool is inserted into an AMS slot.
+    'calibrate_remain_flag' = estimate remaining filament by tracking spool weight.
+      Requires an AMS unit with built-in weight sensors (AMS 2 Pro only). AMS Lite
+      and AMS HT do not have weight sensors — enabling this on those units has no effect.
+    'startup_read_option' = scan RFID tags on all loaded spools when the printer powers on,
+      to detect filament changes made while the printer was off.
+    'tray_read_option' = scan the RFID tag when a spool is inserted into an AMS slot,
+      auto-populating filament type, color, and temperature profile from the tag.
     """
     log.debug("set_ams_user_setting: called for name=%s setting=%s value=%s user_permission=%s", name, setting, value, user_permission)
     if not user_permission:

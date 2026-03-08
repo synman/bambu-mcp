@@ -35,6 +35,18 @@ def get_detector_settings(name: str) -> dict:
     spaghetti-like strands indicating a print failure. 'airprinting_detector' = detects the
     nozzle extruding into open air (clog). Each returns enabled (bool) and sensitivity
     ('low'/'medium'/'high').
+
+    Also returns 'nozzle_blob_detect' and 'air_print_detect' — these are the older
+    firmware-level (home_flag) counterparts to the xcam detectors:
+      - nozzle_blob_detect (home_flag) is the legacy blob flag; nozzleclumping_detector
+        (xcam) is the newer AI-vision version of the same detection. On supported printers
+        both can be active; the xcam detector is preferred for sensitivity control.
+      - air_print_detect (home_flag) is the legacy air-printing flag; airprinting_detector
+        (xcam) is the newer AI-vision version. Same relationship.
+
+    Note: first_layer_inspection is NOT included here because it has no persistent
+    config field — its support is indicated only by the has_lidar capability flag.
+    Use set_first_layer_inspection() to control it and get_capabilities() to check support.
     """
     log.debug("get_detector_settings: called for name=%s", name)
     config = session_manager.get_config(name)
@@ -88,8 +100,12 @@ def set_spaghetti_detection(
     """
     Enable or disable the spaghetti / failed-print detector (X-Cam AI vision).
 
+    Detects loose strands of filament ("spaghetti") extruded in mid-air rather than
+    adhering to the print — the classic sign of a delaminated or detached print.
     When triggered, the printer halts the print. sensitivity must be one of:
-    'low', 'medium', 'high'. Requires user_permission=True.
+    'low', 'medium', 'high'. Low = fewer false positives (better for complex overhangs);
+    high = catches more subtle failures earlier. Requires has_spaghetti_detector_support.
+    Requires user_permission=True.
     """
     log.debug("set_spaghetti_detection: called for name=%s enabled=%s sensitivity=%s user_permission=%s", name, enabled, sensitivity, user_permission)
     if not user_permission:
@@ -125,9 +141,11 @@ def set_buildplate_marker_detection(
     Build plates have printed ArUco markers (visual fiducial patterns) on their surface.
     The camera reads these markers before the print starts to verify the plate type
     (e.g. textured PEI vs. smooth PEI). If the plate is incompatible with the sliced print
-    settings, the printer pauses. Disable this if your plate's markers are worn or obscured.
-    When enabled, the camera verifies the build surface is compatible before
-    starting a print. Requires user_permission=True.
+    settings, the printer pauses before the first layer. Disable this if your plate's
+    markers are worn, obscured, or you are using a third-party plate without markers.
+    This detector runs pre-print only — not during the print. No sensitivity parameter.
+    Requires has_buildplate_marker_detector_support.
+    Requires user_permission=True.
     """
     log.debug("set_buildplate_marker_detection: called for name=%s enabled=%s user_permission=%s", name, enabled, user_permission)
     if not user_permission:
@@ -158,10 +176,9 @@ def set_first_layer_inspection(
     After the first layer completes, a LiDAR (laser distance sensor, built into X1/H2D
     series) or camera scans the surface to verify the layer adhered correctly. If adhesion
     problems are detected (gaps, lifting corners, incomplete coverage), the printer pauses.
-    Not available on printers without LiDAR (A1, P1 series) — the command is accepted but
-    has no effect.
-    The printer scans the first layer for adhesion issues and can pause or report
-    problems. Requires an AI camera module (has_lidar capability).
+    Only available on printers with LiDAR (has_lidar capability = True). On printers without
+    LiDAR (A1, P1 series) the command is accepted but has no effect. Check
+    get_capabilities().has_lidar before enabling. No sensitivity parameter.
     Requires user_permission=True.
     """
     log.debug("set_first_layer_inspection: called for name=%s enabled=%s user_permission=%s", name, enabled, user_permission)
@@ -201,9 +218,15 @@ def set_air_printing_detection(
     """
     Enable or disable the air-printing / no-extrusion detector (X-Cam AI vision).
 
-    When triggered, the printer halts because the nozzle is detected to be
-    extruding into open air (indicating a clog or grinding condition).
-    sensitivity must be one of: 'low', 'medium', 'high'. Requires user_permission=True.
+    This is the newer xcam AI-vision detector for air printing. Detects when the nozzle
+    moves and extrudes but no filament is being laid down — indicating a clog, grinding,
+    or complete filament break. When triggered, the printer halts.
+    Note: there is also a legacy 'air_print_detect' PrintOption (home_flag bit 28) that
+    covers the same condition via an older firmware path. On supported printers, this xcam
+    detector (has_airprinting_detector_support) is preferred as it offers sensitivity control.
+    sensitivity must be one of: 'low', 'medium', 'high'. Low = fewer false positives;
+    high = catches intermittent or subtle under-extrusion earlier.
+    Requires user_permission=True.
     """
     log.debug("set_air_printing_detection: called for name=%s enabled=%s sensitivity=%s user_permission=%s", name, enabled, sensitivity, user_permission)
     if not user_permission:
@@ -237,10 +260,15 @@ def set_nozzle_clumping_detection(
     """
     Enable or disable the nozzle clumping / blob detector (X-Cam AI vision).
 
-    When triggered, the printer halts the print. Detects filament accumulating
-    as a blob or clump around the nozzle tip — a condition that can damage the
-    nozzle, toolhead, or print if left unchecked.
-    sensitivity must be one of: 'low', 'medium', 'high'. Requires user_permission=True.
+    This is the newer xcam AI-vision detector for nozzle clumping. Detects filament
+    accumulating as a blob or clump around the nozzle tip — can damage the nozzle,
+    toolhead, or print surface if left unchecked. When triggered, the printer halts.
+    Note: there is also a legacy 'nozzle_blob_detect' PrintOption (home_flag bit 24) that
+    covers the same condition via an older firmware path. On supported printers, this xcam
+    detector (has_nozzleclumping_detector_support) is preferred as it offers sensitivity control.
+    sensitivity must be one of: 'low', 'medium', 'high'. Low = fewer false positives;
+    high = catches smaller accumulations earlier (recommended for abrasive materials).
+    Requires user_permission=True.
     """
     log.debug("set_nozzle_clumping_detection: called for name=%s enabled=%s sensitivity=%s user_permission=%s", name, enabled, sensitivity, user_permission)
     if not user_permission:
@@ -273,8 +301,11 @@ def set_purge_chute_detection(
 
     When triggered, the printer halts the print. Detects when purged filament
     waste accumulates in the purge chute to a level that could block the toolhead
-    or cause jams during multi-color prints.
-    sensitivity must be one of: 'low', 'medium', 'high'. Requires user_permission=True.
+    or cause jams. This detector is primarily relevant during multi-color prints —
+    single-color prints generate minimal purge waste. Disable only if you are
+    experiencing false positives on single-color prints.
+    sensitivity must be one of: 'low', 'medium', 'high'. Requires
+    has_purgechutepileup_detector_support. Requires user_permission=True.
     """
     log.debug("set_purge_chute_detection: called for name=%s enabled=%s sensitivity=%s user_permission=%s", name, enabled, sensitivity, user_permission)
     if not user_permission:

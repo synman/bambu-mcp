@@ -239,12 +239,24 @@ def set_print_option(
     Supported options: 'auto_recovery', 'filament_tangle_detect', 'sound_enable',
     'auto_switch_filament', 'nozzle_blob_detect', 'air_print_detect'.
     Requires user_permission=True.
-    Options: 'auto_recovery' = resume print automatically after a power loss or failure.
-    'filament_tangle_detect' = pause the print if sensors detect a filament tangle in the AMS.
-    'sound_enable' = enable audible beep notifications. 'auto_switch_filament' = automatically
-    load the next AMS slot when a spool runs out. 'nozzle_blob_detect' = pause the print if a
-    filament blob accumulates on the nozzle. 'air_print_detect' = pause the print if the nozzle
-    is detected extruding into open air (indicates a clog or grinding condition).
+    Options:
+    'auto_recovery' = resume print automatically after a power loss or hardware fault.
+    'filament_tangle_detect' = pause the print if AMS sensors detect a filament tangle.
+      Requires has_filament_tangle_detect_support. Only meaningful when AMS is present
+      and actively feeding — has no effect during external spool or standalone prints.
+    'sound_enable' = enable audible beep notifications for print events.
+      Requires has_sound_enable_support.
+    'auto_switch_filament' = automatically switch to another AMS slot when the active
+      spool runs out, provided a slot with the same filament type AND color is available.
+      AMS-hosted spools only — external spool holder spools are not eligible.
+    'nozzle_blob_detect' = legacy firmware-level (home_flag) flag that pauses the print
+      if a filament blob accumulates on the nozzle. This is the older control path.
+      On printers that support it, prefer set_nozzle_clumping_detection() (xcam AI detector)
+      which offers sensitivity control. Requires has_nozzle_blob_detect_support.
+    'air_print_detect' = legacy firmware-level (home_flag) flag that pauses the print if
+      the nozzle is detected extruding into open air (clog or grinding). Older control path.
+      On printers that support it, prefer set_air_printing_detection() (xcam AI detector)
+      which offers sensitivity control. Requires has_air_print_detect_support.
     """
     log.debug("set_print_option: called for name=%s option=%s enabled=%s user_permission=%s", name, option, enabled, user_permission)
     if not user_permission:

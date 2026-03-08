@@ -128,6 +128,117 @@ _ROUTE_ENUM_VALUES: dict[tuple[str, str], list] = {
 }
 
 
+_PRINTER_DESC = "Printer name. Omit to use the default printer."
+
+_ROUTE_PARAM_DESCRIPTIONS: dict[tuple[str, str], str] = {
+    # ── Shared ─────────────────────────────────────────────────────────────────
+    ("set_tool_target_temp",            "printer"):     _PRINTER_DESC,
+    ("set_bed_target_temp",             "printer"):     _PRINTER_DESC,
+    ("set_chamber_target_temp",         "printer"):     _PRINTER_DESC,
+    ("set_aux_fan_speed_target",        "printer"):     _PRINTER_DESC,
+    ("set_exhaust_fan_speed_target",    "printer"):     _PRINTER_DESC,
+    ("set_fan_speed_target",            "printer"):     _PRINTER_DESC,
+    ("set_light_state",                 "printer"):     _PRINTER_DESC,
+    ("set_speed_level",                 "printer"):     _PRINTER_DESC,
+    ("unload_filament",                 "printer"):     _PRINTER_DESC,
+    ("load_filament",                   "printer"):     _PRINTER_DESC,
+    ("refresh_spool_rfid",              "printer"):     _PRINTER_DESC,
+    ("set_spool_details",               "printer"):     _PRINTER_DESC,
+    ("resume_printing",                 "printer"):     _PRINTER_DESC,
+    ("pause_printing",                  "printer"):     _PRINTER_DESC,
+    ("stop_printing",                   "printer"):     _PRINTER_DESC,
+    ("print_3mf",                       "printer"):     _PRINTER_DESC,
+    ("skip_objects",                    "printer"):     _PRINTER_DESC,
+    ("refresh_sdcard_3mf_files",        "printer"):     _PRINTER_DESC,
+    ("get_sdcard_3mf_files",            "printer"):     _PRINTER_DESC,
+    ("refresh_sdcard_contents",         "printer"):     _PRINTER_DESC,
+    ("get_sdcard_contents",             "printer"):     _PRINTER_DESC,
+    ("delete_sdcard_file",              "printer"):     _PRINTER_DESC,
+    ("make_sdcard_directory",           "printer"):     _PRINTER_DESC,
+    ("rename_sdcard_file",              "printer"):     _PRINTER_DESC,
+    ("upload_file_to_printer",          "printer"):     _PRINTER_DESC,
+    ("download_file_from_printer",      "printer"):     _PRINTER_DESC,
+    ("set_buildplate_marker_detector",  "printer"):     _PRINTER_DESC,
+    ("set_spaghetti_detector",          "printer"):     _PRINTER_DESC,
+    ("set_purgechutepileup_detector",   "printer"):     _PRINTER_DESC,
+    ("set_nozzleclumping_detector",     "printer"):     _PRINTER_DESC,
+    ("set_airprinting_detector",        "printer"):     _PRINTER_DESC,
+    ("set_print_option",                "printer"):     _PRINTER_DESC,
+    ("send_gcode",                      "printer"):     _PRINTER_DESC,
+    ("send_ams_control_command",        "printer"):     _PRINTER_DESC,
+    ("set_ams_user_setting",            "printer"):     _PRINTER_DESC,
+    ("set_nozzle_details",              "printer"):     _PRINTER_DESC,
+    ("refresh_nozzles",                 "printer"):     _PRINTER_DESC,
+    ("get_3mf_props_for_file",          "printer"):     _PRINTER_DESC,
+    ("get_current_3mf_props",           "printer"):     _PRINTER_DESC,
+    ("trigger_printer_refresh",         "printer"):     _PRINTER_DESC,
+    ("toggle_active_tool",              "printer"):     _PRINTER_DESC,
+    ("toggle_session",                  "printer"):     _PRINTER_DESC,
+    ("get_printer_info",                "printer"):     _PRINTER_DESC,
+    # ── Climate ────────────────────────────────────────────────────────────────
+    ("set_tool_target_temp",            "temp"):        "Target nozzle temperature in °C. Use 0 to turn off.",
+    ("set_bed_target_temp",             "temp"):        "Target bed temperature in °C. Use 0 to turn off.",
+    ("set_chamber_target_temp",         "temp"):        "Target chamber temperature in °C. Use 0 to turn off.",
+    ("set_aux_fan_speed_target",        "percent"):     "Aux fan speed 0–100%.",
+    ("set_exhaust_fan_speed_target",    "percent"):     "Exhaust fan speed 0–100%.",
+    ("set_fan_speed_target",            "percent"):     "Part cooling fan speed 0–100%.",
+    ("set_light_state",                 "state"):       "Light state.",
+    # ── Print control ──────────────────────────────────────────────────────────
+    ("set_speed_level",                 "level"):       "Print speed profile.",
+    ("load_filament",                   "slot"):        "AMS slot index (0–3).",
+    ("refresh_spool_rfid",              "slot_id"):     "Slot index within the AMS unit (0–3).",
+    ("refresh_spool_rfid",              "ams_id"):      "AMS unit index (0-based).",
+    ("print_3mf",                       "filename"):    "Full SD card path to the .3mf file (e.g. /_jobs/myprint.gcode.3mf).",
+    ("print_3mf",                       "platenum"):    "Plate number within the .3mf project (1-based).",
+    ("print_3mf",                       "plate"):       "Build plate surface type.",
+    ("print_3mf",                       "use_ams"):     "Use AMS filament mapping from the project file.",
+    ("print_3mf",                       "ams_mapping"): "JSON array overriding AMS slot assignment (e.g. [1,-1,-1,-1]). Omit to use project defaults.",
+    ("print_3mf",                       "bl"):          "Run bed leveling before printing.",
+    ("print_3mf",                       "flow"):        "Run flow/extrusion calibration before printing.",
+    ("print_3mf",                       "tl"):          "Record a timelapse of the print.",
+    ("skip_objects",                    "objects"):     "Comma-separated list of object identify_id values to skip.",
+    # ── Spool / AMS ────────────────────────────────────────────────────────────
+    ("set_spool_details",               "tray_id"):       "Absolute tray ID: ams_unit_index × 4 + slot (0–3). External spool = 254.",
+    ("set_spool_details",               "tray_info_idx"): "Bambu filament catalog ID (e.g. GFA00). Use 'no_filament' to clear.",
+    ("set_spool_details",               "tray_id_name"):  "Filament brand/product name label.",
+    ("set_spool_details",               "tray_type"):     "Filament type string (e.g. PLA, PETG, ABS).",
+    ("set_spool_details",               "tray_color"):    "Filament color as RRGGBB hex (e.g. FF0000).",
+    ("set_spool_details",               "nozzle_temp_min"): "Minimum nozzle temperature in °C. Pass -1 to keep existing.",
+    ("set_spool_details",               "nozzle_temp_max"): "Maximum nozzle temperature in °C. Pass -1 to keep existing.",
+    ("send_ams_control_command",        "cmd"):          "AMS control command.",
+    ("set_ams_user_setting",            "setting"):      "AMS user setting to toggle.",
+    ("set_ams_user_setting",            "enabled"):      "Enable or disable the setting.",
+    # ── File management ────────────────────────────────────────────────────────
+    ("delete_sdcard_file",              "file"):        "Full SD card path of the file to delete.",
+    ("make_sdcard_directory",           "dir"):         "Full SD card path of the directory to create.",
+    ("rename_sdcard_file",              "src"):         "Current full SD card path.",
+    ("rename_sdcard_file",              "dest"):        "New full SD card path.",
+    ("upload_file_to_printer",          "src"):         "Local filename as uploaded via multipart POST to the host.",
+    ("upload_file_to_printer",          "dest"):        "Destination path on the printer SD card.",
+    ("download_file_from_printer",      "src"):         "Full SD card path of the file to download.",
+    ("get_3mf_props_for_file",          "file"):        "Full SD card path to the .3mf file.",
+    ("get_3mf_props_for_file",          "plate"):       "Plate number within the .3mf project (1-based). Use 0 to return all plates.",
+    # ── AI detectors ───────────────────────────────────────────────────────────
+    ("set_buildplate_marker_detector",  "enabled"):     "Enable or disable the detector.",
+    ("set_spaghetti_detector",          "enabled"):     "Enable or disable the detector.",
+    ("set_spaghetti_detector",          "sensitivity"): "Detection sensitivity.",
+    ("set_purgechutepileup_detector",   "enabled"):     "Enable or disable the detector.",
+    ("set_purgechutepileup_detector",   "sensitivity"): "Detection sensitivity.",
+    ("set_nozzleclumping_detector",     "enabled"):     "Enable or disable the detector.",
+    ("set_nozzleclumping_detector",     "sensitivity"): "Detection sensitivity.",
+    ("set_airprinting_detector",        "enabled"):     "Enable or disable the detector.",
+    ("set_airprinting_detector",        "sensitivity"): "Detection sensitivity.",
+    # ── Print options ──────────────────────────────────────────────────────────
+    ("set_print_option",                "option"):      "Print option to toggle.",
+    ("set_print_option",                "enabled"):     "Enable or disable the option.",
+    # ── G-code ─────────────────────────────────────────────────────────────────
+    ("send_gcode",                      "gcode"):       "G-code commands to send. Use | as a newline separator for multiple commands.",
+    # ── Nozzle hardware ────────────────────────────────────────────────────────
+    ("set_nozzle_details",              "nozzle_diameter"): "Nozzle diameter in mm.",
+    ("set_nozzle_details",              "nozzle_type"):     "Nozzle material type.",
+}
+
+
 def _extract_query_params(view_func: Callable) -> list[dict]:
     log.debug("_extract_query_params: func=%s", view_func.__name__)
     try:
@@ -494,6 +605,9 @@ def build_openapi_document(flask_app) -> dict:
             enum_vals = _ROUTE_ENUM_VALUES.get((ep, p["name"]))
             if enum_vals:
                 p["schema"]["enum"] = enum_vals
+            pdesc = _ROUTE_PARAM_DESCRIPTIONS.get((ep, p["name"]))
+            if pdesc:
+                p["description"] = pdesc
 
         # Build full description from the complete docstring (all lines, stripped)
         raw_doc = vf.__doc__ or ""
@@ -608,6 +722,19 @@ def _build_app():
         html = swagger_ui_html("/api/openapi.json")
         log.debug("api_docs: → %d bytes", len(html))
         return Response(html, mimetype="text/html")
+
+    @app.route("/api/filament_catalog")
+    def filament_catalog():
+        """Return the full filament profile catalog as a JSON array.
+
+        Each entry contains: tray_info_idx, name, vendor, filament_type,
+        nozzle_temp_min, nozzle_temp_max, hot_plate_temp.
+
+        No printer parameter required — this is static reference data from BPM.
+        """
+        log.debug("filament_catalog: called")
+        from bpm.bambucommands import FILAMENT_CATALOG as _catalog
+        return jsonify(_catalog)
 
     @app.route("/api/printer")
     def get_printer_info():

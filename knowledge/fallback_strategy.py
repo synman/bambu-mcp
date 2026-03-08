@@ -81,13 +81,49 @@ When baked-in knowledge does not fully answer a question about Bambu Lab protoco
 API behavior, or firmware semantics, follow this mandatory 3-tier escalation:
 
 ### Tier 1 — MCP's Own Knowledge (always first)
-Read the knowledge/ modules via bambu://knowledge/* resources:
-- behavioral_rules — operating rules, write protection, interface rules
+Read the knowledge/ modules via bambu://knowledge/* resources or get_knowledge_topic():
+
+**Top-level topics:**
+- behavioral_rules — ⚠️ safety rules, write protection, interface rules, session rules
 - protocol — MQTT topics, telemetry semantics, HMS, firmware, SSDP, 3MF
 - enums — all enum values and meanings
 - api_reference — BambuPrinter method signatures and MCP tool mapping
+- http_api — HTTP REST API: base URL, auth, route category index (51 routes, port 8080)
+
+**Sub-topics (fetch on demand when parent summary points here):**
+- behavioral_rules/camera — camera tools, stream HUD overlay, data_uri handling
+- behavioral_rules/print_state — gcode_state FAILED semantics, HMS active/historical, stage codes
+- behavioral_rules/methodology — KISS, quality-first, verification, parity, cross-model
+- behavioral_rules/mcp_patterns — array parameter pattern, multi-level hierarchy, compressed responses
+- protocol/concepts — full glossary: FDM, MQTT, HMS, 3MF, AMS, camera protocols, LAN mode
+- protocol/mqtt — MQTT topics, message types, push_status, bitfields, xcam fields
+- protocol/hms — HMS error structure, print_error integer, firmware upgrade state
+- protocol/3mf — 3MF structure, SSDP, AMS info parsing, FTPS, H2D extruder block
+- api_reference/session — BambuPrinter constructor, session management, send_gcode
+- api_reference/files — FTPS file management methods
+- api_reference/print — print control, temperature, and fan speed methods
+- api_reference/ams — AMS, spool, calibration, hardware, and AI detector methods
+- api_reference/state — properties, print_option; call api_reference/dataclasses for full types
+- api_reference/dataclasses — BambuConfig, PrinterCapabilities, BambuState, BambuSpool, ProjectInfo, ActiveJobInfo
+- enums/printer — PrinterModel, PrinterSeries, ActiveTool, ServiceState, AirConditioningMode
+- enums/ams — AMSModel, AMSSeries, AMS control/user/heating/dry enums, TrayState, ExtruderInfoState
+- enums/filament — NozzleDiameter, NozzleType, NozzleFlowType, PlateType, PrintOption, Stage mappings
+- http_api/printer — printer state and session management routes
+- http_api/print — print control routes (start, pause, stop, speed, skip, gcode)
+- http_api/ams — AMS and filament routes
+- http_api/climate — temperature, fan, and lighting routes
+- http_api/hardware — nozzle configuration and AI vision detector routes
+- http_api/files — SD card file management routes
+- http_api/system — system, diagnostics, and API documentation routes
 
 If Tier 1 answers the question fully, stop here.
+
+### Tier 1b — HTTP REST API Fallback
+If an MCP tool does not exist for a required action, check the HTTP REST API before
+escalating to Tier 2. The REST API has broader coverage than the MCP tools and can
+fulfill many requests that have no direct MCP equivalent:
+→ Call `get_knowledge_topic('http_api')` for the route index.
+→ Then call the appropriate sub-topic (e.g. `get_knowledge_topic('http_api/print')`).
 
 ### Tier 2 — Authoritative Sources from Rules Files (primary fallback)
 Use `search_authoritative_sources(query)` scoped to the repositories identified
