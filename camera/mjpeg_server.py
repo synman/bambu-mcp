@@ -54,7 +54,11 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
 .img-panel.expanded img{max-width:570px;max-height:570px}
 #thumb-wrap{left:16px}
 #layout-wrap{right:16px}
-#anomaly-wrap{left:50%;transform:translateX(-50%)}
+#hp-anomaly-wrap{overflow:hidden;max-height:0;
+  transition:max-height .35s cubic-bezier(.17,.67,.36,1.12),
+             margin-top .35s ease}
+#hp-anomaly-wrap.visible{max-height:240px;margin-top:8px}
+#hp-anomaly-wrap img{display:block;width:100%;border-radius:4px;opacity:.92;cursor:pointer}
 .hdr{font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.08em;
   border-bottom:1px solid rgba(255,255,255,.1);margin-bottom:3px;padding-bottom:2px;margin-top:6px;
   cursor:pointer;pointer-events:auto;display:flex;justify-content:space-between;align-items:center;
@@ -155,6 +159,9 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
       <div class="hp-spark-row"><span class="hp-slbl">NOZZLE</span><canvas id="hp-nz-canvas" class="hp-spark-mini"></canvas></div>
       <div class="hp-spark-row"><span class="hp-slbl">BED</span><canvas id="hp-bd-canvas" class="hp-spark-mini"></canvas></div>
     </div>
+    <div id="hp-anomaly-wrap">
+      <img id="hp-anomaly-img" src="" alt="Anomaly detection">
+    </div>
   </div>
 </div>
 <div id="hud">
@@ -195,9 +202,6 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
 </div>
 <div id="layout-wrap" class="img-panel hidden" onclick="imgPanelToggle(this)">
   <img id="layout-img" src="" alt="Plate layout">
-</div>
-<div id="anomaly-wrap" class="img-panel hidden" onclick="imgPanelToggle(this)">
-  <img id="anomaly-img" src="" alt="Anomaly detection">
 </div>
 <script>
 function hudToggle(hdr,secId){
@@ -368,7 +372,6 @@ function refreshImages(){
   var t=Date.now();
   var tw=document.getElementById('thumb-wrap');
   var lw=document.getElementById('layout-wrap');
-  var aw=document.getElementById('anomaly-wrap');
   fetch('/thumbnail?t='+t).then(function(r){
     if(r.ok&&r.headers.get('Content-Type').indexOf('image')>=0){
       document.getElementById('thumb-img').src='/thumbnail?t='+t;
@@ -383,10 +386,10 @@ function refreshImages(){
   }).catch(function(){lw.classList.add('hidden');});
   fetch('/annotated?t='+t).then(function(r){
     if(r.ok&&r.status!==204&&r.headers.get('Content-Type')&&r.headers.get('Content-Type').indexOf('image')>=0){
-      document.getElementById('anomaly-img').src='/annotated?t='+t;
-      aw.classList.remove('hidden');
-    } else { aw.classList.add('hidden'); }
-  }).catch(function(){aw.classList.add('hidden');});
+      document.getElementById('hp-anomaly-img').src='/annotated?t='+t;
+      document.getElementById('hp-anomaly-wrap').classList.add('visible');
+    } else { document.getElementById('hp-anomaly-wrap').classList.remove('visible'); }
+  }).catch(function(){document.getElementById('hp-anomaly-wrap').classList.remove('visible');});
 }
 function poll(){_hpPoll();}
 refreshImages();
