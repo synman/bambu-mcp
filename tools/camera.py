@@ -646,11 +646,12 @@ def analyze_active_job(
             from tools.files import get_current_job_project_info, get_plate_thumbnail, get_plate_topview
             pinfo = get_current_job_project_info(name)
             if "error" not in pinfo:
-                plate_num = getattr(job, "plate_number", 1) or 1
-                thumb = get_plate_thumbnail(name, job.gcode_file, plate_num=plate_num, quality="standard")
+                plate_num = getattr(job, "plate_num", 1) or 1
+                file_path = pinfo.get("id") or job.gcode_file
+                thumb = get_plate_thumbnail(name, file_path, plate_num=plate_num, quality="standard")
                 if "data_uri" in thumb:
                     project_thumbnail_uri = thumb["data_uri"]
-                topview = get_plate_topview(name, job.gcode_file, plate_num=plate_num, quality="standard")
+                topview = get_plate_topview(name, file_path, plate_num=plate_num, quality="standard")
                 if "data_uri" in topview:
                     project_layout_uri = topview["data_uri"]
         except Exception as e:
