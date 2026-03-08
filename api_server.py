@@ -553,9 +553,28 @@ _ROUTE_EXAMPLES: dict[str, dict] = {
         },
         "params": {},
     },
-    "set_spool_k_factor": {
-        "response": {"status": "success"},
-        "params": {"printer": "H2D"},
+    "analyze_active_job": {
+        "response": {
+            "verdict": "clean",
+            "score": 0.04,
+            "hot_pct": 0.03,
+            "strand_score": 0.02,
+            "edge_density": 0.01,
+            "diff_score": 0.06,
+            "reference_age_s": 312.4,
+            "print_health": 0.95,
+            "decision_confidence": 0.82,
+            "stable_verdict": "clean",
+            "confidence_window_size": 5,
+            "stage": 255,
+            "stage_name": "printing",
+            "stage_gated": False,
+            "layer": 32,
+            "quality": "preview",
+            "timestamp": "2026-03-08T12:00:00",
+            "job_state_composite_jpg": "data:image/jpeg;base64,...",
+        },
+        "params": {"printer": "H2D", "quality": "auto", "categories": "X"},
     },
     "get_openapi_spec": {
         "response": {"openapi": "3.0.3", "info": {"title": "bambu-mcp API", "version": "1.0.0"}},
@@ -1658,17 +1677,50 @@ def _build_app():
     def analyze_active_job():
         """Capture the live camera frame and produce a full active job state report.
 
-        Returns a suite of PNG assets (base64 data URIs) representing every
-        meaningful dimension of the active print job: project identity, live camera
-        reality, anomaly detection (spaghetti/strand sub-module), print health, and
-        a composite dashboard. All images use the HUD design system (dark palette,
+        Returns a cohesive suite of digital assets representing every meaningful
+        dimension of the active print job: project identity, live camera reality,
+        anomaly detection (spaghetti/strand sub-module), print health, and a
+        composite dashboard. All images use the HUD design system (dark palette,
         verdict badges, zone overlays).
 
         Query parameters:
           printer         — printer name (required)
           store_reference — "true" to store the current frame as the diff baseline
           quality         — "auto" | "preview" | "standard" | "full"
-                            auto scales with verdict severity
+                            auto scales with verdict severity (clean=preview,
+                            warning=standard, critical=full)
+          categories      — comma-separated asset category letters to include
+                            (default "X" — composite only):
+                            P = project_thumbnail_png + project_layout_png
+                            C = raw_png + diff_png
+                            D = air_zone_png + mask_png + annotated_png +
+                                heat_png + edge_png
+                            H = health_panel_png
+                            X = job_state_composite_jpg (default primary output)
+
+        Response fields (always present):
+          verdict          — "clean" | "warning" | "critical"
+          score            — composite anomaly score (0–1)
+          hot_pct          — bright-pixel fraction in air zone
+          strand_score     — directional strand-likelihood (0–1)
+          edge_density     — multi-direction edge response (0–1)
+          diff_score       — frame-diff from reference, or null
+          reference_age_s  — age of reference frame in seconds, or null
+          print_health     — overall print health (0–1; 1.0 = fully healthy)
+          decision_confidence — agent's ability to assess failure given current data (0–1)
+          stable_verdict   — consensus verdict from confidence window, or null
+          confidence_window_size — number of analysis cycles accumulated (max 5)
+          stage            — current printer stage code
+          stage_name       — human-readable stage name
+          stage_gated      — true when analysis is skipped due to non-printing stage
+          layer            — current layer number
+          quality          — resolved quality tier used
+          timestamp        — ISO8601 capture time
+
+        Error responses:
+          400 {"error": "no_active_job"} — gcode_state is IDLE/FINISH/FAILED
+          400 {"error": "no_camera"}     — printer has no camera
+          400 {"error": "not_connected"} — MQTT session not active
         """
         log.debug("analyze_active_job: called")
         import importlib
@@ -1676,8 +1728,15 @@ def _build_app():
             printer_name = request.args.get("printer", "")
             store_ref    = request.args.get("store_reference", "false").lower() == "true"
             quality      = request.args.get("quality", "auto")
+            cats_raw     = request.args.get("categories", "")
+            categories   = [c.strip() for c in cats_raw.split(",") if c.strip()] or None
             cam = importlib.import_module("tools.camera")
-            result = cam.analyze_active_job(printer_name, store_as_reference=store_ref, quality=quality)
+            result = cam.analyze_active_job(
+                printer_name,
+                store_as_reference=store_ref,
+                quality=quality,
+                categories=categories,
+            )
             if "error" in result:
                 return jsonify(result), 400
             return jsonify(result)

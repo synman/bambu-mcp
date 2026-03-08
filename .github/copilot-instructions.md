@@ -42,7 +42,7 @@ This applies to:
 - After any version bump: (1) run `pip install -e .` so `importlib.metadata` reflects the new version, then (2) run `python make.py version-sync` to propagate the version to `README.md` and `PLAN.md`.
 - `server.py` reads the version via `importlib.metadata.version("bambu-mcp")` and sets it on `mcp._mcp_server.version`. **Do not hardcode the version string anywhere else.**
 - Bump version in the same commit as the change that warrants it. Never bump speculatively.
-- Current version: **0.4.1**
+- Current version: **0.5.0**
 
 ---
 
@@ -350,9 +350,24 @@ A camera feature is not fully implemented until it is reachable from all three.
 - All three tiers must return the same schema fields (modulo encoding — MJPEG may include all categories since browsers have no payload limit).
 - Camera features that are MCP-only or HTTP-only are **incomplete by definition**.
 
+**Intentional HTTP-tier exclusions (desktop-opener tools)**
+
+The following MCP tools in `tools/camera.py` intentionally have **no HTTP REST route** because
+they open local desktop applications (browser, system viewer). They cannot be meaningfully
+served over HTTP — the server cannot open a window on the client's machine.
+
+| MCP Tool | Reason |
+|----------|--------|
+| `view_stream` | Calls `webbrowser.open()` to launch the MJPEG stream URL in the local browser |
+| `open_job_state` | Opens composite/annotated PNGs in the local system image viewer |
+| `open_plate_viewer` | Opens a full-plate HTML viewer in the local browser |
+| `open_plate_layout` | Opens an annotated plate layout PNG in the local system viewer |
+
+These are NOT gaps in HTTP coverage. Do not add HTTP routes for them.
+
 **Coverage audit checklist (run when adding any camera feature):**
 - [ ] MCP tool added to `tools/camera.py`
-- [ ] HTTP route added to `api_server.py` with OpenAPI docstring
+- [ ] HTTP route added to `api_server.py` with OpenAPI docstring (or add to exclusions table above)
 - [ ] MJPEG stream endpoint added or feature surfaced via `/job_state` cache
 - [ ] Same response schema fields across all three tiers
 
@@ -453,3 +468,35 @@ source. Values derived from training data are veil violations.
 - [ ] Every `THRESH_*`, `*_TRIGGER`, `*_PCT` constant in `camera/` has a source comment
 - [ ] Zone boundary constants have rationale comments
 - [ ] No camera analysis constant is a bare magic number without explanation
+
+---
+
+## Disk Persistence Pattern Standard (Mandatory)
+
+**Resilient feature state that must survive MCP server restarts uses the `~/.bambu-mcp/<feature>_<name>.ext` pattern.**
+
+This is the established architectural pattern for persisting per-printer state outside the MCP process. Any feature that must be available after a restart or in terminal gcode states (FINISH, FAILED) MUST use this pattern.
+
+**File naming convention:**
+- Directory: `~/.bambu-mcp/` (created on first write if absent)
+- Filename: `<feature>_<printer_name>.<ext>` — feature prefix + printer name + extension
+- Examples: `job_health_H2D.json`, `plate_thumb_H2D.png`, `plate_layout_H2D.png`
+- Characters in `<printer_name>` that are unsafe for filenames must be sanitized (replace `/`, ` `, `:` with `_`)
+
+**When to use this pattern:**
+- State that must be accessible after MCP server restart (e.g. last known print health)
+- Assets that need to persist through FINISH and FAILED states (e.g. plate thumbnails)
+- Any per-printer diagnostic artifact that the user or agent may query after the job ends
+
+**Hard requirements:**
+- Save: write immediately on state change; do not batch or defer to process exit
+- Load: attempt load at MCP startup and populate in-memory cache; log gracefully if file absent
+- Clear: clear on new job start so stale state from a prior job is not presented as current
+- Never store secrets, access codes, or session tokens in these files
+
+**Coverage checklist (run when adding any new persistent feature):**
+- [ ] File follows `~/.bambu-mcp/<feature>_<name>.ext` naming convention
+- [ ] `_save_<feature>()` called on every state-changing event
+- [ ] `_load_<feature>()` called at startup to restore from disk
+- [ ] `_clear_<feature>()` called at new-job-start to avoid stale data
+- [ ] Lifecycle documented in `api_reference_camera.py` (or relevant knowledge module)

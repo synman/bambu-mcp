@@ -124,4 +124,41 @@ If model unavailable: `yolo_available=False`, score unchanged.
   - Quality: preview→70, standard→78, full→85
   - ~25 KB at standard quality; ~71 KB PNG at same resolution
   - MJPEG `/job_state` endpoint serves full result from cache (always PNG)
+
+---
+
+## Disk Persistence
+
+Several camera/monitor artifacts are persisted to `~/.bambu-mcp/` so they survive MCP server
+restarts and remain available in FINISH/FAILED states when the print job is no longer active.
+
+### Job health result
+
+`~/.bambu-mcp/job_health_<name>.json`
+
+Written by `job_monitor._save_result()` after each analysis cycle. Read back by
+`job_monitor._load_result()` at startup. Contains the full background monitor result dict
+including `print_health`, `decision_confidence`, `stable_verdict`, and all score fields.
+
+Lifecycle:
+- Created/updated: every analysis cycle while a print is RUNNING
+- Read on: MCP server startup (restores last known state)
+- Cleared on: new print job starts (clears stale health from previous job)
+- Also available: in FINISH and FAILED states — the last analysis result is retained
+
+### Plate thumbnail and layout images
+
+`~/.bambu-mcp/plate_thumb_<name>.png`  — isometric 3D render
+`~/.bambu-mcp/plate_layout_<name>.png` — annotated top-down plate layout
+
+Written by `tools/camera._save_plate_disk()` when a new job starts and project info is loaded.
+Read back by `tools/camera._load_plate_disk()` — fills the `project_thumbnail_png` and
+`project_layout_png` fields in the job health result even after MCP restarts or in FINISH/FAILED.
+
+Lifecycle:
+- Created/updated: when a new print job starts and project metadata is available
+- Read on: MCP server startup; any `analyze_active_job()` call when in-memory cache is empty
+- Cleared on: `_clear_plate_disk()` — called when a new job replaces the old images
+- Also available: in FINISH and FAILED states (intentional — user may want to inspect the layout
+  even after a print completes)
 """

@@ -11,10 +11,11 @@ Top-level resources:
   bambu://knowledge/http-api          → knowledge/http_api.py:HTTP_API_TEXT
 
 Sub-topic resources (behavioral_rules):
-  bambu://knowledge/behavioral-rules/camera       → behavioral_rules_camera.py
-  bambu://knowledge/behavioral-rules/print-state  → behavioral_rules_print_state.py
-  bambu://knowledge/behavioral-rules/methodology  → behavioral_rules_methodology.py
-  bambu://knowledge/behavioral-rules/mcp-patterns → behavioral_rules_mcp_patterns.py
+  bambu://knowledge/behavioral-rules/camera        → behavioral_rules_camera.py
+  bambu://knowledge/behavioral-rules/job-analysis  → behavioral_rules_job_analysis.py
+  bambu://knowledge/behavioral-rules/print-state   → behavioral_rules_print_state.py
+  bambu://knowledge/behavioral-rules/methodology   → behavioral_rules_methodology.py
+  bambu://knowledge/behavioral-rules/mcp-patterns  → behavioral_rules_mcp_patterns.py
 
 Sub-topic resources (protocol):
   bambu://knowledge/protocol/concepts → protocol_concepts.py
@@ -48,6 +49,7 @@ Sub-topic resources (http_api):
 
 from knowledge.behavioral_rules import BEHAVIORAL_RULES_TEXT
 from knowledge.behavioral_rules_camera import BEHAVIORAL_RULES_CAMERA_TEXT
+from knowledge.behavioral_rules_job_analysis import BEHAVIORAL_RULES_JOB_ANALYSIS_TEXT
 from knowledge.behavioral_rules_print_state import BEHAVIORAL_RULES_PRINT_STATE_TEXT
 from knowledge.behavioral_rules_methodology import BEHAVIORAL_RULES_METHODOLOGY_TEXT
 from knowledge.behavioral_rules_mcp_patterns import BEHAVIORAL_RULES_MCP_PATTERNS_TEXT
@@ -82,6 +84,7 @@ from knowledge.http_api_system import HTTP_API_SYSTEM_TEXT
 _KNOWLEDGE_MAP = {
     "behavioral-rules":                  BEHAVIORAL_RULES_TEXT,
     "behavioral-rules/camera":           BEHAVIORAL_RULES_CAMERA_TEXT,
+    "behavioral-rules/job-analysis":     BEHAVIORAL_RULES_JOB_ANALYSIS_TEXT,
     "behavioral-rules/print-state":      BEHAVIORAL_RULES_PRINT_STATE_TEXT,
     "behavioral-rules/methodology":      BEHAVIORAL_RULES_METHODOLOGY_TEXT,
     "behavioral-rules/mcp-patterns":     BEHAVIORAL_RULES_MCP_PATTERNS_TEXT,
@@ -123,6 +126,11 @@ def get_behavioral_rules() -> str:
 def get_behavioral_rules_camera() -> str:
     """Return camera usage rules sub-topic (tool selection, HUD components, data_uri handling)."""
     return BEHAVIORAL_RULES_CAMERA_TEXT
+
+
+def get_behavioral_rules_job_analysis() -> str:
+    """Return analyze_active_job sub-topic (print_health, decision_confidence, categories, thresholds)."""
+    return BEHAVIORAL_RULES_JOB_ANALYSIS_TEXT
 
 
 def get_behavioral_rules_print_state() -> str:

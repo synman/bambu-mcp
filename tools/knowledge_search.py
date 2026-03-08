@@ -18,8 +18,9 @@ _KNOWN_TOPICS: dict[str, tuple[str, str]] = {
     "fallback_strategy":("knowledge.fallback_strategy", "ESCALATION_POLICY_TEXT"),
     "http_api":         ("knowledge.http_api",          "HTTP_API_TEXT"),
     # behavioral_rules sub-topics
-    "behavioral_rules/camera":      ("knowledge.behavioral_rules_camera",      "BEHAVIORAL_RULES_CAMERA_TEXT"),
-    "behavioral_rules/print_state": ("knowledge.behavioral_rules_print_state", "BEHAVIORAL_RULES_PRINT_STATE_TEXT"),
+    "behavioral_rules/camera":           ("knowledge.behavioral_rules_camera",          "BEHAVIORAL_RULES_CAMERA_TEXT"),
+    "behavioral_rules/job_analysis":     ("knowledge.behavioral_rules_job_analysis",    "BEHAVIORAL_RULES_JOB_ANALYSIS_TEXT"),
+    "behavioral_rules/print_state":      ("knowledge.behavioral_rules_print_state",     "BEHAVIORAL_RULES_PRINT_STATE_TEXT"),
     "behavioral_rules/methodology": ("knowledge.behavioral_rules_methodology", "BEHAVIORAL_RULES_METHODOLOGY_TEXT"),
     "behavioral_rules/mcp_patterns":("knowledge.behavioral_rules_mcp_patterns","BEHAVIORAL_RULES_MCP_PATTERNS_TEXT"),
     # api_reference sub-topics
@@ -124,7 +125,8 @@ def get_knowledge_topic(topic: str) -> dict | str:
     of available topic names if the given topic is not recognized.
 
     Sub-topics use slash notation and return focused content slices (≤10 KB each):
-    - behavioral_rules/camera — camera tools, stream HUD overlay, data_uri handling
+    - behavioral_rules/camera — camera tool selection, stream HUD components, data_uri handling
+    - behavioral_rules/job_analysis — analyze_active_job: print_health, decision_confidence, categories, thresholds
     - behavioral_rules/print_state — gcode_state FAILED, HMS active/historical, stage codes
     - behavioral_rules/methodology — KISS, quality-first, verification, parity, cross-model
     - behavioral_rules/mcp_patterns — array param pattern, multi-level hierarchy, compressed responses

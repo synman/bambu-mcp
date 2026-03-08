@@ -28,6 +28,7 @@ from resources.rules import (
 from resources.knowledge import (
     get_behavioral_rules,
     get_behavioral_rules_camera,
+    get_behavioral_rules_job_analysis,
     get_behavioral_rules_print_state,
     get_behavioral_rules_methodology,
     get_behavioral_rules_mcp_patterns,
@@ -150,7 +151,8 @@ _RESOURCES = [
     ("bambu://rules/printer-app",       get_printer_app_rules,      "bambu-printer-app rules file (live, redacted)"),
     ("bambu://rules/printer-manager",   get_printer_manager_rules,  "bambu-printer-manager rules file (live, redacted)"),
     ("bambu://knowledge/behavioral-rules", get_behavioral_rules,    "Synthesized behavioral rules knowledge module"),
-    ("bambu://knowledge/behavioral-rules/camera", get_behavioral_rules_camera, "Camera tool selection, stream HUD components, data_uri handling rules"),
+    ("bambu://knowledge/behavioral-rules/camera",       get_behavioral_rules_camera,       "Camera tool selection, stream HUD components, data_uri handling rules"),
+    ("bambu://knowledge/behavioral-rules/job-analysis", get_behavioral_rules_job_analysis, "analyze_active_job: print_health, decision_confidence, categories, action thresholds"),
     ("bambu://knowledge/behavioral-rules/print-state",  get_behavioral_rules_print_state,  "Printer state interpretation, gcode_state FAILED, HMS active/historical, stage codes"),
     ("bambu://knowledge/behavioral-rules/methodology",  get_behavioral_rules_methodology,  "KISS, quality-first, root cause fix, telemetry parity, verification, cross-model rules"),
     ("bambu://knowledge/behavioral-rules/mcp-patterns", get_behavioral_rules_mcp_patterns, "MCP array parameter pattern, multi-level call hierarchy, compressed response protocol"),
