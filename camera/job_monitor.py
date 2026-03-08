@@ -16,13 +16,49 @@ no browser has the stream page open.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import threading
 import time
 from collections import Counter, deque
+from pathlib import Path
 from typing import Optional
 
 log = logging.getLogger(__name__)
+
+_PERSIST_DIR = Path.home() / ".bambu-mcp"
+
+
+def _persist_path(printer_name: str) -> Path:
+    return _PERSIST_DIR / f"job_health_{printer_name.replace(' ', '_')}.json"
+
+
+def _save_result(printer_name: str, result: dict) -> None:
+    try:
+        _PERSIST_DIR.mkdir(parents=True, exist_ok=True)
+        # Strip large image data before persisting — only save scalar fields.
+        slim = {k: v for k, v in result.items() if not k.endswith("_png")}
+        _persist_path(printer_name).write_text(json.dumps(slim))
+    except Exception as e:
+        log.debug("job_monitor: failed to persist result for %s: %s", printer_name, e)
+
+
+def _load_result(printer_name: str) -> Optional[dict]:
+    try:
+        p = _persist_path(printer_name)
+        if p.exists():
+            return json.loads(p.read_text())
+    except Exception as e:
+        log.debug("job_monitor: failed to load persisted result for %s: %s", printer_name, e)
+    return None
+
+
+def _clear_result(printer_name: str) -> None:
+    try:
+        _persist_path(printer_name).unlink(missing_ok=True)
+    except Exception as e:
+        log.debug("job_monitor: failed to clear persisted result for %s: %s", printer_name, e)
 
 # How often to run full analysis while a job is active (seconds).
 ANALYZE_INTERVAL = 60
@@ -196,7 +232,7 @@ class _PrinterMonitor:
         self._lock = threading.Lock()
         self._last_gcode_state: Optional[str] = None
         self._latest_report: Optional[object] = None   # JobStateReport
-        self._latest_result: Optional[dict] = None     # serialisable JSON dict
+        self._latest_result: Optional[dict] = _load_result(name)  # pre-load from disk
         self._last_analyze_time: float = 0.0
         self._last_precheck_time: float = 0.0
         self._last_precheck_hot_pct: Optional[float] = None
@@ -251,6 +287,10 @@ class _PrinterMonitor:
                 # Reset per-job accumulators.
                 self._confidence_window.clear()
                 self._fp_history.clear()
+                # Clear stale persisted result from previous job.
+                with self._lock:
+                    self._latest_result = None
+                _clear_result(self.name)
 
         except Exception as e:
             log.debug("job_monitor[%s]: on_update error: %s", self.name, e)
@@ -366,6 +406,7 @@ class _PrinterMonitor:
         }
         with self._lock:
             self._latest_result = result
+        _save_result(self.name, result)
         log.debug("job_monitor[%s]: stage-gated result stored (stage=%d %s)", self.name, stage, stage_name)
 
     def _run_analyze(self, state) -> None:
@@ -484,6 +525,7 @@ class _PrinterMonitor:
         with self._lock:
             self._latest_report = report
             self._latest_result = result
+        _save_result(self.name, result)
 
         log.info("job_monitor[%s]: analysis complete — verdict=%s stable=%s score=%.3f layer=%s/%s",
                  printer_name, report.verdict, sv or "building",

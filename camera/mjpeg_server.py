@@ -425,7 +425,7 @@ function update(d){
   // Cleared on state transition so a new print always auto-expands fresh.
   var hpBody=document.getElementById('hp-body');
   var hpChev=document.querySelector('.hp-hdr .hp-chev');
-  var hpShouldExpand=(s==='RUNNING'||s==='PAUSE'||s==='FAILED');
+  var hpShouldExpand=(s==='RUNNING'||s==='PAUSE'||s==='FAILED'||s==='FINISH');
   if(s!==_hpPrevState){_hpUserOverride=false;_hpPrevState=s;}
   if(!_hpUserOverride){
     if(hpShouldExpand){
