@@ -643,11 +643,11 @@ def analyze_active_job(
     project_layout_uri: str | None = None
     if job and job.gcode_file:
         try:
-            from tools.files import get_current_job_project_info, get_plate_thumbnail, get_plate_topview
-            pinfo = get_current_job_project_info(name)
-            if "error" not in pinfo:
-                plate_num = getattr(job, "plate_num", 1) or 1
-                file_path = pinfo.get("id") or job.gcode_file
+            from tools.files import get_plate_thumbnail, get_plate_topview
+            plate_num = getattr(job, "plate_num", 1) or 1
+            project_info = getattr(job, "project_info", None)
+            file_path = (getattr(project_info, "id", None) or "").strip() or job.gcode_file
+            if file_path.endswith(".3mf"):
                 thumb = get_plate_thumbnail(name, file_path, plate_num=plate_num, quality="standard")
                 if "data_uri" in thumb:
                     project_thumbnail_uri = thumb["data_uri"]
