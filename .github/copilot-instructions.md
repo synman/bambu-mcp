@@ -66,7 +66,8 @@ This applies to:
 **Safari MJPEG compatibility**: Safari intercepts `multipart/x-mixed-replace` responses at the WebKit network layer before JavaScript's `fetch()` can read the body. Fix: serve `/stream` as `Content-Type: application/octet-stream`. The HTML page uses a `fetch()`-based JS multipart parser that reads the raw stream, extracts JPEG frames by `Content-Length`, and sets `img.src` to blob URLs. This bypasses WebKit's broken MJPEG img loader entirely and works on all browsers.
 
 **HTTP protocol**: `_StreamHandler` uses HTTP/1.0 (default — no `protocol_version` override). Do not switch to HTTP/1.1 without chunked encoding — malformed HTTP/1.1 breaks Safari. Raw writes after headers are correct for HTTP/1.0.
-- `bambu-printer-app` is a **knowledge reference only** — it must not be referenced or imported at runtime.
+
+**`/snapshot` endpoint**: `GET /snapshot` returns a single JPEG frame (`Content-Type: image/jpeg`, `Content-Length` set, connection closed). It must NOT use the streaming generator — grab one frame with `next(iter(frame_factory()))` and return immediately.
 
 ## MCP Server Restart Procedure (Mandatory)
 
@@ -79,7 +80,8 @@ Restarting `server.py` is required after any code change to `bambu-mcp`. The pro
    cd ~/bambu-mcp && .venv/bin/pip install --force-reinstall "bambu-printer-manager @ git+https://github.com/synman/bambu-printer-manager.git@devel"
    ```
    Alternatively, `python make.py` runs the same force-reinstall as part of the full install/update procedure.
-1. **Find the running process**: `ps aux | grep "bambu-mcp.*server.py" | grep -v grep`
+1. **Find the running process**: `ps aux | grep "server.py" | grep -v grep`
+   - Note: detached processes launched with relative paths show as `.venv/bin/python3 server.py` — the pattern `bambu-mcp.*server.py` misses them.
 2. **Kill it**: `kill <PID>`
 3. **Relaunch using the bash tool with `mode="async", detach=true`**:
    ```
@@ -165,12 +167,35 @@ This project uses a named testing mode called the **"veil of ignorance"** to str
 
 ---
 
-## BPM Usage
+## Ephemeral Port Pool
+
+All TCP listener components (REST API server + MJPEG camera stream servers) draw ports from a shared singleton `PortPool` (`port_pool.py`). No component uses a hardcoded port.
+
+**Pool defaults**: anchored at **49152** (IANA RFC 6335 Dynamic/Private range start), 100-port window (49152–49251). No static exclusion list — `socket.bind()` probe handles runtime conflicts automatically.
+
+**Environment variables**:
+| Variable | Default | Purpose |
+|---|---|---|
+| `BAMBU_PORT_POOL_START` | `49152` | First port in the pool |
+| `BAMBU_PORT_POOL_END` | `49251` | Last port in the pool (inclusive) |
+| `BAMBU_API_PORT` | _(none)_ | Preferred port for the REST API (tried first; rotates to next available if taken) |
+
+**Port discovery (mandatory before any HTTP call)**:
+- MCP tool: `get_server_info()` — returns `api_port`, `api_url`, `pool_claimed`, `streams`, `pool_available`, etc.
+- HTTP route: `GET /api/server_info` — same data over HTTP.
+- Never hardcode `localhost:8080` or any fixed port. Always discover at runtime via `get_server_info()`.
+
+**`pool_claimed`** is the complete list of all allocated ports (API + all active MJPEG streams). `streams` maps printer name → `{port, url}` for each active camera stream.
+
+---
+
+
 
 - Access printers via `session_manager.get_printer(name)` → `BambuPrinter` instance.
 - Use `printer.*` methods for all printer interactions.
 - Import BPM library modules (`from bpm.*`) only for types, helpers, and project parsing.
 - BPM is stable — do not modify it to solve MCP-layer problems.
+- `bambu-printer-app` is a **knowledge reference only** — it must not be referenced or imported at runtime.
 
 ---
 
