@@ -82,6 +82,52 @@ def _infer_param_type(source: str, name: str) -> str:
     return "string"
 
 
+def _bpm_enum_names(enum_cls_path: str, exclude: list | None = None) -> list[str]:
+    """Lazily import a bpm enum and return lowercase member names, excluding any in exclude."""
+    try:
+        import importlib
+        module_path, cls_name = enum_cls_path.rsplit(".", 1)
+        cls = getattr(importlib.import_module(module_path), cls_name)
+        return [e.name.lower() for e in cls if e.name not in (exclude or [])]
+    except Exception:
+        return []
+
+
+def _bpm_enum_values(enum_cls_path: str, exclude: list | None = None) -> list:
+    """Lazily import a bpm enum and return member values, excluding any in exclude."""
+    try:
+        import importlib
+        module_path, cls_name = enum_cls_path.rsplit(".", 1)
+        cls = getattr(importlib.import_module(module_path), cls_name)
+        return [e.value for e in cls if e.value not in (exclude or [])]
+    except Exception:
+        return []
+
+
+# Fixed-value enum lists keyed by (endpoint_name, param_name).
+# BPM-backed entries use _bpm_enum_names/_bpm_enum_values so new enum members
+# are picked up automatically. Hardcoded lists are used only where no BPM enum exists.
+_ROUTE_ENUM_VALUES: dict[tuple[str, str], list] = {
+    # ── Print control ──────────────────────────────────────────────────────────
+    ("set_speed_level",              "level"):         ["quiet", "standard", "sport", "ludicrous"],
+    ("print_3mf",                    "plate"):         _bpm_enum_names("bpm.bambutools.PlateType", exclude=["NONE"]),
+    # ── Climate ────────────────────────────────────────────────────────────────
+    ("set_light_state",              "state"):         ["on", "off"],
+    # ── AI detectors ───────────────────────────────────────────────────────────
+    ("set_spaghetti_detector",       "sensitivity"):   _bpm_enum_names("bpm.bambutools.DetectorSensitivity"),
+    ("set_purgechutepileup_detector","sensitivity"):   _bpm_enum_names("bpm.bambutools.DetectorSensitivity"),
+    ("set_nozzleclumping_detector",  "sensitivity"):   _bpm_enum_names("bpm.bambutools.DetectorSensitivity"),
+    ("set_airprinting_detector",     "sensitivity"):   _bpm_enum_names("bpm.bambutools.DetectorSensitivity"),
+    # ── Print options / AMS control ────────────────────────────────────────────
+    ("set_print_option",             "option"):        _bpm_enum_names("bpm.bambutools.PrintOption"),
+    ("send_ams_control_command",     "cmd"):           _bpm_enum_names("bpm.bambutools.AMSControlCommand"),
+    ("set_ams_user_setting",         "setting"):       _bpm_enum_names("bpm.bambutools.AMSUserSetting"),
+    # ── Hardware / nozzle ──────────────────────────────────────────────────────
+    ("set_nozzle_details",           "nozzle_type"):   _bpm_enum_names("bpm.bambutools.NozzleType", exclude=["UNKNOWN"]),
+    ("set_nozzle_details",           "nozzle_diameter"): _bpm_enum_values("bpm.bambutools.NozzleDiameter", exclude=[0.0]),
+}
+
+
 def _extract_query_params(view_func: Callable) -> list[dict]:
     log.debug("_extract_query_params: func=%s", view_func.__name__)
     try:
@@ -440,10 +486,14 @@ def build_openapi_document(flask_app) -> dict:
         resp_example = ex.get("response")
 
         # Enrich each extracted parameter schema with a realistic example value
+        # and enum list (renders as <select> in Swagger UI)
         for p in params:
             pex = param_examples.get(p["name"])
             if pex is not None:
                 p["schema"]["example"] = pex
+            enum_vals = _ROUTE_ENUM_VALUES.get((ep, p["name"]))
+            if enum_vals:
+                p["schema"]["enum"] = enum_vals
 
         # Build full description from the complete docstring (all lines, stripped)
         raw_doc = vf.__doc__ or ""
