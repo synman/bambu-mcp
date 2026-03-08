@@ -55,6 +55,7 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
 #thumb-wrap{left:16px}
 #layout-wrap{right:16px}
 #hp-sec-anomaly img{display:block;width:100%;border-radius:4px;opacity:.92;margin-top:4px}
+#health-panel.hp-wide #hp-sec-anomaly img{max-height:calc(100vh - 200px);object-fit:contain}
 .hdr{font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.08em;
   border-bottom:1px solid rgba(255,255,255,.1);margin-bottom:3px;padding-bottom:2px;margin-top:6px;
   cursor:pointer;pointer-events:auto;display:flex;justify-content:space-between;align-items:center;
@@ -104,10 +105,12 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
 #filament-row{margin:2px 0 1px;font-size:13px}
 #door-warn{font-size:12px;font-weight:700;margin-top:2px;padding:1px 0}
 #humidity-row{font-size:12px;margin-top:3px}
-#health-panel{position:fixed;top:118px;right:14px;width:180px;max-height:320px;overflow:hidden;
+#health-panel{position:fixed;top:118px;right:14px;width:180px;max-height:calc(100vh - 132px);overflow:hidden;
   background:rgba(0,0,0,.75);border:1px solid rgba(255,255,255,.08);border-radius:6px;
   padding:7px 10px 8px;display:none;flex-direction:column;gap:4px;pointer-events:auto;
-  font-family:'Courier New',monospace}
+  font-family:'Courier New',monospace;
+  transition:width .35s cubic-bezier(.17,.67,.36,1.12)}
+#health-panel.hp-wide{width:calc(100vw - 28px)}
 #health-panel .hp-hdr{font-size:10px;color:#555;letter-spacing:.08em;text-transform:uppercase;
   display:flex;justify-content:space-between;align-items:center;cursor:pointer;user-select:none}
 #health-panel .hp-hdr .hp-chev{font-size:9px;color:#555;transition:transform .2s}
@@ -159,7 +162,7 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
       <div class="hp-spark-row"><span class="hp-slbl">BED</span><canvas id="hp-bd-canvas" class="hp-spark-mini"></canvas></div>
     </div>
     <div id="hp-anomaly-section" style="display:none">
-      <div class="hdr" onclick="hudToggle(this,'hp-sec-anomaly')">Anomaly<span class="hdr-chev open">▲</span></div>
+      <div class="hdr" onclick="hpAnomalyToggle(this)">Anomaly<span class="hdr-chev open">▲</span></div>
       <div class="hdr-section" id="hp-sec-anomaly">
         <img id="hp-anomaly-img" src="" alt="Anomaly detection">
       </div>
@@ -404,6 +407,13 @@ function hpToggle(hdr){
   var chev=hdr.querySelector('.hp-chev');
   if(body.classList.contains('collapsed')){body.classList.remove('collapsed');chev.classList.add('open');}
   else{body.classList.add('collapsed');chev.classList.remove('open');}
+}
+function hpAnomalyToggle(hdr){
+  hudToggle(hdr,'hp-sec-anomaly');
+  var sec=document.getElementById('hp-sec-anomaly');
+  var panel=document.getElementById('health-panel');
+  if(sec.classList.contains('collapsed')){panel.classList.remove('hp-wide');}
+  else{panel.classList.add('hp-wide');}
 }
 function hpUpdateSparkline(canvasId,data,color,minV,maxV){
   var c=document.getElementById(canvasId);if(!c)return;
