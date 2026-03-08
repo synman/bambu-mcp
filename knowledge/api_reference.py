@@ -55,6 +55,10 @@ BambuSpool dataclass, ProjectInfo/metadata keys, ActiveJobInfo fields,
 BambuDiscovery/DiscoveredPrinter, all bambutools.py utility functions.
 → `get_knowledge_topic('api_reference/dataclasses')`
 
+### JobStateReport, background monitor result dict
+Camera analysis result dataclass, YOLO fields, stable_verdict, confidence_window semantics.
+→ `get_knowledge_topic('api_reference/camera')`
+
 ---
 
 ## Quick Method Index

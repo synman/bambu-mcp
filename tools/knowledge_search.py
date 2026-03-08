@@ -29,6 +29,7 @@ _KNOWN_TOPICS: dict[str, tuple[str, str]] = {
     "api_reference/ams":            ("knowledge.api_reference_ams",            "API_REFERENCE_AMS_TEXT"),
     "api_reference/state":          ("knowledge.api_reference_state",          "API_REFERENCE_STATE_TEXT"),
     "api_reference/dataclasses":    ("knowledge.api_reference_dataclasses",    "API_REFERENCE_DATACLASSES_TEXT"),
+    "api_reference/camera":         ("knowledge.api_reference_camera",         "API_REFERENCE_CAMERA_TEXT"),
     # protocol sub-topics
     "protocol/concepts":            ("knowledge.protocol_concepts",            "PROTOCOL_CONCEPTS_TEXT"),
     "protocol/mqtt":                ("knowledge.protocol_mqtt",                "PROTOCOL_MQTT_TEXT"),
@@ -133,6 +134,7 @@ def get_knowledge_topic(topic: str) -> dict | str:
     - api_reference/ams — AMS, spool, calibration, hardware, and xcam detector methods
     - api_reference/state — properties, BambuConfig, PrinterCapabilities, BambuState
     - api_reference/dataclasses — BambuSpool, ProjectInfo, ActiveJobInfo, utility functions
+    - api_reference/camera — JobStateReport dataclass and background monitor result dict
     - protocol/concepts — Bambu Lab protocol glossary and terminology
     - protocol/mqtt — MQTT topics, message types, home_flag bitfield, xcam fields
     - protocol/hms — HMS error structure and firmware upgrade state fields

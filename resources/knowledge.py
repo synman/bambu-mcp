@@ -34,6 +34,7 @@ Sub-topic resources (api_reference):
   bambu://knowledge/api-reference/ams         → api_reference_ams.py
   bambu://knowledge/api-reference/state       → api_reference_state.py
   bambu://knowledge/api-reference/dataclasses → api_reference_dataclasses.py
+  bambu://knowledge/api-reference/camera      → api_reference_camera.py
 
 Sub-topic resources (http_api):
   bambu://knowledge/http-api/printer  → http_api_printer.py
@@ -66,6 +67,7 @@ from knowledge.api_reference_print import API_REFERENCE_PRINT_TEXT
 from knowledge.api_reference_ams import API_REFERENCE_AMS_TEXT
 from knowledge.api_reference_state import API_REFERENCE_STATE_TEXT
 from knowledge.api_reference_dataclasses import API_REFERENCE_DATACLASSES_TEXT
+from knowledge.api_reference_camera import API_REFERENCE_CAMERA_TEXT
 from knowledge.references import REFERENCES_TEXT
 from knowledge.fallback_strategy import ESCALATION_POLICY_TEXT
 from knowledge.http_api import HTTP_API_TEXT
@@ -99,6 +101,7 @@ _KNOWLEDGE_MAP = {
     "api-reference/ams":                 API_REFERENCE_AMS_TEXT,
     "api-reference/state":               API_REFERENCE_STATE_TEXT,
     "api-reference/dataclasses":         API_REFERENCE_DATACLASSES_TEXT,
+    "api-reference/camera":              API_REFERENCE_CAMERA_TEXT,
     "references":                        REFERENCES_TEXT,
     "fallback-strategy":                 ESCALATION_POLICY_TEXT,
     "http-api":                          HTTP_API_TEXT,
@@ -215,6 +218,11 @@ def get_api_reference_state() -> str:
 def get_api_reference_dataclasses() -> str:
     """Return API dataclasses sub-topic (BambuSpool, ProjectInfo, ActiveJobInfo, utility functions)."""
     return API_REFERENCE_DATACLASSES_TEXT
+
+
+def get_api_reference_camera() -> str:
+    """Return API camera sub-topic (JobStateReport dataclass and background monitor result dict)."""
+    return API_REFERENCE_CAMERA_TEXT
 
 
 def get_references() -> str:
