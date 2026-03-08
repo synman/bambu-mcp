@@ -514,6 +514,7 @@ function _hpPoll(){
   fetch('/status').then(function(r){return r.json();}).then(function(d){
     if(_origUpdate)_origUpdate(d);
     var f=d.fps||0;
+    if(_lastFrameMs>0&&Date.now()-_lastFrameMs>3000)f=0;
     var fpsCont=document.getElementById('fps');
     if(f>0){
       fpsCont.style.display='flex';
@@ -543,6 +544,7 @@ poll();setInterval(poll,2000);
 // Fetch-based MJPEG parser: bypasses Safari's broken <img src="multipart"> loader.
 // Reads the raw multipart stream via fetch(), parses Content-Length from each part
 // header, extracts the JPEG bytes, and sets img.src to a blob URL. Works in all browsers.
+var _lastFrameMs=0;
 (function(){
   var img=document.getElementById('stream');
   var prevUrl=null;
@@ -575,6 +577,7 @@ poll();setInterval(poll,2000);
           var url=URL.createObjectURL(blob);
           if(prevUrl)URL.revokeObjectURL(prevUrl);
           prevUrl=url;
+          _lastFrameMs=Date.now();
           img.src=url;
         }
       }
