@@ -41,13 +41,23 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
   font:14px/1.6 'Courier New',monospace;padding:10px 14px;border-radius:8px;
   pointer-events:none;min-width:230px;max-width:310px;
   border:1px solid rgba(255,255,255,.08)}
+.hud-hdr{font-size:10px;color:#555;letter-spacing:.08em;text-transform:uppercase;
+  display:flex;justify-content:space-between;align-items:center;
+  cursor:pointer;user-select:none;pointer-events:auto;margin-bottom:4px}
+#hud-body{overflow:hidden;transition:max-height .25s ease}
+#hud-body.collapsed{max-height:0}
 .img-panel{position:fixed;bottom:16px;pointer-events:auto;
   background:rgba(0,0,0,.6);border-radius:8px;padding:6px;
-  border:1px solid rgba(255,255,255,.08);cursor:pointer;
+  border:1px solid rgba(255,255,255,.08);
   transition:max-width .35s cubic-bezier(.17,.67,.36,1.12),
              max-height .35s cubic-bezier(.17,.67,.36,1.12),
              padding .35s ease}
 .img-panel.hidden{display:none}
+.img-panel-hdr{font:700 10px/1.4 'Courier New',monospace;color:#555;text-transform:uppercase;
+  letter-spacing:.08em;display:flex;justify-content:space-between;align-items:center;
+  cursor:pointer;user-select:none;padding-bottom:4px;pointer-events:auto}
+.img-panel-body{overflow:hidden;transition:max-height .35s cubic-bezier(.17,.67,.36,1.12);max-height:600px}
+.img-panel-body.collapsed{max-height:0}
 .img-panel img{display:block;max-width:190px;max-height:190px;border-radius:4px;opacity:.92;
   transition:max-width .35s cubic-bezier(.17,.67,.36,1.12),
              max-height .35s cubic-bezier(.17,.67,.36,1.12)}
@@ -170,45 +180,65 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
   </div>
 </div>
 <div id="hud">
-  <div id="badge-row">
-    <div id="badge" class="bIDLE">IDLE</div>
-    <div id="speed-badge"></div>
+  <div class="hud-hdr" onclick="hudBodyToggle(this)">
+    <span>JOB STATUS</span><span class="hp-chev open">▲</span>
   </div>
-  <div id="subtask" style="font-size:13px;font-weight:600;color:#e0b84e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:275px;margin-bottom:2px"></div>
-  <div class="row"><span class="lbl">Progress</span><span id="pct" class="val">\u2014</span></div>
-  <div class="row"><span class="lbl">Layer</span><span id="layers" class="val">\u2014</span></div>
-  <div id="progress-bar"><div id="progress-fill"></div></div>
-  <div id="stage-row" class="row hidden"><span class="lbl">Stage</span><span id="stage" class="val" style="text-align:right;max-width:190px;font-size:12px">—</span></div>
-  <div id="time-row" class="row hidden"><span class="lbl">Elapsed</span><span id="elapsed" class="val">\u2014</span></div>
-  <div id="remain-row" class="row hidden"><span class="lbl">Remain</span><span id="remain" class="val">\u2014</span></div>
-  <div class="sep"></div>
-  <div class="hdr" onclick="hudToggle(this,'sec-temps')">Temps<span class="hdr-chev open">▲</span></div>
-  <div class="hdr-section" id="sec-temps">
-  <div id="nozzles"></div>
-  <div id="filament-row" style="display:none"></div>
-  <div class="row"><span class="lbl">Bed</span><span id="bed" class="dim">\u2014</span></div>
-  <div id="chamber-row" class="row hidden"><span class="lbl">Chamber</span><span id="chamber" class="dim">\u2014</span></div>
-  <div id="door-warn" style="display:none"></div>
-  </div>
-  <div id="sec-fans" class="hidden">
-    <div class="sep"></div>
-    <div class="hdr" onclick="hudToggle(this,'sec-fans-body')">Fans<span class="hdr-chev open">▲</span></div>
-    <div class="hdr-section" id="sec-fans-body"><div id="fans"></div></div>
-  </div>
-  <div id="humidity-row" style="display:none"></div>
-  <div class="sep"></div>
-  <div class="row" style="font-size:12px">
-    <span id="wifi" class="dim"></span>
-    <div id="errors" class="hidden"></div>
+  <div id="hud-body">
+    <div class="hdr" onclick="hudToggle(this,'sec-print')">Print<span class="hdr-chev open">▲</span></div>
+    <div class="hdr-section" id="sec-print">
+      <div id="badge-row">
+        <div id="badge" class="bIDLE">IDLE</div>
+        <div id="speed-badge"></div>
+      </div>
+      <div id="subtask" style="font-size:13px;font-weight:600;color:#e0b84e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:275px;margin-bottom:2px"></div>
+      <div class="row"><span class="lbl">Progress</span><span id="pct" class="val">\u2014</span></div>
+      <div class="row"><span class="lbl">Layer</span><span id="layers" class="val">\u2014</span></div>
+      <div id="progress-bar"><div id="progress-fill"></div></div>
+      <div id="stage-row" class="row hidden"><span class="lbl">Stage</span><span id="stage" class="val" style="text-align:right;max-width:190px;font-size:12px">—</span></div>
+      <div id="time-row" class="row hidden"><span class="lbl">Elapsed</span><span id="elapsed" class="val">\u2014</span></div>
+      <div id="remain-row" class="row hidden"><span class="lbl">Remain</span><span id="remain" class="val">\u2014</span></div>
+    </div>
+    <div class="hdr" onclick="hudToggle(this,'sec-temps')">Temps<span class="hdr-chev open">▲</span></div>
+    <div class="hdr-section" id="sec-temps">
+    <div id="nozzles"></div>
+    <div id="filament-row" style="display:none"></div>
+    <div class="row"><span class="lbl">Bed</span><span id="bed" class="dim">\u2014</span></div>
+    <div id="chamber-row" class="row hidden"><span class="lbl">Chamber</span><span id="chamber" class="dim">\u2014</span></div>
+    <div id="door-warn" style="display:none"></div>
+    </div>
+    <div id="sec-fans" class="hidden">
+      <div class="hdr" onclick="hudToggle(this,'sec-fans-body')">Fans<span class="hdr-chev open">▲</span></div>
+      <div class="hdr-section" id="sec-fans-body"><div id="fans"></div></div>
+    </div>
+    <div class="hdr" onclick="hudToggle(this,'sec-status')">Status<span class="hdr-chev open">▲</span></div>
+    <div class="hdr-section" id="sec-status">
+      <div id="humidity-row" style="display:none"></div>
+      <div class="row" style="font-size:12px">
+        <span id="wifi" class="dim"></span>
+        <div id="errors" class="hidden"></div>
+      </div>
+    </div>
   </div>
 </div>
-<div id="thumb-wrap" class="img-panel hidden" onclick="imgPanelToggle(this)">
-  <img id="thumb-img" src="" alt="3D preview">
+<div id="thumb-wrap" class="img-panel hidden">
+  <div class="img-panel-hdr" onclick="imgPanelHdrToggle(this,'thumb-body')">3D PREVIEW<span class="hdr-chev open">▲</span></div>
+  <div class="img-panel-body" id="thumb-body">
+    <img id="thumb-img" src="" alt="3D preview" onclick="imgPanelToggle(this.closest('.img-panel'))">
+  </div>
 </div>
-<div id="layout-wrap" class="img-panel hidden" onclick="imgPanelToggle(this)">
-  <img id="layout-img" src="" alt="Plate layout">
+<div id="layout-wrap" class="img-panel hidden">
+  <div class="img-panel-hdr" onclick="imgPanelHdrToggle(this,'layout-body')">PLATE LAYOUT<span class="hdr-chev open">▲</span></div>
+  <div class="img-panel-body" id="layout-body">
+    <img id="layout-img" src="" alt="Plate layout" onclick="imgPanelToggle(this.closest('.img-panel'))">
+  </div>
 </div>
 <script>
+function hudBodyToggle(hdr){
+  var body=document.getElementById('hud-body');
+  var chev=hdr.querySelector('.hp-chev');
+  if(body.classList.contains('collapsed')){body.classList.remove('collapsed');chev.classList.add('open');}
+  else{body.classList.add('collapsed');chev.classList.remove('open');}
+}
 function hudToggle(hdr,secId){
   var sec=document.getElementById(secId);
   var chev=hdr.querySelector('.hdr-chev');
@@ -223,6 +253,12 @@ function hudToggle(hdr,secId){
 }
 function imgPanelToggle(el){
   el.classList.toggle('expanded');
+}
+function imgPanelHdrToggle(hdr,bodyId){
+  var body=document.getElementById(bodyId);
+  var chev=hdr.querySelector('.hdr-chev');
+  if(body.classList.contains('collapsed')){body.classList.remove('collapsed');if(chev)chev.classList.add('open');}
+  else{body.classList.add('collapsed');if(chev)chev.classList.remove('open');}
 }
 function fmtT(t,tgt){
   var s=t+'\u00b0C';
