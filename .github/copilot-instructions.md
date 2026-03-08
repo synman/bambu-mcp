@@ -219,13 +219,12 @@ Any route whose underlying BPM method is marked `@deprecated` must include a `�
 - The confirmed replacement (or "no confirmed replacement yet" if none)
 - Whether the route is a functional stub or still calls the deprecated method
 
-**Currently deprecated routes** (as of `bambu-printer-manager` v1.0.0):
-| Route | BPM method | Status | Replacement |
-|-------|-----------|--------|-------------|
-| `GET /api/set_aux_fan_speed_target` | `set_aux_fan_speed_target_percent()` | Functional but deprecated | Unclear — BPM deprecation message appears to be a copy-paste error |
-| `GET /api/set_spool_k_factor` | `set_k_factor()` | Stubbed (no-op) — broken in recent firmware | `select_extrusion_calibration_profile()` |
+**Currently deprecated or stub routes** (as of `bambu-printer-manager` v1.0.0):
+| Route | BPM method | Status | Notes |
+|-------|-----------|--------|-------|
+| `GET /api/set_spool_k_factor` | `set_spool_k_factor()` | Stubbed (no-op) — broken in recent firmware | `@deprecated` decorator removed in later BPM update, but docstring still warns "Broken in recent Bambu firmware"; replacement is `select_extrusion_calibration_profile()` |
 
-When BPM is updated and a replacement is confirmed: update the route implementation, update the docstring (remove the `⚠️ DEPRECATED SCAFFOLDING` paragraph), and update this table.
+When BPM is updated and a replacement is confirmed: update the route implementation, update the docstring (remove the `⚠️` paragraph), and update this table.
 
 ### Dual-layer sync rule
 

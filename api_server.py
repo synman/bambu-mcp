@@ -661,17 +661,7 @@ def _build_app():
 
     @app.route("/api/set_aux_fan_speed_target")
     def set_aux_fan_speed_target():
-        """Set aux (recirculation) fan speed. ?percent=<0-100>
-
-        ⚠️ DEPRECATED SCAFFOLDING: The underlying BPM method
-        `set_aux_fan_speed_target_percent()` is marked `@deprecated` in
-        bambu-printer-manager v1.0.0. The deprecation notice points to
-        `select_extrusion_calibration_profile` as the closest alternative,
-        though that method controls extrusion calibration rather than fan speed
-        — the BPM deprecation message appears to be a copy-paste error. This
-        route continues to function but may be removed in a future release once
-        BPM provides a confirmed replacement fan-speed API.
-        """
+        """Set aux (recirculation) fan speed. ?percent=<0-100>"""
         log.debug("set_aux_fan_speed_target: called")
         p, _ = _get_printer(request.args)
         if p is None:
@@ -1469,14 +1459,14 @@ def _build_app():
     def set_spool_k_factor():
         """Set extrusion calibration k-factor for a spool. (stub — returns success)
 
-        ⚠️ DEPRECATED SCAFFOLDING: The underlying BPM method `set_k_factor()`
-        is documented as broken in recent Bambu firmware ("Broken in recent
-        Bambu firmware. Use `select_extrusion_calibration_profile` instead.").
-        This route is currently a no-op stub that always returns
+        ⚠️ STUB / FIRMWARE WARNING: This route is a no-op that always returns
         `{"status": "success"}` without sending any command to the printer.
-        Use the `select_extrusion_calibration` MCP tool or
-        `GET /api/select_extrusion_calibration` (if added) to set calibration
-        profiles via the supported BPM API.
+        The underlying BPM method `set_spool_k_factor()` carries a docstring
+        warning ("Broken in recent Bambu firmware") and recommends
+        `select_extrusion_calibration_profile` instead. The `@deprecated`
+        Python decorator was removed in a later BPM update, but the firmware
+        limitation stands. Use the `select_extrusion_calibration` MCP tool
+        to manage calibration profiles via the supported API.
         """
         log.debug("set_spool_k_factor: called (stubbed)")
         return _ok()
