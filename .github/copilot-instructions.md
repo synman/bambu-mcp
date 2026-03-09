@@ -502,57 +502,174 @@ This is the established architectural pattern for persisting per-printer state o
 
 ---
 
-## Headless Browser JS Validation (Mandatory)
+## bambu-mcp Testing Standard (Mandatory)
 
-The MJPEG stream server (`camera/mjpeg_server.py`) embeds a large inline `<script>` block in `_HTML_PAGE`. A single JS syntax error silently breaks all HUD functionality — the browser renders static defaults (black video, IDLE badge, no temperatures) with no visible error. This has caused multi-session debugging loops.
+bambu-mcp has four distinct layers, each requiring its own verification strategy. A change to any layer is not complete until the tests for that layer pass. This standard defines what to run, when to run it, and what constitutes a pass.
 
-**Mandatory validation after any edit to the inline script:**
+**The four layers:**
+1. Python source — syntax, imports
+2. REST API (`api_server.py`) — Flask routes
+3. Stream server (`camera/mjpeg_server.py`) — per-stream HTTP endpoints
+4. Browser/HUD — inline JS behavior, DOM state, network polling
 
+---
+
+### Tier 1 — Static / Syntax (run after **every** file edit, before any commit)
+
+**Python syntax check — every changed `.py` file:**
 ```bash
-# Step 1: extract and syntax-check the live script
+python -m py_compile <changed_file>.py && echo "OK"
+```
+
+**HUD inline JS — after any edit to the `<script>` block in `_HTML_PAGE`:**
+```bash
+# Extract rendered script from live page and check with V8
 curl -s http://localhost:<port>/ | python3 -c "
 import sys
 html = sys.stdin.read()
 js = html[html.find('<script>')+8:html.find('</script>')]
 open('/tmp/hud_check.js','w').write(js)
-print('opens:', js.count('{'), 'closes:', js.count('}'), 'diff:', js.count('{')-js.count('}'))
+print('braces: opens', js.count('{'), 'closes', js.count('}'), 'diff', js.count('{')-js.count('}'))
 " && node --check /tmp/hud_check.js && echo "JS SYNTAX: OK"
 ```
 
 **Hard requirements:**
-- Run this check immediately after every edit to the `<script>` block in `_HTML_PAGE`.
-- Brace diff must be 0 and `node --check` must exit 0 before committing.
-- If the stream server is not yet running at the time of the check, restart it first and verify against the live page — do not check the source file directly (the HTML is a Python f-string; only the rendered output is valid JS).
+- Brace diff must be exactly 0.
+- `node --check` must exit 0 before committing.
+- Always check the **rendered page** from the running server — not the `.py` source file. The HTML is a Python f-string; the source file is not valid JS. The stream server must be restarted after the edit before this check runs (in-memory cache trap).
 
-**Why `node --check` over source inspection:**
-- The inline JS is a Python f-string template; the source file is not valid JS
-- Brace counting alone misses mismatched string literals and other syntax errors
-- `node --check` is authoritative; it uses V8 to parse without executing
+---
 
-**Headless Chrome for deeper inspection (when node --check passes but behavior is wrong):**
+### Tier 2 — REST API Smoke (run after changes to `api_server.py` or `server.py`)
 
+Discover the API port first, then run smoke checks:
 ```bash
-# Install puppeteer once if needed
-cd /tmp && npm install puppeteer 2>/dev/null
+# Port discovery
+PORT=$(python -c "
+import json, subprocess
+r = subprocess.run(['python', '-c',
+  'from bambu_mcp.api_server import get_api_port; print(get_api_port())'],
+  capture_output=True, text=True, cwd='$HOME/bambu-mcp')
+print(r.stdout.strip())
+" 2>/dev/null || echo "49152")
 
-# Run headless page check
-node -e "
-const puppeteer = require('/tmp/node_modules/puppeteer');
-(async () => {
-  const b = await puppeteer.launch({args:['--no-sandbox']});
-  const p = await b.newPage();
-  const errors = [];
-  p.on('pageerror', e => errors.push(e.message));
-  p.on('console', m => { if(m.type()==='error') errors.push(m.text()); });
-  await p.goto('http://localhost:<port>/', {waitUntil:'networkidle2', timeout:8000});
-  console.log('JS errors:', errors.length ? errors : 'none');
-  await b.close();
-})();
+# Health gate — must pass before any other route check
+curl -sf http://localhost:${PORT}/api/health_check | python3 -c "
+import sys, json; d=json.load(sys.stdin); print('health_check:', 'OK' if d.get('status')=='ok' else 'FAIL', d)
+"
+
+# Printer state — must return JSON with expected top-level keys
+curl -sf "http://localhost:${PORT}/api/printer" | python3 -c "
+import sys, json; d=json.load(sys.stdin)
+required = {'printers','connected'}
+missing = required - set(d.keys())
+print('printer route:', 'OK' if not missing else 'MISSING: '+str(missing))
 "
 ```
 
-**Checklist (run after every mjpeg_server.py script edit):**
-- [ ] `node --check /tmp/hud_check.js` exits 0
-- [ ] Brace diff is exactly 0
-- [ ] Stream server restarted since the edit (in-memory cache trap applies here)
-- [ ] Browser polls `/status` and `/job_state` visibly in the MCP log within 5s of opening the stream
+**Pass criteria:** `health_check` returns `status: ok`; `/api/printer` returns JSON with expected keys; no 500 responses.
+
+---
+
+### Tier 3 — Stream Server Endpoints (run after changes to `camera/mjpeg_server.py`)
+
+```bash
+# Discover stream port — must have an active stream running
+SPORT=$(python3 -c "
+import urllib.request, json
+data = json.loads(urllib.request.urlopen('http://localhost:49152/api/stream_info').read())
+print(list(data.get('streams',{}).values())[0]['port'])
+" 2>/dev/null || echo "49153")
+
+echo "=== Stream server: http://localhost:${SPORT}/ ==="
+
+# /status — must return JSON
+STATUS=$(curl -sf http://localhost:${SPORT}/status)
+echo "/status:          $(echo $STATUS | python3 -c 'import sys,json; d=json.load(sys.stdin); print("OK" if "gcode_state" in d else "MISSING gcode_state")')"
+
+# /job_state — JSON or 503 (no active job); never 500
+JOB_HTTP=$(curl -sw "%{http_code}" -o /dev/null http://localhost:${SPORT}/job_state)
+echo "/job_state:        HTTP ${JOB_HTTP} (200 or 503 both OK; 500 = FAIL)"
+
+# /snapshot — must be image/jpeg
+SNAP_CT=$(curl -sI http://localhost:${SPORT}/snapshot | grep -i content-type)
+echo "/snapshot:         ${SNAP_CT}"
+
+# /health_panel_img — 200 with image/png or 204 no content (monitor not yet run)
+HP_HTTP=$(curl -sw "%{http_code}" -o /dev/null http://localhost:${SPORT}/health_panel_img)
+echo "/health_panel_img: HTTP ${HP_HTTP} (200 or 204 OK; 500 = FAIL)"
+
+# /factors_radar — same
+FR_HTTP=$(curl -sw "%{http_code}" -o /dev/null http://localhost:${SPORT}/factors_radar)
+echo "/factors_radar:    HTTP ${FR_HTTP} (200 or 204 OK; 500 = FAIL)"
+```
+
+**Pass criteria:** `/status` returns JSON with `gcode_state` key; `/snapshot` is `image/jpeg`; no route returns HTTP 500.
+
+---
+
+### Tier 4 — Browser Functional (run after any `_HTML_PAGE` script edit — after Tier 1 passes)
+
+Puppeteer acts as the human browser. Install once to `/tmp`:
+```bash
+cd /tmp && npm install puppeteer 2>/dev/null
+```
+
+Run the functional test:
+```bash
+node -e "
+const puppeteer = require('/tmp/node_modules/puppeteer');
+(async () => {
+  const PORT = process.env.SPORT || '49153';
+  const b = await puppeteer.launch({args:['--no-sandbox','--disable-setuid-sandbox']});
+  const p = await b.newPage();
+  const jsErrors = [], consoleLogs = [], networkFetches = [];
+  p.on('pageerror', e => jsErrors.push(e.message));
+  p.on('console', m => { if (m.type() === 'error') consoleLogs.push(m.text()); });
+  p.on('request', r => { if (r.url().includes('/status') || r.url().includes('/job_state')) networkFetches.push(r.url()); });
+  await p.goto('http://localhost:'+PORT+'/', {waitUntil:'networkidle2', timeout:10000});
+  await new Promise(r => setTimeout(r, 5000));  // wait 2 polling cycles
+  const badge = await p.\$eval('#state-badge', el => el.textContent).catch(() => 'NOT_FOUND');
+  const nozzle = await p.\$eval('#nozzle-temp', el => el.textContent).catch(() => 'NOT_FOUND');
+  const streamSrc = await p.\$eval('img[src*=\"stream\"]', el => el.src).catch(() => 'NOT_FOUND');
+  const result = {
+    jsErrors: jsErrors.length,
+    jsErrorMessages: jsErrors,
+    badge: badge.trim(),
+    nozzleTemp: nozzle.trim(),
+    streamImgPresent: streamSrc !== 'NOT_FOUND',
+    networkFetchCount: networkFetches.length,
+  };
+  console.log(JSON.stringify(result, null, 2));
+  await p.screenshot({path: '/tmp/stream_screenshot.png', fullPage: true});
+  console.log('Screenshot: /tmp/stream_screenshot.png');
+  await b.close();
+  process.exit(jsErrors.length > 0 ? 1 : 0);
+})();
+" && echo "BROWSER TEST: PASS" || echo "BROWSER TEST: FAIL — see JS errors above"
+open /tmp/stream_screenshot.png
+```
+
+**Pass criteria:**
+- `jsErrors: 0` — zero JS console errors
+- `badge` is not empty and not `IDLE` when a job is active
+- `nozzleTemp` is not `—` when the printer is connected
+- `networkFetchCount >= 2` — confirms `/status` is polling
+- Screenshot opens and shows a populated HUD (visual confirmation by user)
+
+**When Tier 4 is required vs. optional:**
+- **Required:** any edit to the `<script>` block in `_HTML_PAGE`
+- **Optional / diagnostic:** when a user reports visual HUD issues and Tier 1–3 are clean
+
+---
+
+### When to run each tier
+
+| Tier | Run when |
+|------|----------|
+| 1 — Static/Syntax | Every file edit, always, before committing |
+| 2 — REST API Smoke | Any change to `api_server.py` or `server.py` |
+| 3 — Stream Endpoints | Any change to `camera/mjpeg_server.py` |
+| 4 — Browser Functional | Any edit to the `<script>` block in `_HTML_PAGE` |
+
+A commit that touches multiple layers requires all relevant tiers to pass. A tier does not need to be re-run if no files it covers were changed.
