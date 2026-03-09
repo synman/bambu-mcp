@@ -742,6 +742,30 @@ def analyze_active_job(
         log.error("analyze_active_job: analysis failed for %s: %s", name, e, exc_info=True)
         return {"error": "analysis_failed", "detail": str(e)}
 
+    # Compute Bayesian success_probability (correct path — same model as background monitor).
+    _success_prob: float | None = None
+    _decision_conf: float | None = None
+    try:
+        from camera.job_analyzer import compute_failure_probability, compute_decision_confidence
+        _fp, _factors = compute_failure_probability(
+            report.score, report.thresh_warn, report.thresh_crit,
+            printer_context, stable_verdict=report.stable_verdict or "clean",
+        )
+        _success_prob = round(1.0 - _fp, 4)
+        _decision_conf = compute_decision_confidence(
+            len(report.confidence_window), report.stage_gated, printer_context
+        )
+    except Exception as e:
+        log.debug("analyze_active_job: success_probability error for %s: %s", name, e)
+
+    # Pull stable fields from background monitor cache when available.
+    _monitor_result: dict = {}
+    try:
+        from camera import job_monitor
+        _monitor_result = job_monitor.get_latest_result(name) or {}
+    except Exception:
+        pass
+
     def _png_uri(data: bytes | None) -> str | None:
         if not data:
             return None
@@ -763,6 +787,9 @@ def analyze_active_job(
 
     result = {
         "verdict":               report.verdict,
+        "stable_verdict":        report.stable_verdict,
+        "success_probability":   _success_prob,
+        "decision_confidence":   _decision_conf,
         "score":                 round(report.score, 4),
         "hot_pct":               round(report.hot_pct, 4),
         "strand_score":          round(report.strand_score, 4),

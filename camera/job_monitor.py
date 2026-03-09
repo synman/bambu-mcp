@@ -500,7 +500,7 @@ class _PrinterMonitor:
         # Failure probability — Bayesian model, updated every analysis cycle.
         from camera.job_analyzer import compute_failure_probability, compute_decision_confidence
         try:
-            fp = compute_failure_probability(
+            fp, _factors = compute_failure_probability(
                 report.score, report.thresh_warn, report.thresh_crit,
                 printer_context, stable_verdict=sv or "clean",
             )

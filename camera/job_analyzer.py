@@ -371,7 +371,7 @@ def compute_failure_probability(
     thresh_crit: float,
     context: dict,
     stable_verdict: str = "clean",
-) -> float:
+) -> tuple[float, dict]:
     """Estimate probability this print will fail before completion.
 
     Combines camera anomaly score with printer/filament/environment context via
@@ -384,11 +384,16 @@ def compute_failure_probability(
       3. Progress survival curve     — >60% of FDM failures happen before 15%;
                                        flexible materials have a flat (distributed) hazard
       4. Anomaly signal LR           — clean→0.3-1.0×; warning→1.5-3.0×; critical→3-8×
-      5. Environmental modifiers     — enclosure, door/lid state, nozzle temp stability
+      5. Environmental modifiers     — enclosure, door/lid state, nozzle temp stability,
+                                       bed temp delta from target, chamber temp vs material
       6. Hygroscopic penalty         — hygro_tier × AMS humidity index (1=wet…5=dry)
       7. Stability modifier          — non-escalating warning is less alarming
+      8. Slicer/print settings       — raft, brim, support, infill, wall loops
 
-    Returns float 0.0–1.0.
+    Returns (failure_probability: float 0.0–1.0, factor_contributions: dict).
+    factor_contributions keys: material, platform, progress, anomaly, thermal,
+    humidity, stability, settings — each 0.0–1.0 (1.0 = maximum risk from that
+    factor). Used to drive the Failure Drivers radar chart.
     """
     progress_pct   = float(context.get("progress_pct", 0) or 0)
     printer_series = (context.get("printer_series") or "UNKNOWN").upper()
@@ -398,10 +403,16 @@ def compute_failure_probability(
     lid_open       = bool(context.get("is_chamber_lid_open", False))
     nozzle_temp    = float(context.get("nozzle_temp", 0) or 0)
     nozzle_target  = float(context.get("nozzle_target", 0) or 0)
+    bed_temp       = float(context.get("bed_temp", 0) or 0)
+    bed_target     = float(context.get("bed_target", 0) or 0)
+    chamber_temp   = float(context.get("chamber_temp", 0) or 0)
     ams_humidity   = int(context.get("ams_humidity", 0) or 0)
     fil            = context.get("active_filament") or {}
     fil_type       = (fil.get("type") or "").upper().replace(" ", "")
     is_enclosed    = has_chamber and not door_open and not lid_open
+
+    # Factor contributions for radar chart: 0.0 = no risk, 1.0 = maximum risk.
+    factors: dict = {}
 
     # --- 1. Material base failure rate ---
     # Normalise Bambu-specific suffixes: "PLAMATTE" → "PLA", "ABSBASIC" → "ABS" etc.
@@ -422,6 +433,8 @@ def compute_failure_probability(
         base = base_enc + (base_open - base_enc) * 0.5  # door/lid open: mid-point
     else:
         base = base_open
+    # Max base_open across all profiles is 0.50 (PC). Normalize to that ceiling.
+    factors["material"] = round(min(base / 0.50, 1.0), 4)
 
     # --- 2. Printer series modifier ---
     # Rates already calibrated for a generic setup; adjust for Bambu-specific hardware
@@ -439,9 +452,13 @@ def compute_failure_probability(
     if curve == "distributed" and (printer_series == "H2" or flow_type == "TPU_HIGH_FLOW"):
         series_mod *= 0.75
     base = min(base * series_mod, 1.0)
+    # Normalize modifier range 0.85–1.20 → 0.0–1.0.
+    factors["platform"] = round(min(max((series_mod - 0.85) / 0.35, 0.0), 1.0), 4)
 
     # --- 3. Progress survival ---
-    p = base * _hazard_remaining(progress_pct, curve)
+    hazard = _hazard_remaining(progress_pct, curve)
+    p = base * hazard
+    factors["progress"] = round(hazard, 4)  # fraction of failure hazard remaining
 
     # --- 4. Anomaly signal likelihood ratio ---
     warn_band = max(thresh_crit - thresh_warn, 0.01)
@@ -452,6 +469,8 @@ def compute_failure_probability(
     else:
         lr = max(0.30, score / max(thresh_warn, 0.01))
     p = min(p * lr, 1.0)
+    # Normalize LR range 0.30–8.0 → 0.0–1.0.
+    factors["anomaly"] = round(min(max((lr - 0.30) / 7.70, 0.0), 1.0), 4)
 
     # --- 5. Environmental quality ---
     env = 1.0
@@ -460,32 +479,79 @@ def compute_failure_probability(
     elif door_open or lid_open:
         env *= 1.20   # actively open mid-print
     if nozzle_target > 0:
-        delta = abs(nozzle_temp - nozzle_target)
-        if delta <= 3:
+        nozzle_delta = abs(nozzle_temp - nozzle_target)
+        if nozzle_delta <= 3:
             env *= 0.90   # temps locked on target
-        elif delta > 10:
+        elif nozzle_delta > 10:
             env *= 1.30   # thermal drift — real risk
+    # Bed temp delta: warping/adhesion risk when target is active (Klipper/OctoPrint
+    # Prometheus monitoring, Obico PID tuning guidance).
+    if bed_target > 0:
+        bed_delta = abs(bed_temp - bed_target)
+        if bed_delta > 10:
+            env *= 1.30   # significant deviation → adhesion/warping risk
+        elif bed_delta > 5:
+            env *= 1.15   # moderate deviation → elevated risk
+    # Chamber temp vs material expectation: engineering mats need warm chamber;
+    # heat-sensitive mats suffer in hot chamber (thresholds from community data:
+    # ABS/ASA/PA/PC warp below 30°C; PLA/PETG heat-creep above 50°C).
+    if chamber_temp > 0:
+        _warm_mats = {"ABS", "ASA", "PA", "PA12", "PAHT", "PC", "PC+ABS", "PA-CF", "PA6-CF", "ABS-GF"}
+        _cool_mats = {"PLA", "PLA+", "PLA-CF"}
+        if mat_key in _warm_mats and chamber_temp < 30:
+            env *= 1.20   # engineering material, cold chamber → delamination risk
+        elif mat_key in _cool_mats and chamber_temp > 50:
+            env *= 1.15   # heat-sensitive material, hot chamber → creep/stringing
     p = min(p * env, 1.0)
+    # For the radar chart, capture risk-contributing penalties only (not benefits).
+    _env_risk = 1.0
+    if door_open or lid_open:
+        _env_risk *= 1.20
+    if nozzle_target > 0 and abs(nozzle_temp - nozzle_target) > 10:
+        _env_risk *= 1.30
+    if bed_target > 0:
+        _bd = abs(bed_temp - bed_target)
+        if _bd > 10:
+            _env_risk *= 1.30
+        elif _bd > 5:
+            _env_risk *= 1.15
+    if chamber_temp > 0:
+        if mat_key in _warm_mats and chamber_temp < 30:
+            _env_risk *= 1.20
+        elif mat_key in _cool_mats and chamber_temp > 50:
+            _env_risk *= 1.15
+    factors["thermal"] = round(min(max((_env_risk - 1.0) / 0.50, 0.0), 1.0), 4)
 
     # --- 6. Hygroscopic sensitivity × AMS humidity ---
     hum_idx = min(max(ams_humidity, 0), 5)
-    p = min(p * _HYGRO_PENALTY[hygro_tier][hum_idx], 1.0)
+    hum_pen = _HYGRO_PENALTY[hygro_tier][hum_idx]
+    p = min(p * hum_pen, 1.0)
+    # Max penalty across all tiers/indices is 2.80; normalize above-baseline risk.
+    factors["humidity"] = round(min(max((hum_pen - 1.0) / 1.80, 0.0), 1.0), 4)
 
     # --- 7. Signal stability ---
     if stable_verdict == "clean":
         p *= 0.65
+        factors["stability"] = 0.0   # sustained clean signal → low risk
     elif stable_verdict == "warning":
         mid = (thresh_warn + thresh_crit) / 2.0
-        p *= 0.85 if score < mid else 1.05
-    # critical: already captured by lr
+        if score < mid:
+            p *= 0.85
+            factors["stability"] = 0.5
+        else:
+            p *= 1.05
+            factors["stability"] = 0.7
+    else:
+        # critical or unknown — anomaly factor already carries the primary risk
+        factors["stability"] = round(min(max(p, 0.0), 1.0), 4)
 
     # --- 8. Slicer/print settings ---
     # These are independent of material and environment — they describe how the
     # print was set up, which strongly predicts whether the first layer and
     # overhangs will survive.
     ps = context.get("print_settings") or {}
+    settings_mod = 1.0
     if ps:
-        settings_mod = 1.0
         brim_type   = (ps.get("brim_type") or "no_brim").lower()
         has_raft    = bool(ps.get("has_raft", False))
         has_support = bool(ps.get("has_support", False))
@@ -531,8 +597,10 @@ def compute_failure_probability(
             settings_mod *= 0.92
 
         p = min(p * settings_mod, 1.0)
+    # Normalize: settings penalty above 1.0; max realistic penalty ~0.50 above baseline.
+    factors["settings"] = round(min(max((settings_mod - 1.0) / 0.50, 0.0), 1.0), 4)
 
-    return round(min(max(p, 0.0), 1.0), 4)
+    return round(min(max(p, 0.0), 1.0), 4), factors
 
 
 def compute_decision_confidence(

@@ -14,6 +14,47 @@ For camera tool selection guidance, see `behavioral_rules/camera`.
 
 ---
 
+## How Print Health is Measured
+
+The system answers one question: **"What is the probability this print succeeds?"**
+
+It does this in three layers.
+
+**Layer 1 — Camera signals.** The camera watches the air zone above the print — the space where
+failures like spaghetti and strands appear first. Four signals are extracted: an overall anomaly
+score, how much of the zone is anomalously bright, how strand-like the visible features are, and
+how much the frame has changed since a stored reference. These collapse into a verdict: clean,
+warning, or critical.
+
+**Layer 2 — Failure probability model.** A multi-factor Bayesian model combines the verdict with
+printer telemetry: what material is loaded and how failure-prone it is, what printer series is
+running, how far through the print we are (early layers are riskiest), environmental conditions
+(bed temperature delta from target, chamber temperature vs. what the material requires), how wet
+the filament is from AMS humidity, whether the verdict has been stable over time, and what the
+slicer settings were. The result is `success_probability` — a single 0–1 score.
+
+**Layer 3 — Decision confidence.** A separate weight expresses how much to trust the current
+estimate, based on how many frames have been analyzed, whether the printer is actually printing
+(not leveling or warming up), and whether the necessary context is available (slicer settings,
+filament type, humidity reading). The **displayed value** is:
+
+    composite = success_probability × decision_confidence
+
+A high probability at low confidence is not actionable. Multiplying proportionally penalises it —
+92% probability at 20% confidence displays as 18%, correctly signalling "not enough data yet."
+
+**Model boundary.** The printer's own detection systems (HMS errors, xcam spaghetti/blob/air-print
+detectors) are deliberately excluded from this model. Those are fully managed by firmware — the
+printer already halts when their thresholds are exceeded. This model targets what firmware doesn't
+cover: gradual environmental drift, material-specific failure risk, and early anomaly accumulation
+that may require human judgment rather than an automatic halt.
+
+**Stage gating.** Analysis is skipped entirely when `stage ≠ 255` (auto-leveling, bed warming,
+filament changes, calibration). Pre-print stages produce meaningless anomaly scores — material
+has not yet been deposited. A STANDBY badge is shown instead.
+
+---
+
 ## analyze_active_job — Background Monitor
 
 `analyze_active_job(name, store_as_reference=False, quality="auto", categories=["X"])`
@@ -34,40 +75,48 @@ Retrieves the latest result from the **background job monitor daemon**, which au
 
 **PRIMARY FIELDS — use these to make decisions:**
 
-**`print_health`** — the single number to watch. 0.0–1.0 scale where **1.0 = fully healthy, 0.0 = print is likely failing**.
-  Higher is better. Treat like a health percentage: 0.95 = healthy, 0.60 = concerning, 0.30 = likely failing.
-  This is `1 - failure_probability` — it exists so you never have to invert anything.
+**`success_probability`** — the single number to watch. 0.0–1.0 scale where **1.0 = print will
+  almost certainly succeed, 0.0 = print is likely failing**. Higher is always better.
+  Treat like a success percentage: 0.95 = healthy, 0.60 = concerning, 0.30 = likely failing.
 
-**`decision_confidence`** — how much to trust `print_health` right now. 0.0–1.0 scale where 1.0 = high confidence.
-  - < 0.40 → insufficient data; treat `print_health` as a rough estimate, not a reliable verdict
-  - 0.40–0.70 → moderate confidence; `print_health` is directionally useful
-  - > 0.70 → high confidence; `print_health` is reliable enough to act on
-  Low values are normal early in a print — they rise automatically as more data accumulates.
+**`decision_confidence`** — how much to trust `success_probability` right now. 0.0–1.0 scale.
+  - < 0.40 → insufficient data; treat `success_probability` as a rough estimate only
+  - 0.40–0.70 → moderate confidence; directionally useful
+  - > 0.70 → high confidence; reliable enough to act on
+  Low values are normal early in a print — they rise automatically as data accumulates.
   Low `decision_confidence` is NOT a warning about the print; it is a warning about the estimate.
 
-**Recommended action thresholds:**
-  - `print_health < 0.30` and `decision_confidence > 0.60` → consider pausing and inspecting
-  - `print_health < 0.50` and `decision_confidence > 0.70` → report concern to user, suggest camera check
-  - `print_health > 0.70` → print is healthy; no action needed
+**Recommended action thresholds (apply only when decision_confidence > 0.60):**
+  - `success_probability < 0.30` → consider pausing and inspecting visually
+  - `success_probability < 0.50` → report concern to user, suggest camera check
+  - `success_probability > 0.70` → print is healthy; no action needed
 
 ---
 
-**SECONDARY FIELDS — implementation detail; feeds into print_health:**
+**SECONDARY FIELDS — signal sources that feed into success_probability:**
 
-**`verdict`** — single-frame heuristic result: "clean" | "warning" | "critical"
+**`verdict`** — single-frame verdict from camera signals: "clean" | "warning" | "critical"
   Thresholds (Obico-derived): clean < 0.08, warning 0.08–0.20, critical ≥ 0.20
 
 **`stable_verdict`** — statistical mode of last 5 verdicts; None for first 2 cycles.
   When stable_verdict is None, report "still building confidence (N/5 samples)".
 
-**`failure_probability`** — inverse of print_health (= 1 - print_health). Do not use this directly;
-  prefer `print_health` for all agent-facing logic. Retained for backwards compatibility.
+**`anomaly_score`** — raw air-zone anomaly score (0.0–1.0) from the camera frame.
 
-**`yolo_available`** — True if YOLOv11s ONNX model is loaded. False = no ML layer, heuristic only.
-**`yolo_boost`** — score addend from YOLO spaghetti detections (max 0.3 per detection above 0.5 conf).
-**`yolo_detections`** — list of {class, confidence, bbox} — raw ONNX output, not re-derived.
+**`hot_pct`** — fraction of air-zone pixels above the hot brightness threshold.
 
-**`stage_gated`** — True when analysis was skipped due to stage != 255. No score or images.
+**`strand_score`** — kernel response score for strand-like linear features in the air zone.
+
+**`diff_score`** — frame-to-frame difference score vs. stored reference frame.
+
+**`success_probability_trend`** — rolling direction indicator; positive = improving.
+
+**`success_probability_min`** — lowest `success_probability` recorded this print session.
+
+**`stage_gated`** — True when analysis was skipped due to stage != 255. No score or images
+  are produced. A STANDBY state is shown in the HUD.
+
+---
 
 ### Categories parameter
 
@@ -77,7 +126,7 @@ Request more when needed:
 | categories | Content | Approx size (standard) |
 |------------|---------|------------------------|
 | `["X"]` | Composite image (camera + overlays + health strip) | ~25 KB |
-| `["H"]` | Health panel (HMS, temps, fans, AMS) | ~8 KB |
+| `["H"]` | Health panel (badge, detectors, AMS humidity) | ~8 KB |
 | `["C"]` | Raw camera frame + diff frame | ~35 KB |
 | `["D"]` | All anomaly detection images | ~80 KB |
 | `["P"]` | Project thumbnail + plate layout | ~20 KB |
