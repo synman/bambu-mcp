@@ -42,7 +42,7 @@ Handles dataclasses, objects with __dict__. Skips MQTT clients, threads.
 
 | Property | Setter behavior |
 |---|---|
-| light_state | bool → publishes CHAMBER_LIGHT_TOGGLE for all light nodes |
+| light_state | bool → publishes CHAMBER_LIGHT_TOGGLE for all light nodes. Camera and visual analysis operations (get_snapshot, view_stream, analyze_active_job) require the light to be on for meaningful results. Use get_chamber_light() to read current state before camera ops; auto-restore after if changed. set_chamber_light() requires user_permission=True. |
 | speed_level | str → publishes SPEED_PROFILE_TEMPLATE with param=value |
 | service_state | Assignment + calls _notify_update() |
 

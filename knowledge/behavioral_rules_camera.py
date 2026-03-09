@@ -151,4 +151,38 @@ The distinction:
 Returning a data_uri to the human in a chat or terminal context is never the right choice.
 Embedding it in Markdown (`![img](data:...)`) is also wrong — rely on the browser-opening
 tools for human viewability.
+
+## Chamber light and camera operations
+
+The chamber light directly affects image quality for all camera and visual analysis operations.
+Always ensure the light is on before performing any camera operation for which the light
+state is not already confirmed.
+
+**When to turn the light on:**
+- Before `get_snapshot()` — AI-consumed snapshots require illumination to produce
+  meaningful image content for analysis
+- Before `view_stream()` / `start_stream()` — human-viewed streams need illumination
+- Before `analyze_active_job()` — the anomaly detection pipeline (spaghetti, air printing,
+  heat map) depends on a lit chamber to distinguish print artifacts from shadows
+- Before `open_job_state()` — images cached by the background monitor reflect the light
+  state at capture time; if the chamber was dark, results are unreliable
+- Before first-layer inspection or any live visual verification step in the bug fix lifecycle
+
+**When light state does not matter:**
+- `get_temperatures()`, `get_job_info()`, `get_print_progress()`, `get_ams_units()` —
+  telemetry-only operations; light state is irrelevant
+
+**Auto-manage pattern (mandatory for AI-initiated camera ops):**
+1. Call `get_chamber_light(name)` — read current state
+2. If `on` is `False`, call `set_chamber_light(name, on=True, user_permission=True)`
+3. Perform the camera operation
+4. After the operation, restore the original state:
+   - If the light was off before step 1, call `set_chamber_light(name, on=False, user_permission=True)`
+   - If the light was already on, leave it on — do not turn it off
+5. Document light state changes in your response (e.g. "turned light on for analysis, restored to off")
+
+**During active prints:** The light is typically already on while printing. Verify before
+assuming — use `get_chamber_light()` rather than inferring state from print status.
+`set_chamber_light` requires `user_permission=True`; if the auto-manage pattern reaches
+step 2 during an autonomous operation, use `ask_user` to confirm before proceeding.
 """
