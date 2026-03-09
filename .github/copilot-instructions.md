@@ -779,9 +779,13 @@ A commit that touches multiple layers requires all relevant tiers to pass. A tie
 
 ---
 
-## Bug Fix Lifecycle Standard (Mandatory)
+## Change Lifecycle Standard (Mandatory)
 
-Applies to every discovered bug in bambu-mcp, regardless of source (audit, user report, tool output, or incidental discovery during other work). All 7 stages are mandatory. No stage may be skipped.
+Applies to **every change** in bambu-mcp that affects agent behavior — bugs, enhancements, session todos, knowledge module additions, rules file changes, and post-audit findings. Source does not matter: GitHub issue, session todo, in-flight discovery, or direct user instruction. All 7 stages are mandatory. No stage may be skipped.
+
+**Scope:** If a change modifies any file that determines what a cold-start agent knows or does — `.py` source, knowledge modules (`knowledge/`), rules files (`.github/copilot-instructions.md`), HTTP routes (`api_server.py`), or HUD/stream behavior — the full lifecycle applies.
+
+**Session todos are not exempt.** A todo that produces a knowledge module addition or rules file change must go through Stage 4 → Stage 7 like any bug fix. "It's just a knowledge update" is not a valid reason to skip the test protocol.
 
 **Autonomy principle:** The agent operates autonomously across all stages by default. When blocked — technically (hardware access, platform limitation, physical observation required) or by rules (BPM write scope lock, git commit policy without a project grant, scope gate requiring a second repo, any action requiring a premium request) — it must:
 1. Name the specific rule or limitation that is blocking.
@@ -906,6 +910,13 @@ All pass criteria must be checked by the agent. "Looks right" is not a pass crit
 ---
 
 ### Stage 7 — Delivery (mandatory, no skipping)
+
+**Commit gate (absolute — no exceptions):** `git commit` is blocked until all of the following are true in the current turn:
+- `python -m py_compile` passed on every changed `.py` file (Stage 5 step 2)
+- `mcp-reload` completed and `-i done` received (Stage 5 step 3, for server-side changes)
+- Stage 6 post-fix verification passed (including completeness trace for knowledge/rules changes)
+
+If any of these have not been executed in the current turn, do not commit. Run the missing steps first.
 
 All of the following, in order:
 
