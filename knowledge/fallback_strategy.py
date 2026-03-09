@@ -26,6 +26,18 @@ ESCALATION_TIERS = [
         "reliability": "Highest — curated, verified, sanitized",
     },
     {
+        "tier": "1b",
+        "name": "bambu-mcp Local HTTP REST API",
+        "description": (
+            "If targeted MCP tools do not expose a required field or action, check the "
+            "bambu-mcp local HTTP REST API at http://localhost:{api_port}/api. "
+            "api_port is discovered via get_server_info(). Any remote or external API "
+            "is never part of this escalation sequence at any tier."
+        ),
+        "tool": "get_server_info() → get_knowledge_topic('http_api') → sub-topic",
+        "reliability": "High — same data source as MCP tools, broader route coverage",
+    },
+    {
         "tier": 2,
         "name": "Authoritative Sources (from rules files)",
         "description": (
@@ -116,12 +128,27 @@ Read the knowledge/ modules via bambu://knowledge/* resources or get_knowledge_t
 - http_api/files — SD card file management routes
 - http_api/system — system, diagnostics, and API documentation routes
 
-If Tier 1 answers the question fully, stop here.
+**"Exhausted Tier 1" means all of the following:**
+1. Checked the relevant knowledge sub-topics (e.g. `api_reference/state`, `enums/ams`).
+2. Called ALL targeted MCP tools relevant to the question category — not just `get_printer_state()`.
+   Examples: for filament state → `get_spool_info()`, `get_ams_units()`; for capabilities →
+   `get_capabilities()`; for print options → `get_printer_state()` + confirm field is absent.
+3. The specific field or answer is confirmed absent across ALL relevant targeted tools.
 
-### Tier 1b — HTTP REST API Fallback
-If an MCP tool does not exist for a required action, check the HTTP REST API before
-escalating to Tier 2. The REST API has broader coverage than the MCP tools and can
-fulfill many requests that have no direct MCP equivalent:
+Only then escalate to Tier 1b.
+
+### Tier 1b — bambu-mcp Local HTTP REST API Fallback
+If the targeted MCP tools do not expose a required field or action, check the
+**bambu-mcp local HTTP REST API** before escalating to Tier 2.
+
+**⚠️ Critical distinction — two HTTP endpoints exist; only one belongs here:**
+
+| Endpoint | When to use |
+|----------|-------------|
+| `http://localhost:{api_port}/api` — bambu-mcp local REST API | **Tier 1b** — broader route coverage than MCP tools; always try before Tier 2 |
+| Any remote/external API (outside localhost) | **Never** an escalation step — not part of this sequence at any tier |
+
+→ Call `get_server_info()` to discover `api_port`.
 → Call `get_knowledge_topic('http_api')` for the route index.
 → Then call the appropriate sub-topic (e.g. `get_knowledge_topic('http_api/print')`).
 
@@ -139,11 +166,12 @@ in the workspace rules files as authoritative. Search in this priority order:
 
 If Tier 2 answers the question, note the source and proceed.
 
-### Tier 3 — Broader Search (last resort)
+### Tier 3 — Broader Search (last resort, premium-gated)
 If both Tier 1 and Tier 2 fail to provide an answer:
 - Broaden GitHub code search to all repositories (no repo filter)
 - Search GitHub issues/PRs on the known reference repos
-- Search community sources (Home Assistant community, Bambu Lab forums)
+- Web search — **requires explicit user confirmation first** (Premium Requests rule);
+  state what you intend to search and why, then wait for approval before searching.
 
 **Always flag Tier 3 answers as potentially less reliable.**
 """.strip()
