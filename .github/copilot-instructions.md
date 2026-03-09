@@ -759,6 +759,15 @@ Every fix requires three test phases — all executed by the agent, no user step
 | **Post-fix verification** | Prove the fix works + prove the fallback/alternate path works | Same measurement tools, all paths exercised |
 | **Tier 1 static check** | Syntax + compile check after every file edit | `python -m py_compile` |
 
+**No fix type is exempt from this protocol.** The assertion tool changes by fix type — but the three phases are always required:
+
+| Fix type | Pre-fix assertion | Post-fix assertion |
+|----------|------------------|--------------------|
+| Runtime behavior (tool, stream, UI) | MCP tool call / osascript / curl — observe wrong behavior | Same — observe correct behavior + fallback path |
+| Knowledge module (Python string constants, docstrings) | `git show HEAD:file \| grep` — show the ambiguous/missing text | `grep` — confirm correct text present; confirm forbidden content absent |
+| Enum / data structure | `python -c "import …; assert …"` — show wrong value | Same — assert correct value |
+| Config / flag default | Source read + assert — show wrong default | Source read + assert — show correct default |
+
 The agent must attempt full autonomy. When a step cannot be made autonomous (technical or rules-based), apply the autonomy principle above — name the blockage, state what is needed, ask.
 
 ---
