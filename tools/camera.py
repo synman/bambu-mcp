@@ -30,6 +30,52 @@ from session_manager import session_manager
 from camera.mjpeg_server import mjpeg_server
 from camera.protocol import get_protocol, get_rtsps_url
 
+# ---------------------------------------------------------------------------
+# Elapsed-time persistence — survives mcp-reload by caching to disk
+# ---------------------------------------------------------------------------
+_ELAPSED_CACHE_DIR = pathlib.Path.home() / ".bambu-mcp" / "elapsed"
+
+def _elapsed_key(job) -> str | None:
+    """Stable key for a job: subtask_name or gcode_file, sanitised."""
+    raw = (getattr(job, "subtask_name", "") or getattr(job, "gcode_file", "") or "").strip()
+    if not raw:
+        return None
+    return raw.replace("/", "_").replace(" ", "_")[:80]
+
+def _persist_elapsed(key: str, elapsed_minutes: int) -> None:
+    """Write elapsed_minutes + wall timestamp to disk."""
+    try:
+        _ELAPSED_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        import json, time as _time
+        (_ELAPSED_CACHE_DIR / f"{key}.json").write_text(
+            json.dumps({"elapsed_minutes": elapsed_minutes, "saved_at": _time.time()})
+        )
+    except Exception:
+        pass
+
+def _load_elapsed(key: str) -> int:
+    """Load persisted elapsed, adding wall-clock time since the save."""
+    try:
+        import json, time as _time
+        data = json.loads((_ELAPSED_CACHE_DIR / f"{key}.json").read_text())
+        since_save = (_time.time() - data["saved_at"]) / 60.0
+        return int(data["elapsed_minutes"] + since_save)
+    except Exception:
+        return 0
+
+def _get_elapsed(job) -> int:
+    """Return best elapsed_minutes: BPM value when live, persisted+grown when BPM resets."""
+    bpm_elapsed = job.elapsed_minutes if job else 0
+    key = _elapsed_key(job) if job else None
+    if not key:
+        return bpm_elapsed
+    if bpm_elapsed > 0:
+        _persist_elapsed(key, bpm_elapsed)
+        return bpm_elapsed
+    # BPM returned 0 (just restarted) — use persisted value grown by wall time
+    persisted = _load_elapsed(key)
+    return persisted if persisted > 0 else 0
+
 
 def _no_printer(name: str) -> dict:
     return {"error": f"Printer '{name}' not connected"}
@@ -100,7 +146,7 @@ def _build_status(name: str) -> dict:
             "print_percentage": job.print_percentage if job else 0,
             "current_layer": job.current_layer if job else 0,
             "total_layers": job.total_layers if job else 0,
-            "elapsed_minutes": job.elapsed_minutes if job else 0,
+            "elapsed_minutes": _get_elapsed(job),
             "remaining_minutes": job.remaining_minutes if job else 0,
             "stage_name": job.stage_name if job else "",
             "subtask_name": job.subtask_name if job else "",
