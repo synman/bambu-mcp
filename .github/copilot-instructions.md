@@ -111,6 +111,19 @@ Apply when authoring or reviewing tools and docstrings: if a naive agent could n
 
 **`/snapshot` endpoint**: `GET /snapshot` returns a single JPEG frame (`Content-Type: image/jpeg`, `Content-Length` set, connection closed). It must NOT use the streaming generator — grab one frame with `next(iter(frame_factory()))` and return immediately.
 
+## Stream Session Rules (Mandatory)
+
+**One server per printer** — `MJPEGServer.start()` enforces a single server instance per printer name. A second `start_stream()` call returns the existing URL without spawning a new server. Multiple browser clients can connect to the same server concurrently; each gets an independent frame stream.
+
+**Tab reuse on `view_stream()`** — each call must surface the stream in one tab, never accumulate additional tabs:
+- On macOS: `_focus_existing_tab(url)` in `tools/camera.py` queries Chrome and Safari via osascript. If a tab matching the stream URL is found, it is focused; `webbrowser.open()` is skipped.
+- On non-macOS (Linux, Windows): `_focus_existing_tab()` returns `False` immediately; falls back to `webbrowser.open()` unconditionally.
+- When no tab exists (first call, or tab was closed): `webbrowser.open()` fires normally.
+
+**`opened` return value** — `view_stream()` always returns `opened: True` when the stream was surfaced (whether via focus or fresh open). `opened: False` only if `webbrowser.open()` itself failed.
+
+**Agent behavior when stream already active** — if `get_server_info()` shows `stream_count > 0` for a printer, call `view_stream()` to focus/surface the existing tab. Do not call `stop_stream()` + `start_stream()` to work around tab state — `_focus_existing_tab()` handles it.
+
 ## MCP Server Restart Procedure (Mandatory)
 
 Restarting `server.py` is required after any code change to `bambu-mcp`. The procedure has two distinct phases — both are required for a full restart.

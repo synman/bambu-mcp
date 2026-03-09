@@ -21,6 +21,8 @@ import base64
 import logging
 import os
 import pathlib
+import subprocess
+import sys
 import tempfile
 from datetime import datetime, timezone
 
@@ -900,6 +902,60 @@ def open_job_state(name: str) -> dict:
     }
 
 
+def _focus_existing_tab(url: str) -> bool:
+    """On macOS, find an open browser tab whose URL starts with `url` and focus it.
+
+    Returns True if a tab was found and focused, False otherwise.
+    Non-macOS always returns False immediately — no subprocess is spawned.
+    """
+    if sys.platform != "darwin":
+        return False
+    script = f"""
+tell application "System Events"
+    repeat with browserName in {{"Google Chrome", "Safari"}}
+        if (count (processes whose name is browserName)) > 0 then
+            if browserName is "Google Chrome" then
+                tell application "Google Chrome"
+                    repeat with w in windows
+                        repeat with t in tabs of w
+                            if URL of t starts with "{url}" then
+                                set active tab of w to t
+                                set index of w to 1
+                                activate
+                                return true
+                            end if
+                        end repeat
+                    end repeat
+                end tell
+            else
+                tell application "Safari"
+                    repeat with w in windows
+                        repeat with t in tabs of w
+                            if URL of t starts with "{url}" then
+                                set current tab of w to t
+                                set index of w to 1
+                                activate
+                                return true
+                            end if
+                        end repeat
+                    end repeat
+                end tell
+            end if
+        end if
+    end repeat
+end tell
+return false
+"""
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True, text=True, timeout=3,
+        )
+        return result.stdout.strip() == "true"
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def view_stream(name: str) -> dict:
     """
     Start the local MJPEG camera stream server (if not already running) and open it
@@ -927,9 +983,14 @@ def view_stream(name: str) -> dict:
     if "error" in result:
         return result
     url = result["url"]
-    open_url = url.rstrip("/") + f"/open?name=bambu-{name}"
-    opened = webbrowser.open(open_url)
-    log.debug("view_stream: browser open result=%s for url=%s", opened, url)
+    focused = _focus_existing_tab(url)
+    if focused:
+        log.debug("view_stream: focused existing tab for %s", name)
+        opened = True
+    else:
+        open_url = url.rstrip("/") + f"/open?name=bambu-{name}"
+        opened = webbrowser.open(open_url)
+        log.debug("view_stream: browser open result=%s for url=%s", opened, url)
     return {
         "url": url,
         "port": result["port"],
