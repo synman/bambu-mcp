@@ -1087,10 +1087,23 @@ def _build_health_panel_png(
     verdict: str,
     score: float,
     printer_context: dict,
+    print_health: Optional[float] = None,
+    decision_confidence: Optional[float] = None,
+    stage_gated: bool = False,
 ) -> bytes:
     """
     H1 — Print health strip. Full-width, fixed height 48px.
     Sections: verdict badge | HMS | detectors | temps | fans | AMS humidity
+
+    The verdict badge shows HEALTH % (top) and Confidence % (right-justified, below).
+    When stage_gated=True (pre-print prep, homing, leveling), the badge overrides
+    to a neutral "PREP" state — it is impossible to assess print health before printing.
+    Badge color is driven by a composite of health and confidence:
+      - stage_gated → neutral gray (cannot assess)
+      - low confidence (<0.40) → dim the badge regardless of health
+      - health >= 0.70 → green
+      - health >= 0.50 → amber
+      - health <  0.50 → red
     """
     ph = 48
     img = Image.new("RGBA", (tw, ph), C_BG_PANEL)
@@ -1099,14 +1112,54 @@ def _build_health_panel_png(
 
     fn10 = _font(10)
     fn11 = _font(11)
-    badge = _VERDICT_BADGE.get(verdict, _VERDICT_BADGE["clean"])
+    fn13 = _font(13)
     x = 6
 
-    # Verdict badge
-    draw.rounded_rectangle([x, 6, x+54, 26], radius=3, fill=badge["bg"])
-    draw.text((x+27, 16), verdict.upper(), fill=badge["fg"], font=fn10, anchor="mm")
-    draw.text((x+27, 34), f"{score:.3f}", fill=badge["fg"], font=fn10, anchor="mm")
-    x += 62
+    # --- Composite badge logic ---
+    # Stage-gated: printer is in prep (homing, leveling, heating) — health is unknowable
+    if stage_gated or print_health is None:
+        badge_bg  = (60, 60, 80, 200)
+        badge_fg  = (160, 160, 180, 255)
+        health_str = "PREP"
+        conf_str   = ""
+        health_font = fn10
+    else:
+        conf = decision_confidence if decision_confidence is not None else 0.0
+        ph_val = print_health
+
+        # Confidence-adjusted color: low confidence dims the badge
+        if conf < 0.40:
+            badge_bg = (50, 50, 70, 200)
+            badge_fg = (140, 140, 160, 255)
+        elif ph_val >= 0.70:
+            badge_bg = _VERDICT_BADGE["clean"]["bg"]
+            badge_fg = _VERDICT_BADGE["clean"]["fg"]
+        elif ph_val >= 0.50:
+            badge_bg = _VERDICT_BADGE["warning"]["bg"]
+            badge_fg = _VERDICT_BADGE["warning"]["fg"]
+        else:
+            badge_bg = _VERDICT_BADGE["critical"]["bg"]
+            badge_fg = _VERDICT_BADGE["critical"]["fg"]
+
+        health_str  = f"{ph_val*100:.0f}%"
+        conf_str    = f"{conf*100:.0f}%"
+        health_font = fn13
+
+    badge_w = 64
+    draw.rounded_rectangle([x, 4, x + badge_w, ph - 4], radius=3, fill=badge_bg)
+
+    if stage_gated or print_health is None:
+        # Single centered label — PREP
+        draw.text((x + badge_w // 2, ph // 2), health_str, fill=badge_fg, font=health_font, anchor="mm")
+    else:
+        # Health % — centered, upper portion
+        draw.text((x + badge_w // 2, 16), health_str, fill=badge_fg, font=health_font, anchor="mm")
+        # "Confidence" label left, value right-justified — lower portion
+        if conf_str:
+            draw.text((x + 4, 32), "Confidence", fill=(*badge_fg[:3], 160), font=fn10, anchor="lm")
+            draw.text((x + badge_w - 4, 32), conf_str, fill=badge_fg, font=fn11, anchor="rm")
+
+    x += badge_w + 8
 
     # Separator
     draw.line([(x, 8), (x, ph-8)], fill=(*C_SEP[:3], 60), width=1)
@@ -1331,6 +1384,7 @@ def analyze(
     quality: str = "auto",
     project_thumbnail_uri: Optional[str] = None,
     project_layout_uri: Optional[str] = None,
+    window_size: int = 0,
 ) -> JobStateReport:
     """
     Produce a JobStateReport from a raw JPEG frame.
@@ -1412,7 +1466,19 @@ def analyze(
     if ref_rgb is not None:
         diff_png = _build_diff_png(frame_rgb, ref_rgb, W, H, tw, th, reference_age_s)
 
-    health_panel_png = _build_health_panel_png(tw * 2 + 2, verdict, score, printer_context)
+    # Compute health + confidence for the panel
+    # Stage-gated: gcode_state is not RUNNING/PAUSE → printer is in prep, health is unknowable
+    _gcode_state = printer_context.get("gcode_state", "IDLE")
+    _stage_gated = _gcode_state not in ("RUNNING", "PAUSE", "PAUSED")
+    _ph = round(1.0 - score, 4)
+    _dc = compute_decision_confidence(window_size, _stage_gated, printer_context)
+
+    health_panel_png = _build_health_panel_png(
+        tw * 2 + 2, verdict, score, printer_context,
+        print_health=_ph,
+        decision_confidence=_dc,
+        stage_gated=_stage_gated,
+    )
 
     # Project identity
     project_thumbnail_png = _decode_data_uri_png(project_thumbnail_uri) if project_thumbnail_uri else None

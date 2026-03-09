@@ -455,8 +455,11 @@ class _PrinterMonitor:
             return
 
         try:
+            with self._lock:
+                _current_window_size = len(self._confidence_window)
             report = _analyze(jpeg, printer_context, reference_jpeg=ref_jpeg,
-                              reference_age_s=ref_age, quality="auto")
+                              reference_age_s=ref_age, quality="auto",
+                              window_size=_current_window_size)
         except Exception as e:
             log.warning("job_monitor[%s]: analyze failed: %s", printer_name, e)
             return
