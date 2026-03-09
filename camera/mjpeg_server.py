@@ -170,21 +170,26 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
     <span style="font-size:11px;color:#666;letter-spacing:.04em">Confidence</span>
     <span id="hp-conf-val" style="font-size:13px;text-align:right">—</span>
   </div>
-  <div class="hp-body collapsed" id="hp-body">
+  <div id="hp-body" class="hp-body collapsed">
+    <div class="hdr" onclick="hudToggle(this,'hp-sec-score')">Score<span class="hdr-chev open">▲</span></div>
+    <div class="hdr-section" id="hp-sec-score" style="display:none">
+      <img id="hp-gauge-img" src="" alt="Composite health gauge" style="display:block;width:100%;border-radius:4px;opacity:.92;margin-top:4px">
+    </div>
     <div class="hdr" onclick="hudToggle(this,'hp-sec-metrics')">Metrics<span class="hdr-chev open">▲</span></div>
     <div class="hdr-section" id="hp-sec-metrics">
       <div class="hp-metric-row"><span class="hp-lbl">Hot px</span><span id="hp-hot" class="hp-val">—</span></div>
       <div class="hp-metric-row"><span class="hp-lbl">Strand</span><span id="hp-strand" class="hp-val">—</span></div>
-      <div class="hp-metric-row"><span class="hp-lbl">Edge</span><span id="hp-edge" class="hp-val">—</span></div>
       <div class="hp-metric-row"><span class="hp-lbl">Diff</span><span id="hp-diff" class="hp-val">—</span></div>
       <div class="hp-metric-row"><span class="hp-lbl">Layer</span><span id="hp-layer" class="hp-val">—</span></div>
       <div class="hp-metric-row"><span class="hp-lbl">Progress</span><span id="hp-progress" class="hp-val">—</span></div>
     </div>
     <div class="hdr" onclick="hudToggle(this,'hp-sec-trends')">Trends<span class="hdr-chev open">▲</span></div>
     <div class="hdr-section" id="hp-sec-trends">
-      <div class="hp-spark-row"><span class="hp-slbl">Anomaly</span><canvas id="hp-sp-canvas"></canvas></div>
+      <div class="hp-spark-row"><span class="hp-slbl">Success</span><canvas id="hp-sp-canvas"></canvas></div>
+      <div class="hp-spark-row"><span class="hp-slbl">Confidence</span><canvas id="hp-dc-canvas"></canvas></div>
       <div class="hp-spark-row"><span class="hp-slbl">Nozzle °C</span><canvas id="hp-nz-canvas" class="hp-spark-mini"></canvas></div>
       <div class="hp-spark-row"><span class="hp-slbl">Bed °C</span><canvas id="hp-bd-canvas" class="hp-spark-mini"></canvas></div>
+      <div id="hp-trend-status" style="font-size:11px;color:#888;padding:4px 2px 2px;line-height:1.6"></div>
     </div>
     <div id="hp-anomaly-section" style="display:none">
       <div class="hdr" onclick="hpAnomalyToggle(this)">AI Detection<span class="hdr-chev open">▲</span></div>
@@ -195,6 +200,12 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
           <div class="hp-det-row"><span class="hp-det-swatch" style="border-color:#60d080"></span><span class="hp-det-key">Plate Zone</span></div>
           <div class="hp-det-row"><span class="hp-det-swatch" style="background:linear-gradient(90deg,#ff9040,#ff5050)"></span><span class="hp-det-key">Heat Map</span></div>
         </div>
+      </div>
+    </div>
+    <div id="hp-radar-section" style="display:none">
+      <div class="hdr" onclick="hudToggle(this,'hp-sec-radar')">Failure Drivers<span class="hdr-chev open">▲</span></div>
+      <div class="hdr-section" id="hp-sec-radar">
+        <img id="hp-radar-img" src="" alt="Failure factor radar" style="display:block;width:100%;aspect-ratio:1/1;border-radius:4px;opacity:.92;margin-top:4px">
       </div>
     </div>
   </div>
@@ -466,12 +477,24 @@ function refreshImages(){
       document.getElementById('hp-anomaly-section').style.display='';
     } else { document.getElementById('hp-anomaly-section').style.display='none'; }
   }).catch(function(){document.getElementById('hp-anomaly-section').style.display='none';});
+  fetch('/factors_radar?t='+t).then(function(r){
+    if(r.ok&&r.status!==204&&r.headers.get('Content-Type')&&r.headers.get('Content-Type').indexOf('image')>=0){
+      document.getElementById('hp-radar-img').src='/factors_radar?t='+t;
+      document.getElementById('hp-radar-section').style.display='';
+    } else { document.getElementById('hp-radar-section').style.display='none'; }
+  }).catch(function(){document.getElementById('hp-radar-section').style.display='none';});
+  fetch('/health_panel_img?t='+t).then(function(r){
+    if(r.ok&&r.status!==204&&r.headers.get('Content-Type')&&r.headers.get('Content-Type').indexOf('image')>=0){
+      document.getElementById('hp-gauge-img').src='/health_panel_img?t='+t;
+      document.getElementById('hp-sec-score').style.display='';
+    } else { document.getElementById('hp-sec-score').style.display='none'; }
+  }).catch(function(){document.getElementById('hp-sec-score').style.display='none';});
 }
 function poll(){_hpPoll();}
 refreshImages();
 setInterval(refreshImages,15000);
 // Health panel state
-var _hpScores=[];var _hpNozzles=[];var _hpBeds=[];var _hpMaxSamples=30;
+var _hpScores=[];var _hpDcScores=[];var _hpNozzles=[];var _hpBeds=[];var _hpMaxSamples=30;
 var _hpPollInterval=8000;var _hpLastPoll=0;
 var _hpUserOverride=false;var _hpPrevState=null;
 function hpToggle(hdr){
@@ -492,7 +515,7 @@ function hpAnomalyToggle(hdr){
     chev.classList.add('open');
   }
 }
-function hpUpdateSparkline(canvasId,data,color,minV,maxV,valLabel){
+function hpUpdateSparkline(canvasId,data,color,minV,maxV,valLabel,dashed){
   var c=document.getElementById(canvasId);if(!c)return;
   c.width=c.offsetWidth||90;c.height=c.offsetHeight||48;
   var ctx=c.getContext('2d');var w=c.width;var h=c.height;
@@ -502,25 +525,29 @@ function hpUpdateSparkline(canvasId,data,color,minV,maxV,valLabel){
   var mx=maxV!==undefined?maxV:Math.max.apply(null,data);
   if(mx===mn)mx=mn+1;
   function yOf(v){return h-(v-mn)/(mx-mn)*(h-4)-2;}
-  // Gradient fill
-  ctx.beginPath();
-  data.forEach(function(v,i){
-    var x=i/(data.length-1)*w;
-    if(i===0)ctx.moveTo(x,yOf(v));else ctx.lineTo(x,yOf(v));
-  });
-  ctx.save();
-  ctx.lineTo(w,h);ctx.lineTo(0,h);ctx.closePath();
-  var grd=ctx.createLinearGradient(0,0,0,h);
-  grd.addColorStop(0,hexToRgba(color,.35));
-  grd.addColorStop(1,hexToRgba(color,.03));
-  ctx.fillStyle=grd;ctx.fill();ctx.restore();
+  // Gradient fill (skip for dashed/confidence line)
+  if(!dashed){
+    ctx.beginPath();
+    data.forEach(function(v,i){
+      var x=i/(data.length-1)*w;
+      if(i===0)ctx.moveTo(x,yOf(v));else ctx.lineTo(x,yOf(v));
+    });
+    ctx.save();
+    ctx.lineTo(w,h);ctx.lineTo(0,h);ctx.closePath();
+    var grd=ctx.createLinearGradient(0,0,0,h);
+    grd.addColorStop(0,hexToRgba(color,.35));
+    grd.addColorStop(1,hexToRgba(color,.03));
+    ctx.fillStyle=grd;ctx.fill();ctx.restore();
+  }
   // Stroke on top
   ctx.beginPath();
   data.forEach(function(v,i){
     var x=i/(data.length-1)*w;
     if(i===0)ctx.moveTo(x,yOf(v));else ctx.lineTo(x,yOf(v));
   });
-  ctx.strokeStyle=color;ctx.lineWidth=1.5;ctx.stroke();
+  if(dashed)ctx.setLineDash([4,3]);
+  ctx.strokeStyle=color;ctx.lineWidth=dashed?1.2:1.5;ctx.stroke();
+  ctx.setLineDash([]);
   // Threshold hairlines for anomaly score
   if(minV===0&&maxV===0.3){
     ctx.setLineDash([2,3]);ctx.lineWidth=1;
@@ -578,13 +605,29 @@ function hpUpdateFromResult(d){
   }else{cEl.textContent='—';}
   document.getElementById('hp-hot').textContent=d.hot_pct!==undefined?(d.hot_pct*100).toFixed(1)+'%':'—';
   document.getElementById('hp-strand').textContent=d.strand_score!==undefined?d.strand_score.toFixed(4):'—';
-  document.getElementById('hp-edge').textContent=d.edge_density!==undefined?d.edge_density.toFixed(4):'—';
   document.getElementById('hp-diff').textContent=d.diff_score!==null&&d.diff_score!==undefined?d.diff_score.toFixed(4):'—';
   document.getElementById('hp-layer').textContent=(d.layer&&d.total_layers)?d.layer+'/'+d.total_layers:'—';
   document.getElementById('hp-progress').textContent=d.progress_pct!==undefined?d.progress_pct+'%':'—';
-  _hpScores.push(comp!==null?comp:0);if(_hpScores.length>_hpMaxSamples)_hpScores.shift();
-  hpUpdateSparkline('hp-sp-canvas',_hpScores,hColor,0,1,(comp!==null?Math.round(comp*100)+'%':'—'));
-}
+  var sp=d.success_probability;
+  _hpScores.push(sp!==null&&sp!==undefined?sp:0);if(_hpScores.length>_hpMaxSamples)_hpScores.shift();
+  hpUpdateSparkline('hp-sp-canvas',_hpScores,'#60d080',0,1,(sp!==null&&sp!==undefined?Math.round(sp*100)+'%':'—'));
+  _hpDcScores.push(dc!==null&&dc!==undefined?dc:0);if(_hpDcScores.length>_hpMaxSamples)_hpDcScores.shift();
+  hpUpdateSparkline('hp-dc-canvas',_hpDcScores,'#80a0ff',0,1,(dc!==null&&dc!==undefined?Math.round(dc*100)+'%':'—'),true);
+  // Status text row in Trends section
+  var statusEl=document.getElementById('hp-trend-status');
+  if(statusEl){
+    var gs=d.gcode_state||'';
+    var stateColor=gs==='RUNNING'?'#40d0c0':gs==='PAUSE'?'#f0c040':gs==='FAILED'?'#ff5050':'#888';
+    var stateStr='<span style="color:'+stateColor+'">'+gs+'</span>';
+    var layerStr=(d.layer&&d.total_layers)?(' &nbsp;Layer: '+d.layer+'/'+d.total_layers):'';
+    var humIdx=d.ams_humidity;var humStr='';
+    if(humIdx!==null&&humIdx!==undefined&&humIdx>0){
+      var humPct=Math.round((6-humIdx)/5*100);
+      var humLabel=humIdx<=2?'WET':humIdx<=3?'Damp':'Dry';
+      humStr=' &nbsp;AMS: '+humPct+'% ('+humLabel+')';
+    }
+    statusEl.innerHTML=stateStr+layerStr+humStr;
+  }
 function hpPollJobState(){
   var now=Date.now();
   if(now-_hpLastPoll<_hpPollInterval)return;
@@ -728,6 +771,10 @@ class _StreamHandler(BaseHTTPRequestHandler):
             self._serve_image(self.server.layout_fn)
         elif path == "/annotated":
             self._serve_annotated()
+        elif path == "/factors_radar":
+            self._serve_monitor_png("factors_radar_png")
+        elif path == "/health_panel_img":
+            self._serve_monitor_png("health_panel_png")
         elif path in ("/", "/index.html"):
             self._serve_html()
         elif path == "/snapshot":
@@ -869,8 +916,30 @@ class _StreamHandler(BaseHTTPRequestHandler):
         self.send_response(204)
         self.end_headers()
 
+    def _serve_monitor_png(self, result_key: str):
+        """Serve a PNG stored as a data URI in the monitor result dict."""
+        printer_name = getattr(self.server, "printer_name", None)
+        try:
+            import base64
+            from camera import job_monitor
+            result = job_monitor.get_latest_result(printer_name) if printer_name else None
+            uri = (result or {}).get(result_key, "")
+            if uri and uri.startswith("data:"):
+                _, b64 = uri.split(",", 1)
+                body = base64.b64decode(b64)
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+                return
+        except Exception as e:
+            log.debug("_serve_monitor_png(%s): error: %s", result_key, e)
+        self.send_response(204)
+        self.end_headers()
 
-
+    def _serve_snapshot(self):
         """Return a single JPEG frame as image/jpeg and close the connection."""
         log.debug("_serve_snapshot: requested by %s", self.client_address)
         try:

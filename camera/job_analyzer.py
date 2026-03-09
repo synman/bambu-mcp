@@ -1215,16 +1215,10 @@ def _build_radar_png(factor_contributions: dict, size: int = 220) -> bytes:
               for _, key in _RADAR_LABELS]
     max_val = max(values) if values else 0.0
 
-    # Color based on worst factor.
-    if max_val >= 0.60:
-        poly_color = (*C_CRIT, 140)
-        ring_color = (*C_CRIT, 200)
-    elif max_val >= 0.30:
-        poly_color = (*C_WARN, 120)
-        ring_color = (*C_WARN, 200)
-    else:
-        poly_color = (*C_OK, 110)
-        ring_color = (*C_OK, 200)
+    # Amber/yellow polygon — consistent color regardless of risk level (matches UI theme)
+    _AMBER = (240, 192, 64)
+    poly_color = (*_AMBER, 64)
+    ring_color = (*_AMBER, 200)
 
     pts_data = []
     for i, v in enumerate(values):
@@ -1271,159 +1265,183 @@ def _build_health_panel_png(
     stage_gated: bool = False,
 ) -> bytes:
     """
-    H1 — Print health strip. Full-width, fixed height 48px.
-    Sections: verdict badge | HMS | detectors | temps | fans | AMS humidity
+    H1 — Print health panel. Full-width, 120px tall.
 
-    The verdict badge shows HEALTH % (top) and Confidence % (right-justified, below).
-    When stage_gated=True (pre-print prep, homing, leveling), the badge overrides
-    to a neutral "PREP" state — it is impossible to assess print health before printing.
-    Badge color is driven by a composite of health and confidence:
-      - stage_gated → neutral gray (cannot assess)
-      - low confidence (<0.40) → dim the badge regardless of health
-      - health >= 0.70 → green
-      - health >= 0.50 → amber
-      - health <  0.50 → red
+    Left section: Arc gauge showing success_probability with a narrow semi-transparent
+    confidence band.  The arc sweeps 225° (from 7 o'clock to 5 o'clock).  The band
+    width scales with decision_confidence — tight band = high confidence.
+    Right section: HMS status, detector states, temps, fans, AMS humidity.
     """
-    ph = 48
-    img = Image.new("RGBA", (tw, ph), C_BG_PANEL)
+    PH = 120       # panel height
+    GAUGE_W = 130  # width reserved for the gauge on the left
+    img = Image.new("RGBA", (tw, PH), C_BG_PANEL)
     draw = ImageDraw.Draw(img, "RGBA")
-    draw.rectangle([0, 0, tw-1, ph-1], outline=(*C_BORDER[:3], C_BORDER[3]), width=1)
+    draw.rectangle([0, 0, tw - 1, PH - 1], outline=(*C_BORDER[:3], C_BORDER[3]), width=1)
 
+    fn8  = _font(8)
     fn10 = _font(10)
     fn11 = _font(11)
     fn13 = _font(13)
-    x = 6
+    fn16 = _font(16)
 
-    # --- Composite = health × confidence; stage-gated override ---
-    conf = decision_confidence if decision_confidence is not None else None
-    comp = (print_health * conf) if (print_health is not None and conf is not None) else print_health
+    # ── Composite score ────────────────────────────────────────────────────
+    conf  = decision_confidence if decision_confidence is not None else None
+    ph    = print_health if print_health is not None else None
+    comp  = (ph * conf) if (ph is not None and conf is not None) else ph
 
     if stage_gated or comp is None:
-        badge       = {"bg": (50, 50, 72), "fg": (140, 140, 175)}
-        badge_label = "STANDBY"
-        health_txt  = "—"
-        health_col  = (140, 140, 175)
+        h_color = (140, 140, 175)
+        badge_lbl = "STANDBY"
+        comp_txt  = "—"
     elif comp >= 0.70:
-        badge       = _VERDICT_BADGE["clean"]
-        badge_label = "CLEAN"
-        health_txt  = f"{comp * 100:.0f}%"
-        health_col  = badge["fg"]
+        h_color   = C_OK
+        badge_lbl = "CLEAN"
+        comp_txt  = f"{comp * 100:.0f}%"
     elif comp >= 0.50:
-        badge       = _VERDICT_BADGE["warning"]
-        badge_label = "WARN"
-        health_txt  = f"{comp * 100:.0f}%"
-        health_col  = badge["fg"]
+        h_color   = C_WARN
+        badge_lbl = "WARN"
+        comp_txt  = f"{comp * 100:.0f}%"
     else:
-        badge       = _VERDICT_BADGE["critical"]
-        badge_label = "CRIT"
-        health_txt  = f"{comp * 100:.0f}%"
-        health_col  = badge["fg"]
+        h_color   = C_CRIT
+        badge_lbl = "CRIT"
+        comp_txt  = f"{comp * 100:.0f}%"
 
-    # Verdict badge pill — original shape, composite-driven color
-    BADGE_W = 54
-    draw.rounded_rectangle([x, 6, x + BADGE_W, 26], radius=3, fill=badge["bg"])
-    draw.text((x + BADGE_W // 2, 16), badge_label, fill=badge["fg"], font=fn10, anchor="mm")
+    # ── Arc gauge (left section) ───────────────────────────────────────────
+    # Arc sweeps 225° starting at 202.5° (7 o'clock CCW) to -22.5° (5 o'clock).
+    # PIL arc: 0° = 3 o'clock, clockwise positive.
+    cx, cy = GAUGE_W // 2, PH // 2 + 6
+    R_OUTER = 46
+    R_INNER = 34
+    ARC_START = 135    # PIL degrees (7 o'clock = 225° geometric = 135° PIL)
+    ARC_SPAN  = 270    # degrees swept for full range
 
-    # Health % — next to badge pill, replacing the old raw score
-    draw.text((x + BADGE_W + 6, 14), health_txt, fill=health_col, font=fn13, anchor="lm")
+    # Track (background arc)
+    bbox = [cx - R_OUTER, cy - R_OUTER, cx + R_OUTER, cy + R_OUTER]
+    draw.arc(bbox, start=ARC_START, end=ARC_START + ARC_SPAN,
+             fill=(60, 60, 60, 180), width=R_OUTER - R_INNER)
 
-    # "Confidence" + value — right-justified within the badge section
-    BADGE_SECTION_W = 168
-    conf_txt = f"{conf * 100:.0f}%" if conf is not None else "—"
-    draw.text((x + BADGE_SECTION_W - 4, 10), "Confidence", fill=C_LBL, font=fn10, anchor="rt")
-    draw.text((x + BADGE_SECTION_W - 4, 28), conf_txt,    fill=C_VAL, font=fn11, anchor="rm")
+    # Value arc
+    val = max(0.0, min(1.0, comp if comp is not None else 0.0))
+    val_span = int(ARC_SPAN * val)
+    if val_span > 0:
+        draw.arc(bbox, start=ARC_START, end=ARC_START + val_span,
+                 fill=(*h_color, 220), width=R_OUTER - R_INNER)
 
-    x += BADGE_SECTION_W
+    # Confidence band — semi-transparent ring ±band_half around value arc end.
+    if conf is not None and val_span > 0:
+        band_half = max(3, int(ARC_SPAN * (1.0 - conf) * 0.12))
+        arc_end = ARC_START + val_span
+        R_MID   = (R_OUTER + R_INNER) // 2
+        R_B     = max(1, (R_OUTER - R_INNER) // 2 - 1)
+        draw.arc(
+            [cx - R_MID - R_B, cy - R_MID - R_B, cx + R_MID + R_B, cy + R_MID + R_B],
+            start=arc_end - band_half,
+            end=arc_end + band_half,
+            fill=(*h_color, 55),
+            width=R_B * 2,
+        )
 
-    # Separator
-    draw.line([(x, 8), (x, ph-8)], fill=(*C_SEP[:3], 60), width=1)
-    x += 8
+    # Centre text: composite %
+    draw.text((cx, cy - 6), comp_txt, fill=h_color, font=fn16, anchor="mm")
+    draw.text((cx, cy + 10), badge_lbl, fill=C_LBL, font=fn8, anchor="mm")
 
-    # HMS
-    hms = printer_context.get("hms_errors", [])
+    # Confidence below arc
+    if conf is not None:
+        conf_str = f"conf {conf * 100:.0f}%"
+    else:
+        conf_str = "conf —"
+    draw.text((cx, cy + 22), conf_str, fill=C_DIM, font=fn8, anchor="mm")
+
+    # "HEALTH" label above gauge
+    draw.text((cx, 6), "HEALTH", fill=C_LBL, font=fn8, anchor="mt")
+
+    # ── Right section separator ────────────────────────────────────────────
+    sep_x = GAUGE_W
+    draw.line([(sep_x, 8), (sep_x, PH - 8)], fill=(*C_SEP[:3], 60), width=1)
+    x = sep_x + 8
+
+    # ── HMS ───────────────────────────────────────────────────────────────
+    hms    = printer_context.get("hms_errors", [])
     active = [e for e in hms if e.get("is_critical")]
     if active:
-        draw.text((x, 8),  "HMS", fill=C_LBL, font=fn10)
-        draw.text((x, 20), str(len(active)), fill=C_CRIT, font=fn11)
-        draw.text((x, 32), "ERR", fill=C_CRIT, font=fn10)
+        draw.text((x, 6),  "HMS",          fill=C_LBL,  font=fn8)
+        draw.text((x, 18), str(len(active)), fill=C_CRIT, font=fn11)
+        draw.text((x, 32), "ERR",          fill=C_CRIT, font=fn8)
     else:
-        draw.text((x, 8),  "HMS", fill=C_LBL, font=fn10)
-        draw.text((x, 20), "●", fill=C_OK, font=fn11)
-        draw.text((x, 32), "OK",  fill=C_OK, font=fn10)
+        draw.text((x, 6),  "HMS", fill=C_LBL, font=fn8)
+        draw.text((x, 18), "●",   fill=C_OK,  font=fn11)
+        draw.text((x, 32), "OK",  fill=C_OK,  font=fn8)
     x += 32
 
-    draw.line([(x, 8), (x, ph-8)], fill=(*C_SEP[:3], 60), width=1)
+    draw.line([(x, 8), (x, PH - 8)], fill=(*C_SEP[:3], 60), width=1)
     x += 8
 
-    # Detectors (spaghetti + nozzle)
-    det = printer_context.get("detectors", {})
+    # ── Detectors ─────────────────────────────────────────────────────────
+    det    = printer_context.get("detectors", {})
     sp_det = det.get("spaghetti_detector", {})
     nb_det = det.get("nozzleclumping_detector", {})
-    sp_on = sp_det.get("enabled", False)
-    nb_on = nb_det.get("enabled", False)
-    sp_col = C_OK if sp_on else C_DIM
-    nb_col = C_OK if nb_on else C_DIM
-    draw.text((x, 8),  "SPAG", fill=C_LBL, font=fn10)
-    draw.text((x, 20), "ON" if sp_on else "OFF", fill=sp_col, font=fn10)
-    draw.text((x, 32), sp_det.get("sensitivity", "")[:3].upper(), fill=C_LBL, font=fn10)
-    x += 30
-    draw.text((x, 8),  "BLOB", fill=C_LBL, font=fn10)
-    draw.text((x, 20), "ON" if nb_on else "OFF", fill=nb_col, font=fn10)
+    sp_on  = sp_det.get("enabled", False)
+    nb_on  = nb_det.get("enabled", False)
+    draw.text((x, 6),  "SPAG",               fill=C_LBL,             font=fn8)
+    draw.text((x, 18), "ON" if sp_on else "OFF", fill=C_OK if sp_on else C_DIM, font=fn8)
+    draw.text((x, 30), sp_det.get("sensitivity", "")[:3].upper(), fill=C_LBL, font=fn8)
+    x += 28
+    draw.text((x, 6),  "BLOB",               fill=C_LBL,             font=fn8)
+    draw.text((x, 18), "ON" if nb_on else "OFF", fill=C_OK if nb_on else C_DIM, font=fn8)
     x += 28
 
-    draw.line([(x, 8), (x, ph-8)], fill=(*C_SEP[:3], 60), width=1)
+    draw.line([(x, 8), (x, PH - 8)], fill=(*C_SEP[:3], 60), width=1)
     x += 8
 
-    # Temperatures
-    nozzle = printer_context.get("nozzle_temp", 0)
+    # ── Temperatures ──────────────────────────────────────────────────────
+    nozzle   = printer_context.get("nozzle_temp", 0)
     nozzle_t = printer_context.get("nozzle_target", 0)
-    bed    = printer_context.get("bed_temp", 0)
-    bed_t  = printer_context.get("bed_target", 0)
-    chamber= printer_context.get("chamber_temp", 0)
-    draw.text((x, 6),  "NOZZLE", fill=C_LBL, font=fn10)
-    draw.text((x, 18), f"{nozzle:.0f}°", fill=C_HOT, font=fn11)
-    draw.text((x, 30), f"/{nozzle_t:.0f}°", fill=C_LBL, font=fn10)
-    x += 38
-    draw.text((x, 6),  "BED", fill=C_LBL, font=fn10)
-    draw.text((x, 18), f"{bed:.0f}°", fill=C_INFO, font=fn11)
-    draw.text((x, 30), f"/{bed_t:.0f}°", fill=C_LBL, font=fn10)
-    x += 32
-    draw.text((x, 6),  "CHM", fill=C_LBL, font=fn10)
-    draw.text((x, 18), f"{chamber:.0f}°", fill=C_VAL, font=fn11)
+    bed      = printer_context.get("bed_temp", 0)
+    bed_t    = printer_context.get("bed_target", 0)
+    chamber  = printer_context.get("chamber_temp", 0)
+    draw.text((x, 4),  "NOZZLE",        fill=C_LBL,  font=fn8)
+    draw.text((x, 16), f"{nozzle:.0f}°",  fill=C_HOT,  font=fn11)
+    draw.text((x, 30), f"/{nozzle_t:.0f}°", fill=C_LBL, font=fn8)
+    x += 36
+    draw.text((x, 4),  "BED",           fill=C_LBL,  font=fn8)
+    draw.text((x, 16), f"{bed:.0f}°",    fill=C_INFO, font=fn11)
+    draw.text((x, 30), f"/{bed_t:.0f}°", fill=C_LBL,  font=fn8)
     x += 30
+    draw.text((x, 4),  "CHM",           fill=C_LBL,  font=fn8)
+    draw.text((x, 16), f"{chamber:.0f}°", fill=C_VAL,  font=fn11)
+    x += 28
 
-    draw.line([(x, 8), (x, ph-8)], fill=(*C_SEP[:3], 60), width=1)
+    draw.line([(x, 8), (x, PH - 8)], fill=(*C_SEP[:3], 60), width=1)
     x += 8
 
-    # Fans
+    # ── Fans ──────────────────────────────────────────────────────────────
     pf = printer_context.get("part_fan_pct", 0)
     af = printer_context.get("aux_fan_pct", 0)
     ef = printer_context.get("exhaust_fan_pct", 0)
-    draw.text((x, 6),  "FAN P", fill=C_LBL, font=fn10)
-    draw.text((x, 18), f"{pf:.0f}%", fill=C_VAL, font=fn10)
-    draw.text((x, 30), f"A:{af:.0f}", fill=C_LBL, font=fn10)
-    x += 34
+    draw.text((x, 4),  "PART",   fill=C_LBL, font=fn8)
+    draw.text((x, 16), f"{pf:.0f}%", fill=C_VAL, font=fn10)
+    draw.text((x, 30), "AUX",    fill=C_LBL, font=fn8)
+    draw.text((x, 42), f"{af:.0f}%", fill=C_VAL, font=fn8)
+    draw.text((x, 54), "EXH",    fill=C_LBL, font=fn8)
+    draw.text((x, 66), f"{ef:.0f}%", fill=C_VAL, font=fn8)
+    x += 30
 
-    draw.line([(x, 8), (x, ph-8)], fill=(*C_SEP[:3], 60), width=1)
+    draw.line([(x, 8), (x, PH - 8)], fill=(*C_SEP[:3], 60), width=1)
     x += 8
 
-    # AMS humidity
+    # ── AMS humidity ──────────────────────────────────────────────────────
     hum = printer_context.get("ams_humidity", 0)
     if hum == 0:
-        hum_col = C_DIM
-        hum_lbl = "N/A"
+        hum_col, hum_lbl = C_DIM, "N/A"
     elif hum <= 2:
-        hum_col = C_CRIT
-        hum_lbl = str(hum)
+        hum_col, hum_lbl = C_CRIT, str(hum)
     elif hum <= 3:
-        hum_col = C_WARN
-        hum_lbl = str(hum)
+        hum_col, hum_lbl = C_WARN, str(hum)
     else:
-        hum_col = C_OK
-        hum_lbl = str(hum)
-    draw.text((x, 6),  "AMS", fill=C_LBL, font=fn10)
-    draw.text((x, 18), "HUM", fill=C_LBL, font=fn10)
-    draw.text((x, 30), hum_lbl, fill=hum_col, font=fn11)
+        hum_col, hum_lbl = C_OK, str(hum)
+    draw.text((x, 4),  "AMS",  fill=C_LBL, font=fn8)
+    draw.text((x, 16), "HUM",  fill=C_LBL, font=fn8)
+    draw.text((x, 28), hum_lbl, fill=hum_col, font=fn11)
 
     return _encode_png(img.convert("RGB"))
 
@@ -1460,7 +1478,7 @@ def _build_composite_png(
     Header: job name, progress bar, layer, ETA
     """
     HEADER_H = 32
-    FOOTER_H = 48
+    FOOTER_H = 120
     SEP = 2
     cols = 2
     total_w = tw * cols + SEP
