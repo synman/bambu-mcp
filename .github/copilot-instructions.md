@@ -693,3 +693,102 @@ open /tmp/stream_screenshot.png
 | 4 — Browser Functional | Any edit to the `<script>` block in `_HTML_PAGE` |
 
 A commit that touches multiple layers requires all relevant tiers to pass. A tier does not need to be re-run if no files it covers were changed.
+
+---
+
+## Bug Fix Lifecycle Standard (Mandatory)
+
+Applies to every discovered bug in bambu-mcp, regardless of source (audit, user report, tool output, or incidental discovery during other work). All 7 stages are mandatory. No stage may be skipped.
+
+**Autonomy principle:** The agent operates autonomously across all stages by default. When blocked — technically (hardware access, platform limitation, physical observation required) or by rules (BPM write scope lock, git commit policy without a project grant, scope gate requiring a second repo, any action requiring a premium request) — it must:
+1. Name the specific rule or limitation that is blocking.
+2. State exactly what needs to change or be authorized to unblock it.
+3. Ask the user for that specific authorization — do not work around the rule or skip the step.
+
+---
+
+### Stage 1 — Record (immediate, no deferral)
+
+Every discovered problem gets a GitHub issue filed before the session ends. Issues are the only durable record outside session history.
+
+**Mandatory fields:**
+- Clear symptom (what the user or agent observes)
+- Reproduction steps (what triggers it)
+- Expected vs actual behavior
+- Label: `bug` for defects, `enhancement` for features, `question` for investigations
+
+---
+
+### Stage 2 — Triage
+
+**Severity classification (drives scheduling):**
+
+| Tier | Definition | Scheduling |
+|------|------------|------------|
+| **Blocking** | Core workflow broken (can't print, can't connect, tools crash) | Bring into current plan immediately |
+| **Degraded** | Feature works but incorrectly or unreliably (wrong field value, tab accumulation) | Schedule for next available plan phase |
+| **Cosmetic** | Aesthetic, UX, or documentation gap | Batch with other cosmetic work |
+
+Triage happens at discovery time. Severity is written in the GitHub issue label or comment — not kept only in session history.
+
+---
+
+### Stage 3 — Research Gate (before any code is touched)
+
+All of the following must be completed before a fix is planned:
+
+1. RULES_PRECHECK — both rules files read in current turn
+2. **Root cause in source** — find the exact file, function, and line. No guesses.
+3. **Sibling pattern check** — does a similar feature in the same codebase already handle this correctly? If yes, the fix must follow the same pattern.
+4. **Scope boundary** — is the fix in bambu-mcp, or does it cross into bpm/bpa? If it crosses repos, flag it and apply the scope gate.
+5. **Document findings** — root cause, why it happens, where it lives. Written before planning begins.
+
+---
+
+### Stage 4 — Plan (with mandatory autonomous test protocol)
+
+Plans must go through `exit_plan_mode` for approval. A plan is not approvable without a complete test protocol.
+
+**Test protocol requirements (non-negotiable):**
+
+Every fix requires three test phases — all executed by the agent, no user steps by default:
+
+| Phase | Purpose | How |
+|-------|---------|-----|
+| **Pre-fix confirmation** | Prove the bug exists before touching code | MCP tool calls + bash/osascript measurement |
+| **Post-fix verification** | Prove the fix works + prove the fallback/alternate path works | Same measurement tools, all paths exercised |
+| **Tier 1 static check** | Syntax + compile check after every file edit | `python -m py_compile` |
+
+The agent must attempt full autonomy. When a step cannot be made autonomous (technical or rules-based), apply the autonomy principle above — name the blockage, state what is needed, ask.
+
+---
+
+### Stage 5 — Implementation
+
+1. Apply the minimum effective change (KISS — no speculative scope)
+2. `python -m py_compile` the edited file immediately — before doing anything else
+3. If the change is server-side: `mcp-reload`, wait for `-i done`, then verify tools are live before running test phases
+
+---
+
+### Stage 6 — Verification (all phases in order)
+
+Run the test protocol from Stage 4 in full:
+1. Pre-fix confirmation first — if the bug can't be reproduced, stop and re-examine the research
+2. Apply fix
+3. Post-fix verification — all paths (fix path + fallback path)
+4. Report each phase result explicitly: assertion, expected value, actual value
+
+All pass criteria must be checked by the agent. "Looks right" is not a pass criterion.
+
+---
+
+### Stage 7 — Delivery (mandatory, no skipping)
+
+All of the following, in order:
+
+1. `git commit` with message referencing the issue number (`fixes #N` or `closes #N`)
+2. `git push`
+3. **Rules update** — if the fix reveals a behavioral gap that was previously undocumented, write it into the rules before closing the issue. A fix without a rules update is a fix that can be undone.
+4. GitHub issue: close if fully resolved, comment with fix SHA if already closed
+5. `bambu-rules` sync — push updated project rules to remote mirror
