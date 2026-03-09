@@ -875,17 +875,22 @@ The agent must attempt full autonomy. When a step cannot be made autonomous (tec
 
 1. Apply the minimum effective change (KISS — no speculative scope)
 2. `python -m py_compile` the edited file immediately — before doing anything else
-3. If the change is server-side: `mcp-reload`, wait for `-i done`, then verify tools are live before running test phases
+3. Deploy the fix to the live system before running any test phases:
+   - Server-side change (MCP tool, knowledge module, api_server.py): `mcp-reload`, wait for `-i done`, verify tools are live
+   - Library dependency change (bpm): `pip install --force-reinstall ~/bambu-printer-manager` in the mcp venv (`.venv/`), then `mcp-reload`
+   - Both may apply if a bpm change also requires a knowledge update
 
 ---
 
-### Stage 6 — Verification (all phases in order)
+### Stage 6 — Verification (all phases in order, no skipping)
+
+**Skipping Stage 6 is not permitted.** If a phase cannot be run (e.g., printer unavailable), document why and defer the issue close until verification is possible. Do not proceed to Stage 7 with an unverified fix.
 
 Run the test protocol from Stage 4 in full:
-1. Pre-fix confirmation first — if the bug can't be reproduced, stop and re-examine the research
-2. Apply fix
-3. Post-fix verification — all paths (fix path + fallback path)
-4. Report each phase result explicitly: assertion, expected value, actual value
+1. **Pre-fix confirmation** — call the affected interface *before* applying the fix and record the broken value. This is the mandatory baseline. If the fix is already applied, this step cannot be recovered — note the protocol violation and do not close the issue until the bug can be reproduced and re-verified on a fresh opportunity.
+2. Apply fix (Stage 5)
+3. **Post-fix verification** — call the same interface and confirm the value changed from broken → correct. Report: interface, before value, after value, all three required.
+4. **Fallback path** — verify the alternate/fallback behavior also works correctly
 
 All pass criteria must be checked by the agent. "Looks right" is not a pass criterion.
 
@@ -898,16 +903,6 @@ All of the following, in order:
 1. `git commit` with message referencing the issue number (`fixes #N` or `closes #N`)
 2. `git push`
 3. **Rules update** — if the fix reveals a behavioral gap that was previously undocumented, write it into the rules before closing the issue. A fix without a rules update is a fix that can be undone.
-4. **Live verification** — three mandatory steps, all required:
-   1. **Baseline** — before or immediately after the fix is staged, record what the broken system currently returns for the affected interface. This is the "before" value. If the fix is already deployed and the baseline wasn't captured, call the interface now and note the current value as the starting point.
-   2. **Deploy** — ensure the fix is running in the live system. If the fix is in a library (e.g. bpm), reinstall it in the consuming venv. If it requires a server restart, restart it. Confirm the process running is the one with the fix.
-   3. **Observe delta** — call the same interface that exposed the bug and confirm the value changed from broken → correct. The corrected value must appear verbatim in the response. A correct value that was already present before the fix was deployed does not count.
-
-   Verification method by issue type:
-   - Capability/state bug → call the relevant MCP tool; confirm field value changed
-   - Knowledge gap → call `get_knowledge_topic()`; confirm corrected text is present
-   - Tool behavior bug → invoke the tool; observe corrected behavior
-   - HTTP API bug → make the HTTP request; confirm corrected response
-
-5. GitHub issue: close only after step 4 passes. The closing comment must include: interface queried, before value, after value.
+4. **Verification carried forward** — Stage 6 pre-fix confirmation + post-fix verification results satisfy Stage 7. Reproduce them here in the closing comment. If Stage 6 was skipped or incomplete, do not close the issue — rerun Stage 6 first.
+5. GitHub issue: close only after step 4 is satisfied. The closing comment must include: interface queried, before value, after value.
 6. `bambu-rules` sync — push updated project rules to remote mirror
