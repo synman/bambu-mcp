@@ -408,12 +408,10 @@ class _PrinterMonitor:
             "verdict":      "clean",
             "anomaly_score": 0.0,
             "timestamp":    datetime.now(timezone.utc).isoformat(),
-            "stable_verdict":        None,
-            "confidence_window":     [],
-            "confidence_window_size": 0,
-            "success_probability":   None,
-            "decision_confidence":   dc,
-            "factor_contributions":  None,
+            "stable_verdict":      None,
+            "success_probability": None,
+            "decision_confidence": dc,
+            "factor_contributions": None,
         }
         with self._lock:
             self._latest_result = result
@@ -530,28 +528,19 @@ class _PrinterMonitor:
             "anomaly_score":  round(report.score, 4),
             "hot_pct":        round(report.hot_pct, 4),
             "strand_score":   round(report.strand_score, 4),
-            "edge_density":   round(report.edge_density, 4),
             "diff_score":     round(report.diff_score, 4) if report.diff_score is not None else None,
             "reference_age_s": round(report.reference_age_s, 1) if report.reference_age_s is not None else None,
-            "thresh_warn":    round(report.thresh_warn, 4),
-            "thresh_crit":    round(report.thresh_crit, 4),
             "quality":        report.quality,
             # stage
             "stage":          stage,
             "stage_name":     stage_name,
             "stage_gated":    False,
-            # pre-check
-            "precheck_hot_pct":     round(precheck_hot_pct, 4) if precheck_hot_pct is not None else None,
-            "precheck_triggered":   (precheck_hot_pct is not None and precheck_hot_pct >= PRECHECK_HOT_PCT_TRIGGER),
             # primary health indicators (use these for agent decisions)
             "success_probability":   ph,
             "decision_confidence":   dc,
             "factor_contributions":  factors,
-            # confidence internals (implementation detail — feeds success_probability)
-            "stable_verdict":         sv,
-            "confidence_window":      window_snapshot,
-            "confidence_window_size": len(window_snapshot),
-            # trend/bounds for success_probability history
+            # stable verdict and history
+            "stable_verdict":            sv,
             "success_probability_trend": fp_trend,
             "success_probability_min":   round(1.0 - fp_peak, 4) if fp_peak is not None else None,
             # job context

@@ -559,13 +559,12 @@ _ROUTE_EXAMPLES: dict[str, dict] = {
             "anomaly_score": 0.04,
             "hot_pct": 0.03,
             "strand_score": 0.02,
-            "edge_density": 0.01,
             "diff_score": 0.06,
             "reference_age_s": 312.4,
             "success_probability": 0.95,
             "decision_confidence": 0.82,
+            "factor_contributions": {"material": 0.04, "platform": 0.0, "anomaly": 0.026, "thermal": 0.0, "humidity": 0.0, "stability": 0.0, "settings": 0.0, "progress": 0.29},
             "stable_verdict": "clean",
-            "confidence_window_size": 5,
             "stage": 255,
             "stage_name": "printing",
             "stage_gated": False,
@@ -1699,24 +1698,22 @@ def _build_app():
                             X = job_state_composite_jpg (default primary output)
 
         Response fields (always present):
-          verdict          — "clean" | "warning" | "critical"
-          score            — composite anomaly score (0–1)
-          hot_pct          — bright-pixel fraction in air zone
-          strand_score     — directional strand-likelihood (0–1)
-          edge_density     — multi-direction edge response (0–1)
-          diff_score       — frame-diff from reference, or null
-          reference_age_s  — age of reference frame in seconds, or null
-          success_probability — Bayesian print health score (0–1; 1.0 = fully healthy)
-          decision_confidence — agent's ability to assess failure given current data (0–1)
-          factor_contributions — dict of 8 Bayesian factor scores for radar chart (0–1 each)
-          stable_verdict   — consensus verdict from confidence window, or null
-          confidence_window_size — number of analysis cycles accumulated (max 5)
-          stage            — current printer stage code
-          stage_name       — human-readable stage name
-          stage_gated      — true when analysis is skipped due to non-printing stage
-          layer            — current layer number
-          quality          — resolved quality tier used
-          timestamp        — ISO8601 capture time
+          verdict               — "clean" | "warning" | "critical"
+          anomaly_score         — composite anomaly score (0–1)
+          hot_pct               — bright-pixel fraction in air zone
+          strand_score          — directional strand-likelihood (0–1)
+          diff_score            — frame-diff from reference, or null
+          reference_age_s       — age of reference frame in seconds, or null
+          success_probability   — Bayesian print health score (0–1; 1.0 = fully healthy)
+          decision_confidence   — agent's ability to assess failure given current data (0–1)
+          factor_contributions  — dict of 8 Bayesian factor scores for radar chart (0–1 each)
+          stable_verdict        — consensus verdict from recent analysis window, or null
+          stage                 — current printer stage code
+          stage_name            — human-readable stage name
+          stage_gated           — true when analysis is skipped due to non-printing stage
+          layer                 — current layer number
+          quality               — resolved quality tier used
+          timestamp             — ISO8601 capture time
 
         Error responses:
           400 {"error": "no_active_job"} — gcode_state is IDLE/FINISH/FAILED
