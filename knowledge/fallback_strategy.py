@@ -60,11 +60,12 @@ ESCALATION_TIERS = [
     },
     {
         "tier": 3,
-        "name": "Broader Search (last resort)",
+        "name": "Broader Search (last resort, premium-gated)",
         "description": (
             "If Tier 1 and Tier 2 yield no useful result, broaden to GitHub code search "
-            "across all repositories (not filtered), GitHub issue/PR search on known repos, "
-            "and community sources (Home Assistant community, Bambu Lab developer forums)."
+            "across all repositories (not filtered) or GitHub issue/PR search on known repos. "
+            "Web search requires explicit user confirmation first — state what you intend "
+            "to search and why, then wait for approval (Premium Requests rule)."
         ),
         "tool": "search_authoritative_sources(query) with no repo_filter, or web search",
         "reliability": "Variable — always note when Tier 3 was used; flag answer as potentially less reliable",
