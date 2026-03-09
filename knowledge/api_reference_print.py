@@ -81,6 +81,15 @@ Updates `_fan_speed_target_time`.
 #### set_exhaust_fan_speed_target_percent(value: int) -> None
 Sets exhaust fan via GCode M106 P3. Scale: percent → 0-255.
 
-#### set_aux_fan_speed_target_percent(value: int) -> None  [DEPRECATED]
-Sets aux fan via GCode M106 P2. Use select_extrusion_calibration_profile instead.
+#### set_aux_fan_speed_target_percent(value: int) -> None
+Sets aux (chamber recirculation) fan via GCode M106 P2. Scale: percent → 0-255.
+Circulates air inside the chamber without venting — keeps heat in and distributes it evenly.
+
+**Chamber preheating best practice (H2D and printers with active chamber heating):**
+For fastest chamber temperature rise, use THREE actions together:
+1. `set_chamber_temp_target(target)` — activate the chamber heater
+2. `set_bed_temp_target(high_value)` — bed is the primary heat source driving chamber temp
+3. `set_aux_fan_speed_target_percent(100)` — circulate the bed heat throughout the chamber
+
+Do NOT use the exhaust fan during preheating — it vents warm air out and slows the process.
 """
