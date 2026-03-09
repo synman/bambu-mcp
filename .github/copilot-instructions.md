@@ -780,6 +780,8 @@ After the post-fix `grep` passes, run a completeness trace:
 4. If any tier produces a dead end (answer unreachable without external knowledge or undocumented steps), **the fix is incomplete** — additional knowledge changes are required before Stage 7.
 5. Document the trace result explicitly: "Tier 1 → [step] → answer reached ✓" or "Tier 1b → dead end — missing: [what]".
 
+**The trace must be executed as actual tool calls against source code — not outlined as text in a plan.** Writing a trace description in a plan does not satisfy this requirement. Each step of the trace must be verified by reading the actual file (view, grep, or bash) that the agent would consult at that step. A trace that was not executed is a trace that was not run.
+
 A fix that blocks wrong behavior without enabling correct behavior is not a complete fix.
 
 The agent must attempt full autonomy. When a step cannot be made autonomous (technical or rules-based), apply the autonomy principle above — name the blockage, state what is needed, ask.
