@@ -499,3 +499,60 @@ This is the established architectural pattern for persisting per-printer state o
 - [ ] `_load_<feature>()` called at startup to restore from disk
 - [ ] `_clear_<feature>()` called at new-job-start to avoid stale data
 - [ ] Lifecycle documented in `api_reference_camera.py` (or relevant knowledge module)
+
+---
+
+## Headless Browser JS Validation (Mandatory)
+
+The MJPEG stream server (`camera/mjpeg_server.py`) embeds a large inline `<script>` block in `_HTML_PAGE`. A single JS syntax error silently breaks all HUD functionality — the browser renders static defaults (black video, IDLE badge, no temperatures) with no visible error. This has caused multi-session debugging loops.
+
+**Mandatory validation after any edit to the inline script:**
+
+```bash
+# Step 1: extract and syntax-check the live script
+curl -s http://localhost:<port>/ | python3 -c "
+import sys
+html = sys.stdin.read()
+js = html[html.find('<script>')+8:html.find('</script>')]
+open('/tmp/hud_check.js','w').write(js)
+print('opens:', js.count('{'), 'closes:', js.count('}'), 'diff:', js.count('{')-js.count('}'))
+" && node --check /tmp/hud_check.js && echo "JS SYNTAX: OK"
+```
+
+**Hard requirements:**
+- Run this check immediately after every edit to the `<script>` block in `_HTML_PAGE`.
+- Brace diff must be 0 and `node --check` must exit 0 before committing.
+- If the stream server is not yet running at the time of the check, restart it first and verify against the live page — do not check the source file directly (the HTML is a Python f-string; only the rendered output is valid JS).
+
+**Why `node --check` over source inspection:**
+- The inline JS is a Python f-string template; the source file is not valid JS
+- Brace counting alone misses mismatched string literals and other syntax errors
+- `node --check` is authoritative; it uses V8 to parse without executing
+
+**Headless Chrome for deeper inspection (when node --check passes but behavior is wrong):**
+
+```bash
+# Install puppeteer once if needed
+cd /tmp && npm install puppeteer 2>/dev/null
+
+# Run headless page check
+node -e "
+const puppeteer = require('/tmp/node_modules/puppeteer');
+(async () => {
+  const b = await puppeteer.launch({args:['--no-sandbox']});
+  const p = await b.newPage();
+  const errors = [];
+  p.on('pageerror', e => errors.push(e.message));
+  p.on('console', m => { if(m.type()==='error') errors.push(m.text()); });
+  await p.goto('http://localhost:<port>/', {waitUntil:'networkidle2', timeout:8000});
+  console.log('JS errors:', errors.length ? errors : 'none');
+  await b.close();
+})();
+"
+```
+
+**Checklist (run after every mjpeg_server.py script edit):**
+- [ ] `node --check /tmp/hud_check.js` exits 0
+- [ ] Brace diff is exactly 0
+- [ ] Stream server restarted since the edit (in-memory cache trap applies here)
+- [ ] Browser polls `/status` and `/job_state` visibly in the MCP log within 5s of opening the stream
