@@ -628,6 +628,7 @@ function hpUpdateFromResult(d){
     }
     statusEl.innerHTML=stateStr+layerStr+humStr;
   }
+}
 function hpPollJobState(){
   var now=Date.now();
   if(now-_hpLastPoll<_hpPollInterval)return;

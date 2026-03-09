@@ -88,6 +88,7 @@ _file_handler.setFormatter(logging.Formatter(
 logging.basicConfig(level=_log_level, format="%(levelname)s %(name)s: %(message)s")
 logging.getLogger().addHandler(_file_handler)
 logging.getLogger().setLevel(_log_level)
+logging.getLogger("bpm").setLevel(logging.WARNING)
 log = logging.getLogger("bambu-mcp")
 
 # ── FastMCP server ─────────────────────────────────────────────────────────────
