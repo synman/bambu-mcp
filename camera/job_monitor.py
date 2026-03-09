@@ -454,12 +454,35 @@ class _PrinterMonitor:
             log.warning("job_monitor[%s]: context build failed: %s", printer_name, e)
             return
 
+        # Fetch project thumbnail + layout for composite panels (mirrors analyze_active_job).
+        project_thumbnail_uri: Optional[str] = None
+        project_layout_uri: Optional[str] = None
+        try:
+            from session_manager import session_manager as _sm
+            job = _sm.get_job(printer_name)
+            if job and job.gcode_file:
+                from tools.files import get_plate_thumbnail, get_plate_topview
+                project_info = getattr(job, "project_info", None)
+                plate_num = getattr(project_info, "plate_num", None) or getattr(job, "plate_num", 1) or 1
+                file_path = (getattr(project_info, "id", None) or "").strip() or job.gcode_file
+                if file_path.endswith(".3mf"):
+                    thumb = get_plate_thumbnail(printer_name, file_path, plate_num=plate_num, quality="standard")
+                    if "data_uri" in thumb:
+                        project_thumbnail_uri = thumb["data_uri"]
+                    topview = get_plate_topview(printer_name, file_path, plate_num=plate_num, quality="standard")
+                    if "data_uri" in topview:
+                        project_layout_uri = topview["data_uri"]
+        except Exception as e:
+            log.debug("job_monitor[%s]: could not fetch project info: %s", printer_name, e)
+
         try:
             with self._lock:
                 _current_window_size = len(self._confidence_window)
             report = _analyze(jpeg, printer_context, reference_jpeg=ref_jpeg,
                               reference_age_s=ref_age, quality="auto",
-                              window_size=_current_window_size)
+                              window_size=_current_window_size,
+                              project_thumbnail_uri=project_thumbnail_uri,
+                              project_layout_uri=project_layout_uri)
         except Exception as e:
             log.warning("job_monitor[%s]: analyze failed: %s", printer_name, e)
             return
@@ -539,6 +562,8 @@ class _PrinterMonitor:
             "raw_png":                 _uri(report.raw_png),
             "annotated_png":           _uri(report.annotated_png),
             "health_panel_png":        _uri(report.health_panel_png),
+            "project_thumbnail_png":   _uri(report.project_thumbnail_png),
+            "project_layout_png":      _uri(report.project_layout_png),
         }
 
         with self._lock:
