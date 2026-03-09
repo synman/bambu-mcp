@@ -627,35 +627,48 @@ const puppeteer = require('/tmp/node_modules/puppeteer');
   p.on('pageerror', e => jsErrors.push(e.message));
   p.on('console', m => { if (m.type() === 'error') consoleLogs.push(m.text()); });
   p.on('request', r => { if (r.url().includes('/status') || r.url().includes('/job_state')) networkFetches.push(r.url()); });
-  await p.goto('http://localhost:'+PORT+'/', {waitUntil:'networkidle2', timeout:10000});
-  await new Promise(r => setTimeout(r, 5000));  // wait 2 polling cycles
-  const badge = await p.\$eval('#state-badge', el => el.textContent).catch(() => 'NOT_FOUND');
-  const nozzle = await p.\$eval('#nozzle-temp', el => el.textContent).catch(() => 'NOT_FOUND');
-  const streamSrc = await p.\$eval('img[src*=\"stream\"]', el => el.src).catch(() => 'NOT_FOUND');
+  // Use domcontentloaded — networkidle2 hangs on the persistent MJPEG stream
+  await p.goto('http://localhost:'+PORT+'/', {waitUntil:'domcontentloaded', timeout:10000});
+  await new Promise(r => setTimeout(r, 5000));  // wait 2 polling cycles (2s interval)
+  // Correct element IDs from _HTML_PAGE in camera/mjpeg_server.py
+  const badge     = await p.\$eval('#badge',      el => el.textContent).catch(() => 'NOT_FOUND');
+  const badgeCls  = await p.\$eval('#badge',      el => el.className).catch(() => 'NOT_FOUND');
+  const nozzles   = await p.\$eval('#nozzles',    el => el.textContent).catch(() => '');
+  const bed       = await p.\$eval('#bed',        el => el.textContent).catch(() => 'NOT_FOUND');
+  const hpVerdict = await p.\$eval('#hp-verdict', el => el.textContent).catch(() => 'NOT_FOUND');
   const result = {
     jsErrors: jsErrors.length,
     jsErrorMessages: jsErrors,
     badge: badge.trim(),
-    nozzleTemp: nozzle.trim(),
-    streamImgPresent: streamSrc !== 'NOT_FOUND',
+    badgeClass: badgeCls,
+    nozzles: nozzles.trim().replace(/\s+/g,' '),
+    bed: bed.trim(),
+    healthVerdict: hpVerdict.trim(),
     networkFetchCount: networkFetches.length,
+    sampleFetches: networkFetches.slice(0,4),
   };
   console.log(JSON.stringify(result, null, 2));
   await p.screenshot({path: '/tmp/stream_screenshot.png', fullPage: true});
   console.log('Screenshot: /tmp/stream_screenshot.png');
   await b.close();
   process.exit(jsErrors.length > 0 ? 1 : 0);
-})();
+})().catch(e => { console.error('ERROR:', e.message); process.exit(1); });
 " && echo "BROWSER TEST: PASS" || echo "BROWSER TEST: FAIL — see JS errors above"
 open /tmp/stream_screenshot.png
 ```
 
 **Pass criteria:**
 - `jsErrors: 0` — zero JS console errors
-- `badge` is not empty and not `IDLE` when a job is active
-- `nozzleTemp` is not `—` when the printer is connected
-- `networkFetchCount >= 2` — confirms `/status` is polling
+- `badge` is not `NOT_FOUND` and matches printer state (e.g. `FINISH`, `RUNNING`, `IDLE`)
+- `nozzles` is not empty when the printer is connected
+- `bed` is not `—` when the printer is connected
+- `networkFetchCount >= 2` — confirms `/status` is polling (at least 2 cycles in 5s)
 - Screenshot opens and shows a populated HUD (visual confirmation by user)
+
+**Important notes:**
+- Always use `waitUntil: 'domcontentloaded'` — `networkidle2` hangs indefinitely on the persistent MJPEG stream
+- Element IDs in `_HTML_PAGE`: badge=`#badge`, nozzle temps=`#nozzles`, bed=`#bed`, health verdict=`#hp-verdict`
+- If these IDs change in `_HTML_PAGE`, update the test here too
 
 **When Tier 4 is required vs. optional:**
 - **Required:** any edit to the `<script>` block in `_HTML_PAGE`
