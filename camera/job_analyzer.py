@@ -145,6 +145,9 @@ def _diff_ramp(v: float) -> tuple:
 class JobStateReport:
     # Spaghetti detection metrics
     verdict: str = "clean"
+    stable_verdict: str = "clean"
+    stage_gated: bool = False
+    confidence_window: list = field(default_factory=list)
     score: float = 0.0
     hot_pct: float = 0.0
     strand_score: float = 0.0
@@ -1711,6 +1714,8 @@ def analyze(
 
     return JobStateReport(
         verdict=verdict,
+        stage_gated=_stage_gated,
+        confidence_window=[verdict],
         score=score,
         hot_pct=hot_pct,
         strand_score=strand_score,
