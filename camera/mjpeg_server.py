@@ -548,12 +548,12 @@ function hpUpdateFromResult(d){
   var score=d.score||0;
   var ph=d.print_health;
   var dc=d.decision_confidence;
-  var stageGated=(d.stage!==undefined&&d.stage!==255&&d.stage!==0);
+  var stageGated=(d.stage!==undefined&&d.stage!==255);
   // Composite = health × confidence (penalises low confidence proportionally)
   var comp=(ph!==null&&ph!==undefined&&dc!==null&&dc!==undefined)?(ph*dc):(ph!==null&&ph!==undefined?ph:null);
   var compVerdict,hColor;
   if(stageGated||comp===null){
-    compVerdict='prep';hColor='#8888af';
+    compVerdict='neutered';hColor='#8888af';
   }else if(comp>=0.70){
     compVerdict='clean';hColor='#60d080';
   }else if(comp>=0.50){
@@ -562,8 +562,8 @@ function hpUpdateFromResult(d){
     compVerdict='critical';hColor='#ff5050';
   }
   var vEl=document.getElementById('hp-verdict');
-  vEl.textContent=(compVerdict==='prep'?'PREP':compVerdict).toUpperCase();
-  vEl.className=compVerdict==='critical'?'hpX':compVerdict==='warning'?'hpW':compVerdict==='prep'?'hpD':'hpC';
+  vEl.textContent=(compVerdict==='neutered'?'NEUTERED':compVerdict).toUpperCase();
+  vEl.className=compVerdict==='critical'?'hpX':compVerdict==='warning'?'hpW':compVerdict==='neutered'?'hpD':'hpC';
   var scoreValEl=document.getElementById('hp-score-val');
   if(comp!==null){
     scoreValEl.textContent=Math.round(comp*100)+'%';

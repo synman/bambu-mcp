@@ -1121,8 +1121,8 @@ def _build_health_panel_png(
 
     if stage_gated or comp is None:
         badge       = {"bg": (50, 50, 72), "fg": (140, 140, 175)}
-        badge_label = "PREP" if stage_gated else "—"
-        health_txt  = "PREP" if stage_gated else "—"
+        badge_label = "NEUTERED"
+        health_txt  = "—"
         health_col  = (140, 140, 175)
     elif comp >= 0.70:
         badge       = _VERDICT_BADGE["clean"]
@@ -1462,9 +1462,10 @@ def analyze(
         diff_png = _build_diff_png(frame_rgb, ref_rgb, W, H, tw, th, reference_age_s)
 
     # Compute health + confidence for the panel
-    # Stage-gated: gcode_state is not RUNNING/PAUSE → printer is in prep, health is unknowable
+    # Stage-gated: gcode_state not RUNNING/PAUSE, OR stage != 255 (pre-print prep)
     _gcode_state = printer_context.get("gcode_state", "IDLE")
-    _stage_gated = _gcode_state not in ("RUNNING", "PAUSE", "PAUSED")
+    _stage       = printer_context.get("stage", 255)
+    _stage_gated = _gcode_state not in ("RUNNING", "PAUSE", "PAUSED") or _stage != 255
     _ph = round(1.0 - score, 4)
     _dc = compute_decision_confidence(window_size, _stage_gated, printer_context)
 
