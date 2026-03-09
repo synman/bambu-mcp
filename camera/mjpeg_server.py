@@ -130,7 +130,7 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
 #health-panel .hp-body.collapsed{max-height:0}
 #hp-verdict{display:inline-block;font-size:12px;font-weight:700;padding:1px 8px;
   border-radius:3px;letter-spacing:.04em}
-.hpC{background:#1a5c2a;color:#60d080}.hpW{background:#5c4a1a;color:#ffcc40}.hpX{background:#5c1a1a;color:#ff5050}
+.hpC{background:#1a5c2a;color:#60d080}.hpW{background:#5c4a1a;color:#ffcc40}.hpX{background:#5c1a1a;color:#ff5050}.hpD{background:#323248;color:#8888af}
 #hp-score-row{display:flex;align-items:center;gap:6px;margin:3px 0 2px}
 #hp-score-bar-track{flex:1;height:3px;background:#555;border-radius:2px}
 #hp-score-bar-fill{height:100%;border-radius:2px;transition:width .6s}
@@ -545,19 +545,33 @@ function hexToRgba(hex,a){
 function hpUpdateFromResult(d){
   var panel=document.getElementById('health-panel');
   panel.style.display='flex';
-  var v=d.verdict||'clean';
   var score=d.score||0;
+  var ph=d.print_health;
+  var dc=d.decision_confidence;
+  var stageGated=(d.stage!==undefined&&d.stage!==255&&d.stage!==0);
+  // Composite badge: same logic as PNG health panel
+  var compVerdict,hColor;
+  if(stageGated||ph===null||ph===undefined){
+    compVerdict='prep';hColor='#8888af';
+  }else if(dc!==null&&dc!==undefined&&dc<0.40){
+    compVerdict='dim';hColor='#8c8ca0';
+  }else if(ph>=0.70){
+    compVerdict='clean';hColor='#60d080';
+  }else if(ph>=0.50){
+    compVerdict='warning';hColor='#ffcc40';
+  }else{
+    compVerdict='critical';hColor='#ff5050';
+  }
   var vEl=document.getElementById('hp-verdict');
-  vEl.textContent=v.toUpperCase();
-  vEl.className=v==='critical'?'hpX':v==='warning'?'hpW':'hpC';
-  var hColor=v==='critical'?'#ff5050':v==='warning'?'#ffcc40':'#60d080';
+  vEl.textContent=(compVerdict==='dim'?'LOW CONF':compVerdict==='prep'?'PREP':compVerdict).toUpperCase();
+  vEl.className=compVerdict==='critical'?'hpX':compVerdict==='warning'?'hpW':(compVerdict==='prep'||compVerdict==='dim')?'hpD':'hpC';
   var scoreValEl=document.getElementById('hp-score-val');
-  if(d.print_health!==null&&d.print_health!==undefined){
-    scoreValEl.textContent=Math.round(d.print_health*100)+'%';
+  if(ph!==null&&ph!==undefined){
+    scoreValEl.textContent=Math.round(ph*100)+'%';
     scoreValEl.style.color=hColor;
   }else{scoreValEl.textContent='—';scoreValEl.style.color='#888';}
   var fillEl=document.getElementById('hp-score-bar-fill');
-  fillEl.style.width=Math.min(100,score*333)+'%';
+  fillEl.style.width=(ph!==null&&ph!==undefined?Math.min(100,ph*100):0)+'%';
   fillEl.style.background=hColor;
   var cEl=document.getElementById('hp-conf-val');
   if(d.decision_confidence!==null&&d.decision_confidence!==undefined){
@@ -569,9 +583,8 @@ function hpUpdateFromResult(d){
   document.getElementById('hp-diff').textContent=d.diff_score!==null&&d.diff_score!==undefined?d.diff_score.toFixed(4):'—';
   document.getElementById('hp-layer').textContent=(d.layer&&d.total_layers)?d.layer+'/'+d.total_layers:'—';
   document.getElementById('hp-progress').textContent=d.progress_pct!==undefined?d.progress_pct+'%':'—';
-  var spColor=v==='critical'?'#ff5050':v==='warning'?'#ffcc40':'#60d080';
-  _hpScores.push(score);if(_hpScores.length>_hpMaxSamples)_hpScores.shift();
-  hpUpdateSparkline('hp-sp-canvas',_hpScores,spColor,0,0.3,score.toFixed(3));
+  _hpScores.push(ph!==null&&ph!==undefined?ph:0);if(_hpScores.length>_hpMaxSamples)_hpScores.shift();
+  hpUpdateSparkline('hp-sp-canvas',_hpScores,hColor,0,1,(ph!==null&&ph!==undefined?Math.round(ph*100)+'%':'—'));
 }
 function hpPollJobState(){
   var now=Date.now();
