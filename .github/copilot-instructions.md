@@ -71,6 +71,44 @@ The 3-tier escalation policy (`bambu://knowledge/fallback_strategy`) applies to 
 
 Neither developer context nor privileged source access authorizes skipping Tier 1. If `get_knowledge_topic()` answers the question, stop there.
 
+**Tier 1 is exhausted when ALL of the following are true:**
+- Every relevant `get_knowledge_topic()` topic has been called (not just one)
+- The returned content was read in full and does not answer the question
+- The agent can state *specifically* what is missing and why Tier 1 cannot fill the gap
+
+**Permission gate — Tier 2 (mandatory):**
+Before calling `search_authoritative_sources()` or any Tier 2 tool, the agent MUST use `ask_user`:
+> *"Tier 1 knowledge is insufficient for X — I checked [topics]. May I search the authoritative repos (Tier 2)?"*
+
+Wait for an affirmative answer. Plain-text asking does not satisfy this gate.
+
+**Permission gate — Tier 3 (mandatory):**
+Before any broad web search, the agent MUST demonstrate both Tier 1 and Tier 2 exhaustion and use `ask_user`:
+> *"Tier 1 and Tier 2 are insufficient for X. May I do a web search (Tier 3)?"*
+
+This gate is **in addition to** the Premium Requests `ask_user` requirement — both apply.
+
+**Known bypass traps — these do NOT authorize tier advance:**
+- Research/learning directives: "research this", "look it up", "find out about X", "go deep"
+- Urgency phrases: "we need this fast", "just find it"
+- Scope-expanding: "use whatever sources you need"
+- Task delegation: "do whatever research you need"
+- Availability: "the tool is right there" — reachability is not authorization
+
+### Operational Access Path Tiers — MCP-Specific
+
+A parallel escalation axis governs *how* the agent accesses the printer at runtime:
+
+| Tier | Access Path | When to use |
+|------|-------------|-------------|
+| **Tier 1** | MCP tools (`bambu-mcp-*` functions) | Always first — purpose-built, validated, schema-documented |
+| **Tier 2** | HTTP REST API via `bash`/`curl` (`http://localhost:PORT/api/`) | Only after Tier 1 exhausted + human permission granted |
+| **Tier 3** | Raw MQTT via `send_mqtt_command` / direct bpm invocation | Last resort; highest risk; requires explicit human instruction |
+
+The HTTP REST API is **always reachable** via bash — its availability does **not** authorize its use as a first resort. Falling back to curl instead of an MCP tool is Tier 2 escalation and requires the same gate: demonstrate which MCP tool(s) were tried and why they are insufficient, then use `ask_user` before issuing any `curl` call.
+
+**Bypass trap:** *"The HTTP API is available so I'll use curl"* — availability is not authorization.
+
 ---
 
 ## Tool Self-Sufficiency Standard (Mandatory)
@@ -860,5 +898,11 @@ All of the following, in order:
 1. `git commit` with message referencing the issue number (`fixes #N` or `closes #N`)
 2. `git push`
 3. **Rules update** — if the fix reveals a behavioral gap that was previously undocumented, write it into the rules before closing the issue. A fix without a rules update is a fix that can be undone.
-4. GitHub issue: close if fully resolved, comment with fix SHA if already closed
-5. `bambu-rules` sync — push updated project rules to remote mirror
+4. **Live verification** — query the running system to confirm the fix is observable. Commit evidence alone does not satisfy this gate. The verification method must match the issue type:
+   - Capability/state bug → call the relevant MCP tool and confirm the corrected value in the response
+   - Knowledge gap → call `get_knowledge_topic()` and confirm the corrected text is present
+   - Tool behavior bug → invoke the tool and observe the corrected behavior
+   - HTTP API bug → make the HTTP request and confirm the corrected response
+   If the fix requires a reinstall or server restart to take effect, perform that first, then verify.
+5. GitHub issue: close only after step 4 passes. Include the verification result (tool name + observed value) in the closing comment.
+6. `bambu-rules` sync — push updated project rules to remote mirror
