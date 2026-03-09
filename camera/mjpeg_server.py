@@ -166,9 +166,9 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
     <div id="hp-score-bar-track"><div id="hp-score-bar-fill" style="width:0%;background:#60d080"></div></div>
     <span id="hp-score-val" style="font-size:14px;font-weight:700;color:#60d080;min-width:34px;text-align:right">—</span>
   </div>
-  <div id="hp-phdc-row">
-    <span style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.06em">Conf</span>
-    <span id="hp-conf-val">—</span>
+  <div id="hp-phdc-row" style="display:flex;justify-content:flex-end;align-items:baseline;gap:5px">
+    <span style="font-size:11px;color:#666;letter-spacing:.04em">Confidence</span>
+    <span id="hp-conf-val" style="font-size:13px;text-align:right">—</span>
   </div>
   <div class="hp-body collapsed" id="hp-body">
     <div class="hdr" onclick="hudToggle(this,'hp-sec-metrics')">Metrics<span class="hdr-chev open">▲</span></div>
