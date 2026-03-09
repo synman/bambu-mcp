@@ -316,6 +316,13 @@ log.warning("fn: context: %s", e, exc_info=True)  # or log.error for unexpected 
 2. **HTTP REST API** — a route in `api_server.py` exposes it (must trace to an actual bpm call)
 3. **Both** — best coverage; required for all high-value operational methods
 
+**Asymmetric coverage is not self-resolving (Type G gaps):**
+A bpm item covered by an MCP tool but missing an HTTP route (or vice versa) is a **Type G gap** that requires explicit resolution — not an assumed design choice. An audit agent must NOT classify a G-type gap as "acceptable" or "intentional" based on inference. Every G-type finding must be resolved by either:
+- Adding the missing access path (preferred), or
+- Adding an explicit entry to the Intentional non-gaps table below with a documented reason
+
+"Seems deliberate" or "probably MCP-only by design" are not valid resolutions. Only an explicit exclusions table entry closes a G-type gap.
+
 **Knowledge obligation (mandatory for all covered items):**
 Every item reachable via an MCP tool or HTTP route MUST be documented in the appropriate `knowledge/api_reference_*.py` or `knowledge/enums_*.py` module. Coverage without documentation is an incomplete implementation.
 
