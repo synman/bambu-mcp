@@ -552,6 +552,7 @@ class _PrinterMonitor:
             "job_state_composite_png": _uri(report.job_state_composite_png),
             "raw_png":                 _uri(report.raw_png),
             "annotated_png":           _uri(report.annotated_png),
+            "factors_radar_png":       _uri(getattr(report, "factors_radar_png", None)),
             "health_panel_png":        _uri(report.health_panel_png),
             "project_thumbnail_png":   _uri(report.project_thumbnail_png),
             "project_layout_png":      _uri(report.project_layout_png),

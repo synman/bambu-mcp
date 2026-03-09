@@ -24,6 +24,7 @@ from __future__ import annotations
 import base64
 import io
 import logging
+import math
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -175,6 +176,7 @@ class JobStateReport:
     annotated_png: bytes = field(default_factory=bytes)
     heat_png: bytes = field(default_factory=bytes)
     edge_png: bytes = field(default_factory=bytes)
+    factors_radar_png: Optional[bytes] = None
 
     # H — Print Health
     health_panel_png: bytes = field(default_factory=bytes)
@@ -1150,6 +1152,115 @@ def _build_diff_png(
     return _encode_png(img)
 
 
+_RADAR_LABELS = [
+    ("MATERIAL",  "material"),
+    ("PLATFORM",  "platform"),
+    ("PROGRESS",  "progress"),
+    ("ANOMALY",   "anomaly"),
+    ("THERMAL",   "thermal"),
+    ("HUMIDITY",  "humidity"),
+    ("STABILITY", "stability"),
+    ("SETTINGS",  "settings"),
+]
+_RADAR_N = len(_RADAR_LABELS)
+
+
+def _build_radar_png(factor_contributions: dict, size: int = 220) -> bytes:
+    """
+    D5 — Failure Drivers radar/spider chart.
+
+    Renders an 8-axis spider chart where each axis represents one Bayesian
+    failure factor (0 = no risk, 1 = maximum risk). The filled polygon area
+    indicates overall failure pressure.  Green = low risk, amber = moderate,
+    red = high.
+
+    Args:
+        factor_contributions: dict with keys material, platform, progress,
+            anomaly, thermal, humidity, stability, settings (each 0.0–1.0).
+        size: canvas side length in pixels.
+    """
+    img = Image.new("RGBA", (size, size), C_BG_PANEL)
+    draw = ImageDraw.Draw(img, "RGBA")
+
+    cx, cy = size // 2, size // 2
+    # Reserve space for labels around the perimeter.
+    r_outer = int(size * 0.36)      # data radius at value 1.0
+    r_inner = int(size * 0.04)      # centre dot radius
+    label_pad = int(size * 0.13)    # extra distance for labels beyond r_outer
+
+    fn8  = _font(8)
+    fn9  = _font(9)
+    fn11 = _font(11)
+
+    # ── Grid rings ─────────────────────────────────────────────────────────
+    ring_alphas = [30, 50, 70]
+    ring_fracs  = [0.33, 0.67, 1.0]
+    for frac, alpha in zip(ring_fracs, ring_alphas):
+        r = int(r_outer * frac)
+        pts_ring = []
+        for i in range(_RADAR_N):
+            angle = math.pi / 2 - 2 * math.pi * i / _RADAR_N
+            pts_ring.append((cx + r * math.cos(angle), cy - r * math.sin(angle)))
+        draw.polygon(pts_ring, outline=(255, 255, 255, alpha))
+
+    # ── Axis spokes ────────────────────────────────────────────────────────
+    for i in range(_RADAR_N):
+        angle = math.pi / 2 - 2 * math.pi * i / _RADAR_N
+        x_tip = cx + r_outer * math.cos(angle)
+        y_tip = cy - r_outer * math.sin(angle)
+        draw.line([(cx, cy), (x_tip, y_tip)], fill=(255, 255, 255, 35), width=1)
+
+    # ── Data polygon ────────────────────────────────────────────────────────
+    values = [max(0.0, min(1.0, factor_contributions.get(key, 0.0)))
+              for _, key in _RADAR_LABELS]
+    max_val = max(values) if values else 0.0
+
+    # Color based on worst factor.
+    if max_val >= 0.60:
+        poly_color = (*C_CRIT, 140)
+        ring_color = (*C_CRIT, 200)
+    elif max_val >= 0.30:
+        poly_color = (*C_WARN, 120)
+        ring_color = (*C_WARN, 200)
+    else:
+        poly_color = (*C_OK, 110)
+        ring_color = (*C_OK, 200)
+
+    pts_data = []
+    for i, v in enumerate(values):
+        angle = math.pi / 2 - 2 * math.pi * i / _RADAR_N
+        r = max(r_inner, int(r_outer * v))
+        pts_data.append((cx + r * math.cos(angle), cy - r * math.sin(angle)))
+
+    draw.polygon(pts_data, fill=poly_color, outline=ring_color)
+
+    # ── Axis labels ────────────────────────────────────────────────────────
+    for i, (label, key) in enumerate(_RADAR_LABELS):
+        angle = math.pi / 2 - 2 * math.pi * i / _RADAR_N
+        r_lbl = r_outer + label_pad
+        lx = cx + r_lbl * math.cos(angle)
+        ly = cy - r_lbl * math.sin(angle)
+        val = factor_contributions.get(key, 0.0)
+        # Dim labels for zero-risk factors.
+        txt_col = C_DIM if val < 0.05 else (C_WARN if val >= 0.30 else C_LBL)
+        draw.text((lx, ly), label, fill=txt_col, font=fn8, anchor="mm")
+
+    # ── Title ───────────────────────────────────────────────────────────────
+    draw.text((cx, 6), "FAILURE DRIVERS", fill=C_LBL, font=fn9, anchor="mt")
+
+    # ── Centre dot ─────────────────────────────────────────────────────────
+    draw.ellipse(
+        [cx - r_inner, cy - r_inner, cx + r_inner, cy + r_inner],
+        fill=(255, 255, 255, 60),
+    )
+
+    # ── Outer border ────────────────────────────────────────────────────────
+    draw.rectangle([0, 0, size - 1, size - 1],
+                   outline=(*C_BORDER[:3], C_BORDER[3]), width=1)
+
+    return _encode_png(img)
+
+
 def _build_health_panel_png(
     tw: int,
     verdict: str,
@@ -1534,7 +1645,17 @@ def analyze(
     _gcode_state = printer_context.get("gcode_state", "IDLE")
     _stage       = printer_context.get("stage", 255)
     _stage_gated = _gcode_state not in ("RUNNING", "PAUSE", "PAUSED") or _stage != 255
-    _ph = round(1.0 - score, 4)
+
+    # Bayesian failure probability — same model used by background monitor.
+    try:
+        _fp, _factors = compute_failure_probability(
+            score, thresh_warn, thresh_crit, printer_context, stable_verdict="clean",
+        )
+        _ph = round(1.0 - _fp, 4)
+    except Exception:
+        _fp, _factors = None, {}
+        _ph = round(1.0 - score, 4)   # fallback: raw anomaly score inversion
+
     _dc = compute_decision_confidence(window_size, _stage_gated, printer_context)
 
     health_panel_png = _build_health_panel_png(
@@ -1543,6 +1664,8 @@ def analyze(
         decision_confidence=_dc,
         stage_gated=_stage_gated,
     )
+
+    factors_radar_png = _build_radar_png(_factors) if _factors else None
 
     # Project identity
     project_thumbnail_png = _decode_data_uri_png(project_thumbnail_uri) if project_thumbnail_uri else None
@@ -1580,6 +1703,7 @@ def analyze(
         annotated_png=annotated_png,
         heat_png=heat_png,
         edge_png=edge_png,
+        factors_radar_png=factors_radar_png,
         health_panel_png=health_panel_png,
         job_state_composite_png=composite_png,
     )
