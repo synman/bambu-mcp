@@ -299,17 +299,17 @@ log.warning("fn: context: %s", e, exc_info=True)  # or log.error for unexpected 
 
 ## BPM MCP Coverage Standard (Mandatory)
 
-**Every public BPM function that is reachable via an HTTP API route MUST also have a
-corresponding MCP tool.** The HTTP/OpenAPI REST API is a fallback layer only. If a BPM
-function is accessible only through the HTTP API and not via an MCP tool, that is a gap
-that must be closed.
+**Every public BPM function that bambu-mcp exposes via an HTTP REST route in `api_server.py`
+MUST also have a corresponding MCP tool.** The bambu-mcp HTTP/OpenAPI REST API (`api_server.py`)
+is a fallback layer only — it is not BPA and not BPM itself. If a BPM function is reachable
+via `api_server.py` but has no MCP tool, that is a gap that must be closed.
 
 ### Required audit on every BPM-touching PR
 
 When any of the following change, run the coverage audit and close any new gaps before merging:
 
-1. A new public BPM method is added (check: does it have an HTTP route? → add MCP tool)
-2. A new HTTP route is added (check: does it have an MCP tool? → add it)
+1. A new public BPM method is added (check: does it have an HTTP route in `api_server.py`? → add MCP tool)
+2. A new HTTP route is added to `api_server.py` (check: does it have an MCP tool? → add it)
 3. A new MCP tool is added (ensure it matches the BPM method it wraps — docstring parity)
 
 ### Intentional non-gaps (documented exclusions)
