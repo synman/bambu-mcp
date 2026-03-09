@@ -309,22 +309,41 @@ log.warning("fn: context: %s", e, exc_info=True)  # or log.error for unexpected 
 
 ## BPM MCP Coverage Standard (Mandatory)
 
-**Every public BPM function that bambu-mcp exposes via an HTTP REST route in `api_server.py`
-MUST also have a corresponding MCP tool.** The bambu-mcp HTTP/OpenAPI REST API (`api_server.py`)
-is a fallback layer only — it is not BPA and not BPM itself. If a BPM function is reachable
-via `api_server.py` but has no MCP tool, that is a gap that must be closed.
+**Full traceability and accessibility is required for every item in bpm's public API.** This means every public method, field, property, and attribute in bpm must be reachable through at least one access path in the mcp, and that path must be accurately documented in a knowledge module.
+
+**Three access paths (at least one required per bpm item):**
+1. **MCP tool** — a registered MCP tool in `tools/*.py` wraps the method or serializes the field
+2. **HTTP REST API** — a route in `api_server.py` exposes it (must trace to an actual bpm call)
+3. **Both** — best coverage; required for all high-value operational methods
+
+**Knowledge obligation (mandatory for all covered items):**
+Every item reachable via an MCP tool or HTTP route MUST be documented in the appropriate `knowledge/api_reference_*.py` or `knowledge/enums_*.py` module. Coverage without documentation is an incomplete implementation.
+
+**Intentional non-coverage (must be explicit):**
+If a bpm item is intentionally not exposed (internal helper, deprecated, redundant, non-user-facing), it must be listed in the Intentional non-gaps table below with a reason. Silent non-coverage is a gap.
+
+### Coverage Obligation on bpm dependency bump
+
+**A bpm dependency bump is not complete until coverage is verified.** When `pip install --force-reinstall` installs a new version of bpm into the mcp venv:
+
+1. Diff the new version against the prior version: identify every new/changed public method, field, property, or attribute
+2. For each new/changed item, verify it is covered by at least one access path (MCP tool or HTTP route)
+3. If not covered: either add coverage (MCP tool + HTTP route) or add it to the intentional exclusions table
+4. Update the appropriate knowledge module to document the new/changed item
+5. The mcp server restart and mcp-reload happen **after** coverage is complete — not before
 
 ### Required audit on every BPM-touching PR
 
 When any of the following change, run the coverage audit and close any new gaps before merging:
 
-1. A new public BPM method is added (check: does it have an HTTP route in `api_server.py`? → add MCP tool)
-2. A new HTTP route is added to `api_server.py` (check: does it have an MCP tool? → add it)
-3. A new MCP tool is added (ensure it matches the BPM method it wraps — docstring parity)
+1. A new public BPM method, field, or property is added → verify MCP tool + HTTP route + knowledge doc
+2. A new HTTP route is added to `api_server.py` → verify it has a matching MCP tool + knowledge doc
+3. A new MCP tool is added → verify it matches the BPM method/field it wraps (docstring parity) + knowledge doc
+4. A BPM item is removed or renamed → remove or update corresponding MCP tool, HTTP route, and knowledge doc
 
 ### Intentional non-gaps (documented exclusions)
 
-The following BPM methods are **intentionally not** exposed as MCP tools:
+The following BPM methods are **intentionally not** exposed as MCP tools or HTTP routes:
 
 | BPM Method / Property | Reason |
 |------------------------|--------|
@@ -336,11 +355,14 @@ The following BPM methods are **intentionally not** exposed as MCP tools:
 
 ### Coverage audit checklist
 
-Before closing any PR that adds/removes BPM methods or HTTP routes:
+Before closing any PR that adds/removes BPM methods, fields, or HTTP routes:
+- [ ] Every new/changed bpm public item has at least one access path (MCP tool or HTTP route)
+- [ ] Every new/changed item is documented in the appropriate knowledge module
 - [ ] Every new HTTP route has a matching MCP tool (or is in the intentional exclusions table above)
 - [ ] Every new MCP tool correctly wraps its BPM method with matching semantics
 - [ ] Docstrings are present on both the HTTP route handler and the MCP tool function
 - [ ] `_ROUTE_TAGS` and `_ROUTE_EXAMPLES` entries added for any new HTTP routes (per Swagger standard)
+- [ ] Intentional non-coverage is listed in the exclusions table with a reason
 
 ---
 
