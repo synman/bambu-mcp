@@ -714,8 +714,8 @@ def analyze_active_job(
     if job and job.gcode_file:
         try:
             from tools.files import get_plate_thumbnail, get_plate_topview
-            plate_num = getattr(job, "plate_num", 1) or 1
             project_info = getattr(job, "project_info", None)
+            plate_num = getattr(project_info, "plate_num", None) or getattr(job, "plate_num", 1) or 1
             file_path = (getattr(project_info, "id", None) or "").strip() or job.gcode_file
             if file_path.endswith(".3mf"):
                 thumb = get_plate_thumbnail(name, file_path, plate_num=plate_num, quality="standard")
