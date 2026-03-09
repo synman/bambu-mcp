@@ -166,6 +166,7 @@ _ROUTE_PARAM_DESCRIPTIONS: dict[tuple[str, str], str] = {
     ("set_print_option",                "printer"):     _PRINTER_DESC,
     ("send_gcode",                      "printer"):     _PRINTER_DESC,
     ("send_ams_control_command",        "printer"):     _PRINTER_DESC,
+    ("send_mqtt_command",               "printer"):     _PRINTER_DESC,
     ("set_ams_user_setting",            "printer"):     _PRINTER_DESC,
     ("set_nozzle_details",              "printer"):     _PRINTER_DESC,
     ("refresh_nozzles",                 "printer"):     _PRINTER_DESC,
@@ -233,6 +234,8 @@ _ROUTE_PARAM_DESCRIPTIONS: dict[tuple[str, str], str] = {
     ("set_print_option",                "enabled"):     "Enable or disable the option.",
     # ── G-code ─────────────────────────────────────────────────────────────────
     ("send_gcode",                      "gcode"):       "G-code commands to send. Use | as a newline separator for multiple commands.",
+    # ── Raw MQTT ───────────────────────────────────────────────────────────────
+    ("send_mqtt_command",               "command_json"): "Valid JSON string matching the Bambu Lab MQTT command schema.",
     # ── Nozzle hardware ────────────────────────────────────────────────────────
     ("set_nozzle_details",              "nozzle_diameter"): "Nozzle diameter in mm.",
     ("set_nozzle_details",              "nozzle_type"):     "Nozzle material type.",
@@ -293,6 +296,7 @@ _ROUTE_TAGS: dict[str, str] = {
     "skip_objects": "Print Control",
     "set_speed_level": "Print Control",
     "send_gcode": "Print Control",
+    "send_mqtt_command": "Print Control",
     # AMS & Filament
     "load_filament": "AMS & Filament",
     "unload_filament": "AMS & Filament",
@@ -494,6 +498,10 @@ _ROUTE_EXAMPLES: dict[str, dict] = {
     "send_gcode": {
         "response": {"status": "success"},
         "params": {"printer": "H2D", "gcode": "G28|G1 X100 Y100 F3000"},
+    },
+    "send_mqtt_command": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D", "command_json": '{"print":{"command":"pause"}}'},
     },
     "send_ams_control_command": {
         "response": {"status": "success"},
@@ -1420,6 +1428,33 @@ def _build_app():
             return _ok()
         except Exception as e:
             log.error("send_gcode: error: %s", e, exc_info=True)
+            return _err(str(e))
+
+    @app.route("/api/send_mqtt_command")
+    def send_mqtt_command():
+        """Send a raw MQTT command JSON to the printer's request topic. ?command_json=<json>
+
+        ⚠️ LAST-RESORT TOOL. Bypasses all safety checks. Incorrect commands can damage
+        prints, trigger hardware faults, or put the printer into an unrecoverable state.
+        command_json must be a valid JSON string matching the Bambu Lab MQTT command schema.
+        """
+        log.debug("send_mqtt_command: called")
+        p, _ = _get_printer(request.args)
+        if p is None:
+            return _err("no printer")
+        try:
+            import json as _json
+            command_json = request.args.get("command_json", "")
+            _json.loads(command_json)  # validate JSON before sending
+            log.debug("send_mqtt_command: command=%s", command_json[:80])
+            p.send_anything(command_json)
+            log.debug("send_mqtt_command: → ok")
+            return _ok()
+        except ValueError as e:
+            log.error("send_mqtt_command: invalid JSON: %s", e)
+            return _err(f"invalid JSON: {e}")
+        except Exception as e:
+            log.error("send_mqtt_command: error: %s", e, exc_info=True)
             return _err(str(e))
 
     @app.route("/api/send_ams_control_command")

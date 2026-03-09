@@ -96,6 +96,20 @@ Returns `{"success": true}`.
 
 ---
 
+## GET /api/send_mqtt_command
+
+Send a raw MQTT command JSON string directly to the printer's request topic.
+
+Query parameters:
+- `command_json` (required) — valid JSON string matching the Bambu Lab MQTT command schema
+
+JSON is validated before sending; returns `{"error": "invalid JSON: ..."}` if malformed.
+⚠️ LAST-RESORT TOOL. Bypasses all safety checks. Incorrect commands can damage prints,
+trigger hardware faults, or put the printer into an unrecoverable state.
+Returns `{"success": true}`.
+
+---
+
 ## GET /api/set_print_option
 
 Set a print option flag.
