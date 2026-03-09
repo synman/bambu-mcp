@@ -345,7 +345,8 @@ def get_print_progress(name: str) -> dict:
     """
     Return print progress: percentage complete, current/total layers, and time remaining.
 
-    Also includes elapsed time in minutes, the current stage name, and gcode state.
+    Also includes elapsed time in minutes, the current stage name, gcode state, and
+    skipped_objects (list of identify_id integers for objects skipped via skip_objects()).
 
     Field semantics:
     - gcode_state: string — "IDLE", "PREPARE", "RUNNING", "PAUSE", "FINISH",
@@ -355,10 +356,13 @@ def get_print_progress(name: str) -> dict:
       or blocked. Do NOT treat FAILED gcode_state as a reason to withhold a new job.
     - stage: integer stage code — see get_job_info() for the full table (0=idle,
       255=printing normally, 17=paused by user, etc.).
+    - skipped_objects: list of identify_id integers skipped in the current print job.
+      Empty list when no objects have been skipped or no print is active.
     """
     log.debug("get_print_progress: called for printer=%s", name)
     state = session_manager.get_state(name)
     job = session_manager.get_job(name)
+    printer = session_manager.get_printer(name)
     if state is None:
         log.warning("get_print_progress: printer %s not connected", name)
         return _no_printer(name)
@@ -372,6 +376,7 @@ def get_print_progress(name: str) -> dict:
         "remaining_minutes": job.remaining_minutes if job else 0,
         "stage_name": job.stage_name if job else "",
         "subtask_name": job.subtask_name if job else "",
+        "skipped_objects": printer._skipped_objects if printer else [],
     }
 
 

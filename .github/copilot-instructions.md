@@ -320,10 +320,11 @@ log.warning("fn: context: %s", e, exc_info=True)  # or log.error for unexpected 
 Every item reachable via an MCP tool or HTTP route MUST be documented in the appropriate `knowledge/api_reference_*.py` or `knowledge/enums_*.py` module. Coverage without documentation is an incomplete implementation.
 
 **Intentional non-coverage (must be explicit):**
-If a bpm item is intentionally not exposed (internal helper, deprecated with a replacement, redundant, non-user-facing), it must be listed in the Intentional non-gaps table below with a reason. Silent non-coverage is a gap.
+If a bpm item is intentionally not exposed (internal helper, redundant, non-user-facing), it must be listed in the Intentional non-gaps table below with a reason. Silent non-coverage is a gap.
 
-**Deprecated-without-replacement exclusion (automatic):**
-Any bpm item marked deprecated with no defined replacement is **automatically excluded** from coverage gap assessments. Do not flag it as a gap; do not add it to the intentional exclusions table. If a replacement is defined, the replacement must be covered instead.
+**Deprecated item handling:**
+- `@deprecated` **with a named replacement** → the deprecated item is excluded from coverage; the replacement must be covered instead.
+- `@deprecated` **with no replacement defined** → ignore the annotation for audit purposes; treat the item as a regular bpm item and require coverage.
 
 ### Coverage Obligation on bpm dependency bump
 
@@ -364,7 +365,7 @@ Before closing any PR that adds/removes BPM methods, fields, or HTTP routes:
 - [ ] Every new MCP tool correctly wraps its BPM method with matching semantics
 - [ ] Docstrings are present on both the HTTP route handler and the MCP tool function
 - [ ] `_ROUTE_TAGS` and `_ROUTE_EXAMPLES` entries added for any new HTTP routes (per Swagger standard)
-- [ ] Intentional non-coverage is listed in the exclusions table with a reason (deprecated-without-replacement items are auto-excluded — no table entry required)
+- [ ] Intentional non-coverage is listed in the exclusions table with a reason (deprecated-with-replacement items list the replacement; deprecated-without-replacement items are treated as regular items and need coverage)
 
 ---
 

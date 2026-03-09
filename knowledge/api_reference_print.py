@@ -40,6 +40,12 @@ Cancels listed objects during current print. IDs are identify_id values from
 slice_info.config, available in ProjectInfo.metadata["map"]["bbox_objects"][N]["id"].
 Values coerced to int before sending. Publishes SKIP_OBJECTS.
 
+#### skipped_objects (property) -> list[int]
+Read-back of which objects have been skipped in the current print job. Returns the list
+of identify_id integers that were passed to `skip_objects()`. Reset to `[]` at print start.
+Accessible via `get_print_progress()` MCP tool (`skipped_objects` field) and `GET /api/printer`
+(`_skipped_objects` field in the full printer state dump).
+
 ---
 
 ## Temperature Methods
