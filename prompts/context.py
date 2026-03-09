@@ -264,6 +264,7 @@ Direct access to raw knowledge modules via URI. Use when you need full protocol 
 - bambu://rules/global — global copilot behavioral rules (live, redacted)
 - bambu://rules/printer-app — bambu-printer-app rules (live, redacted)  
 - bambu://rules/printer-manager — bambu-printer-manager rules (live, redacted)
+- bambu://rules/bambu-mcp — bambu-mcp project rules (live, redacted)
 - bambu://knowledge/behavioral-rules — synthesized rules knowledge module
 - bambu://knowledge/protocol — MQTT/HMS/3MF/SSDP protocol knowledge
 - bambu://knowledge/enums — all bpm enum values

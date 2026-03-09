@@ -1,10 +1,11 @@
 """
 resources/rules.py — MCP resources exposing live rules file content at bambu://rules/* URIs.
 
-Three rule sources:
+Four rule sources:
   bambu://rules/global          ~/.copilot/copilot-instructions.md (global rules)
   bambu://rules/printer-app     ~/bambu-printer-app/.github/copilot-instructions.md
   bambu://rules/printer-manager ~/bambu-printer-manager/.github/copilot-instructions.md
+  bambu://rules/bambu-mcp       ~/bambu-mcp/.github/copilot-instructions.md
 
 Sensitive values (IPs, serial numbers, access codes, passwords, Docker infra, CI tokens)
 are redacted before serving. The baked-in knowledge/behavioral_rules.py already contains
@@ -18,6 +19,7 @@ _RULES_FILES = {
     "global": Path.home() / ".copilot" / "copilot-instructions.md",
     "printer-app": Path.home() / "bambu-printer-app" / ".github" / "copilot-instructions.md",
     "printer-manager": Path.home() / "bambu-printer-manager" / ".github" / "copilot-instructions.md",
+    "bambu-mcp": Path.home() / "bambu-mcp" / ".github" / "copilot-instructions.md",
 }
 
 # Patterns to redact from live rule files before serving
@@ -67,6 +69,11 @@ def get_printer_app_rules() -> str:
 def get_printer_manager_rules() -> str:
     """Return bambu-printer-manager copilot-instructions.md with sensitive values redacted."""
     return _read_rules("printer-manager")
+
+
+def get_bambu_mcp_rules() -> str:
+    """Return bambu-mcp copilot-instructions.md with sensitive values redacted."""
+    return _read_rules("bambu-mcp")
 
 
 def list_rules_resources() -> dict:

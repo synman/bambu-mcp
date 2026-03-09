@@ -9,7 +9,7 @@ from __future__ import annotations
 HTTP_API_FILES_TEXT: str = """
 # HTTP API — File Management Routes
 
-Base URL: `http://localhost:8080`
+Base URL: `http://localhost:{api_port}` — call `get_server_info()` or `GET /api/server_info`
 All routes: GET (except upload routes which also accept POST). All accept `?printer=<name>`.
 
 ---

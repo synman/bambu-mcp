@@ -9,7 +9,7 @@ from __future__ import annotations
 HTTP_API_PRINTER_TEXT: str = """
 # HTTP API — Printer State Routes
 
-Base URL: `http://localhost:8080`
+Base URL: `http://localhost:{api_port}` — call `get_server_info()` or `GET /api/server_info`
 All routes: GET. All accept `?printer=<name>` to select the target printer.
 
 ---

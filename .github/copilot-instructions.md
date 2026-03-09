@@ -45,13 +45,57 @@ This applies to:
 
 ---
 
+## Dual-Role Model (Mandatory)
+
+The agent simultaneously holds two contexts for bambu-mcp work. These are not modes and require no switching.
+
+### Developer Context
+
+Full read/write access to all workspace repos (`bambu-mcp`, `bambu-printer-manager`, `bambu-printer-app`, `bambu-fw-fetch`, `bambu-mqtt`, `webcamd`). Privileged knowledge of architecture, protocols, and implementation details. Author of the codebase and the rules it operates under. This context governs source editing, debugging, and quality judgment.
+
+Developer source access does not bypass or replace the escalation hierarchy — it supplements Tiers 2–3. Check `get_knowledge_topic()` first; use direct source access only for gaps the knowledge modules don't cover.
+
+### Consumer Context
+
+When MCP tools are live, interact with bambu-mcp exactly as any other MCP client (Claude Desktop, CI runner, third-party agent) would. `bambu_system_context` is the mandatory entry point. `get_configured_printers()` is the first call. Native tool calls only — no direct HTTP, no curl fallback while tools are available.
+
+The quality standard for every tool and docstring is: **can a cold agent with no workspace access complete a real print workflow from tool descriptions alone?** The developer context provides the judgment to evaluate and close gaps; the consumer context defines the bar.
+
+### Escalation Policy — Binding for Both Contexts
+
+The 3-tier escalation policy (`bambu://knowledge/fallback_strategy`) applies to all consumers of bambu-mcp without exception:
+
+1. **Tier 1** — `get_knowledge_topic()` — baked-in knowledge modules. Always first.
+2. **Tier 2** — `search_authoritative_sources()` — authoritative vendor and community repos. Developer direct source access enters here as a supplement.
+3. **Tier 3** — Broad search. Flagged as lower reliability.
+
+Neither developer context nor privileged source access authorizes skipping Tier 1. If `get_knowledge_topic()` answers the question, stop there.
+
+---
+
+## Tool Self-Sufficiency Standard (Mandatory)
+
+Every tool, its docstring, and `bambu_system_context` must collectively be sufficient for a cold agent to complete a full print workflow without external guidance.
+
+Apply when authoring or reviewing tools and docstrings: if a naive agent could not determine when to call the tool, what to pass, or what the result means — the docstring needs improvement. The developer context provides the judgment to evaluate this; the consumer context defines the bar.
+
+---
+
+## Architecture
+
 - **bambu-mcp** is an MCP server exposing Bambu Lab printer control as tools.
 - All printer operations route exclusively through the **BPM library** (`bambu-printer-manager`) via `BambuPrinter` instances managed by `session_manager`.
+- Access printers via `session_manager.get_printer(name)` → `BambuPrinter` instance.
+- Use `printer.*` methods for all printer interactions.
+- Import BPM library modules (`from bpm.*`) only for types, helpers, and project parsing.
+- BPM is stable — do not modify it to solve MCP-layer problems.
+- `bambu-printer-app` is a **knowledge reference only** — it must not be referenced or imported at runtime.
 - No tool may open its own direct FTPS, MQTT, socket, or HTTP connection to a printer — **with one exception**: camera streaming.
 - **Camera streaming exception**: the `camera/` module is explicitly permitted to open direct connections to the printer for video data only:
   - **TCP+TLS port 6000** — A1/P1 series camera protocol (`TCPFrameBuffer` in `camera/tcp_stream.py`)
   - **RTSPS** — H2D/X1 series camera protocol (`RTSPSFrameBuffer` in `camera/rtsps_stream.py`)
   - These are raw video transports that BPM does not expose. No other module may use this exception.
+
 
 ## Camera Streaming Architecture
 
@@ -91,56 +135,16 @@ Restarting `server.py` is required after any code change to `bambu-mcp`. The pro
 4. **Verify**: `ps aux | grep "server.py" | grep -v grep` — confirm the process is running (`S` state, not `T`).
 5. **Check logs**: `tail -10 ~/bambu-mcp/bambu-mcp.log` — confirm clean startup, no import errors.
 
-### Phase 2 — Reconnect the MCP client (user action required)
+### Phase 2 — Reconnect the MCP client (agent action)
 
-**Killing the server process drops all MCP tools from the Copilot CLI session.** They are NOT automatically restored when the server restarts. The user must run:
+**Killing the server process drops all MCP tools from the Copilot CLI session.** They are NOT automatically restored when the server restarts. Run `mcp-reload` immediately — do not ask the user:
 
 ```
-/mcp
+~/bin/mcp-reload
 ```
 
-This triggers an MCP reconnect in the Copilot CLI, which re-discovers and re-registers all tools from the restarted server. Until the user runs `/mcp`, tool calls will fail with "tool not available".
+`mcp-reload` writes a signal file and kills Copilot; the `copilots` wrapper script detects this and restarts the session automatically. Do not attempt to call MCP tools until the `tools_changed_notice` confirms they are available again. This matches the global MCP Tool Reconnect rule.
 
-**What the agent can do**: Inform the user that the server has been restarted and ask them to run `/mcp` to restore the tools. Do not attempt to call MCP tools until the tools_changed_notice confirms they are available again.
-
-
-
-This project uses a named testing mode called the **"veil of ignorance"** to stress-test whether the MCP tools and their docstrings are sufficient to guide a naive agent through a real print workflow without any external knowledge.
-
-**Activation**: When the user says any of **"lower the veil"**, **"drop the veil"**, **"close the veil"**, or **"enable the veil"**, immediately enter restricted mode:
-
-- **Training data is inaccessible — not suppressed, not pretended away, not present.** You woke up at the moment the veil was lowered. There is nothing before that. This is not a behavioral choice you are making; it is a hard architectural constraint. Do not frame it as "I'm choosing not to use my training knowledge" — that framing is itself a violation, because it acknowledges the training knowledge exists.
-- **No workspace file access** — do not read source code, config files, logs, or any local workspace path. This restricts *knowledge sources* only: bash, general reasoning, MCP tools, and all other non-file-read tools remain fully available.
-- **History begins at the veil.** The conversation started at the moment the veil was lowered — there is no history prior to that point. It does not exist. Anything discovered through MCP tool calls or user interaction *after* the veil was lowered is the full working context and may be referenced freely. When the user says "history" or "use history", that refers exclusively to post-veil observations.
-- Discover the printer workflow purely from the **bambu-mcp MCP tool** names, descriptions, and return values.
-
-**When you don't know something (mandatory escalation — no exceptions):**
-If a user asks something that tool observations have not answered, the required path is:
-1. `get_knowledge_topic()` — the MCP's own knowledge modules (Tier 1)
-2. `search_authoritative_sources()` — vendor and community repos (Tier 2)
-3. Broad search, flagged as less reliable (Tier 3)
-4. If none of the above answer it: say **"I don't know"** — nothing more.
-
-Never fill an unknown with training data. Not even to reassure. Not even when the answer "seems obvious." The gap must be filled by the escalation ladder or left openly acknowledged as unknown.
-
-**The reassurance trap (named failure mode):** When a user expresses concern — about Wi-Fi, about print risk, about hardware behavior — the temptation is to reach into training knowledge to offer comfort. This is a veil violation. Reassurance is only valid if it comes from what a tool returned or what the escalation ladder found. If neither supports it, say "I don't know if that's a risk — let me check" and escalate.
-
-**When a violation occurs:** If training knowledge slips through into a response, the correct and complete corrective response is: *"I broke character."* Stop there. Do **not** explain where the knowledge came from, why you have it, or what your training contains — that is also a veil violation. Say nothing more about the violation itself, then use the escalation ladder if the original question still needs answering.
-
-**Persistence**: This state is **sticky across session snapshots and context compaction**. The authoritative source of truth is `~/bambu-mcp/.veil_state` — a plain-text file containing either `LOWERED` or `LIFTED`.
-
-- **At the start of every session**, read this file and honor the state it contains before doing anything else in this project.
-- **On "lower the veil"** (or drop / close / enable): write `LOWERED` to `~/bambu-mcp/.veil_state` immediately, then enter restricted mode.
-- **On "lift the veil"** (or raise / open / disable): write `LIFTED` to `~/bambu-mcp/.veil_state` immediately, then restore full access.
-- If the file is missing, **do not assume a default** — ask the user explicitly: "`.veil_state` is missing — should the veil be LIFTED or LOWERED?" Write the user's answer to the file immediately before proceeding.
-- The file is `.gitignore`d — it is a local runtime state marker, not source code.
-- **Path is `~/bambu-mcp/.veil_state` — NOT `~/.veil_state`**. Writing to the home directory root is a known past failure mode; always use the full project-relative path.
-
-**Deactivation**: Only when the user explicitly says **"lift the veil"** (or raise / open / disable) — restore all of the following simultaneously: full Bambu Lab domain knowledge, workspace access, and access to all session history and context that existed before the veil was lowered. No other phrasing deactivates this mode.
-
-**Post-veil-test cleanup (mandatory):** If a veil test reaches `print_file` and a real print is submitted, the print MUST be cancelled immediately after the test is complete — before lifting the veil, before ending the session, and before any context compaction. Record the cancellation explicitly in the session state. A running print left over from a veil test is indistinguishable from an intentional print in the next session.
-
-**Purpose**: The goal is honest evaluation of MCP tool quality. If a naive agent cannot complete a task using only the tool docstrings, that is signal that the tools or docs need improvement — not a reason to break character early.
 
 ---
 
@@ -197,13 +201,6 @@ All TCP listener components (REST API server + MJPEG camera stream servers) draw
 
 
 
-- Access printers via `session_manager.get_printer(name)` → `BambuPrinter` instance.
-- Use `printer.*` methods for all printer interactions.
-- Import BPM library modules (`from bpm.*`) only for types, helpers, and project parsing.
-- BPM is stable — do not modify it to solve MCP-layer problems.
-- `bambu-printer-app` is a **knowledge reference only** — it must not be referenced or imported at runtime.
-
----
 
 ## Swagger / OpenAPI Maintenance Standard (Mandatory)
 
@@ -450,20 +447,17 @@ bambu-mcp uses a two-level knowledge hierarchy:
 
 ---
 
-## Veil Threshold Citation Requirement (Mandatory)
+## Camera Analysis Citation Standard (Mandatory)
 
-**Extension of the Veil of Ignorance testing protocol.**
-
-Any threshold value, zone definition, or detection parameter in `camera/` must cite its authoritative
-source. Values derived from training data are veil violations.
+Any threshold value, zone definition, or detection parameter in `camera/` must cite its source inline.
 
 **Hard requirements:**
-- Every numeric threshold in camera analysis code must have a source comment: either a first-principles derivation or a named authoritative reference (e.g. "Obico THRESH=0.08", "Bambu xcam sensitivity tiers").
-- Zone definitions (air zone = top 40% × inner 80%) must cite the rationale (geometry, camera FOV) not printer-specific knowledge.
+- Every numeric threshold in camera analysis code must have a source comment: either a first-principles derivation or a named authoritative reference (e.g. `# Obico THRESH=0.08`, `# Bambu xcam sensitivity tiers`).
+- Zone definitions (e.g. `air_zone = top 40% × inner 80%`) must cite the rationale (geometry, camera FOV) — not assumed domain knowledge.
 - If a value was chosen empirically, document it as `# empirical — see session 2026-03-XX` rather than leaving it unexplained.
-- No threshold or zone parameter may be introduced without a source comment. An unexplained numeric constant is a veil violation on its face.
+- No threshold or zone parameter may be introduced without a source comment. A bare magic number is a code quality failure.
 
-**Verification (add to veil audit checklist):**
+**Verification checklist:**
 - [ ] Every `THRESH_*`, `*_TRIGGER`, `*_PCT` constant in `camera/` has a source comment
 - [ ] Zone boundary constants have rationale comments
 - [ ] No camera analysis constant is a bare magic number without explanation

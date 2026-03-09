@@ -88,7 +88,7 @@ Read the knowledge/ modules via bambu://knowledge/* resources or get_knowledge_t
 - protocol — MQTT topics, telemetry semantics, HMS, firmware, SSDP, 3MF
 - enums — all enum values and meanings
 - api_reference — BambuPrinter method signatures and MCP tool mapping
-- http_api — HTTP REST API: base URL, auth, route category index (51 routes, port 8080)
+- http_api — HTTP REST API: dynamic base URL (call `get_server_info()` to discover `api_port`), auth, route category index
 
 **Sub-topics (fetch on demand when parent summary points here):**
 - behavioral_rules/camera — camera tools, stream HUD overlay, data_uri handling

@@ -24,6 +24,7 @@ from resources.rules import (
     get_global_rules,
     get_printer_app_rules,
     get_printer_manager_rules,
+    get_bambu_mcp_rules,
 )
 from resources.knowledge import (
     get_behavioral_rules,
@@ -151,6 +152,7 @@ _RESOURCES = [
     ("bambu://rules/global",            get_global_rules,           "Global copilot behavioral rules (live, sensitive values redacted)"),
     ("bambu://rules/printer-app",       get_printer_app_rules,      "bambu-printer-app rules file (live, redacted)"),
     ("bambu://rules/printer-manager",   get_printer_manager_rules,  "bambu-printer-manager rules file (live, redacted)"),
+    ("bambu://rules/bambu-mcp",         get_bambu_mcp_rules,        "bambu-mcp project rules file (live, redacted)"),
     ("bambu://knowledge/behavioral-rules", get_behavioral_rules,    "Synthesized behavioral rules knowledge module"),
     ("bambu://knowledge/behavioral-rules/camera",       get_behavioral_rules_camera,       "Camera tool selection, stream HUD components, data_uri handling rules"),
     ("bambu://knowledge/behavioral-rules/job-analysis", get_behavioral_rules_job_analysis, "analyze_active_job: print_health, decision_confidence, categories, action thresholds"),
