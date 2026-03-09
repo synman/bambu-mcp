@@ -545,8 +545,8 @@ function hexToRgba(hex,a){
 function hpUpdateFromResult(d){
   var panel=document.getElementById('health-panel');
   panel.style.display='flex';
-  var score=d.score||0;
-  var ph=d.print_health;
+  var score=d.anomaly_score||0;
+  var ph=d.success_probability;
   var dc=d.decision_confidence;
   var stageGated=(d.stage!==undefined&&d.stage!==255);
   // Composite = health × confidence (penalises low confidence proportionally)

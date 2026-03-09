@@ -406,13 +406,14 @@ class _PrinterMonitor:
             "stage_name":   stage_name,
             "stage_gated":  True,
             "verdict":      "clean",
-            "score":        0.0,
+            "anomaly_score": 0.0,
             "timestamp":    datetime.now(timezone.utc).isoformat(),
             "stable_verdict":        None,
             "confidence_window":     [],
             "confidence_window_size": 0,
-            "print_health":          None,
+            "success_probability":   None,
             "decision_confidence":   dc,
+            "factor_contributions":  None,
         }
         with self._lock:
             self._latest_result = result
@@ -526,7 +527,7 @@ class _PrinterMonitor:
         result = {
             # core scoring
             "verdict":        report.verdict,
-            "score":          round(report.score, 4),
+            "anomaly_score":  round(report.score, 4),
             "hot_pct":        round(report.hot_pct, 4),
             "strand_score":   round(report.strand_score, 4),
             "edge_density":   round(report.edge_density, 4),
@@ -546,14 +547,13 @@ class _PrinterMonitor:
             "success_probability":   ph,
             "decision_confidence":   dc,
             "factor_contributions":  factors,
-            # confidence internals (implementation detail — feeds print_health)
+            # confidence internals (implementation detail — feeds success_probability)
             "stable_verdict":         sv,
             "confidence_window":      window_snapshot,
             "confidence_window_size": len(window_snapshot),
-            # failure probability (implementation detail — 1 - print_health)
-            "failure_probability":       fp,
-            "failure_probability_trend": fp_trend,
-            "failure_probability_peak":  round(fp_peak, 4) if fp_peak is not None else None,
+            # trend/bounds for success_probability history
+            "success_probability_trend": fp_trend,
+            "success_probability_min":   round(1.0 - fp_peak, 4) if fp_peak is not None else None,
             # job context
             "layer":         printer_context.get("layer", 0),
             "total_layers":  printer_context.get("total_layers", 0),

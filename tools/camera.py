@@ -791,7 +791,7 @@ def analyze_active_job(
         "success_probability":   _success_prob,
         "decision_confidence":   _decision_conf,
         "factor_contributions":  _factors if _factors is not None else None,
-        "score":                 round(report.score, 4),
+        "anomaly_score":          round(report.score, 4),
         "hot_pct":               round(report.hot_pct, 4),
         "strand_score":          round(report.strand_score, 4),
         "edge_density":          round(report.edge_density, 4),

@@ -556,13 +556,13 @@ _ROUTE_EXAMPLES: dict[str, dict] = {
     "analyze_active_job": {
         "response": {
             "verdict": "clean",
-            "score": 0.04,
+            "anomaly_score": 0.04,
             "hot_pct": 0.03,
             "strand_score": 0.02,
             "edge_density": 0.01,
             "diff_score": 0.06,
             "reference_age_s": 312.4,
-            "print_health": 0.95,
+            "success_probability": 0.95,
             "decision_confidence": 0.82,
             "stable_verdict": "clean",
             "confidence_window_size": 5,
@@ -1706,8 +1706,9 @@ def _build_app():
           edge_density     — multi-direction edge response (0–1)
           diff_score       — frame-diff from reference, or null
           reference_age_s  — age of reference frame in seconds, or null
-          print_health     — overall print health (0–1; 1.0 = fully healthy)
+          success_probability — Bayesian print health score (0–1; 1.0 = fully healthy)
           decision_confidence — agent's ability to assess failure given current data (0–1)
+          factor_contributions — dict of 8 Bayesian factor scores for radar chart (0–1 each)
           stable_verdict   — consensus verdict from confidence window, or null
           confidence_window_size — number of analysis cycles accumulated (max 5)
           stage            — current printer stage code
