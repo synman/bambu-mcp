@@ -1115,34 +1115,29 @@ def _build_health_panel_png(
     fn13 = _font(13)
     x = 6
 
-    # --- Composite badge color: health+confidence driven; stage-gated override ---
-    conf = decision_confidence if decision_confidence is not None else 0.0
+    # --- Composite = health × confidence; stage-gated override ---
+    conf = decision_confidence if decision_confidence is not None else None
+    comp = (print_health * conf) if (print_health is not None and conf is not None) else print_health
 
-    if stage_gated or print_health is None:
-        badge      = {"bg": (50, 50, 72), "fg": (140, 140, 175)}
-        badge_label = "PREP" if stage_gated else verdict.upper()
+    if stage_gated or comp is None:
+        badge       = {"bg": (50, 50, 72), "fg": (140, 140, 175)}
+        badge_label = "PREP" if stage_gated else "—"
         health_txt  = "PREP" if stage_gated else "—"
         health_col  = (140, 140, 175)
-    elif conf < 0.40:
-        # Low confidence: dim the badge regardless of health value
-        badge      = {"bg": (50, 50, 70), "fg": (140, 140, 160)}
-        badge_label = verdict.upper()
-        health_txt  = f"{print_health * 100:.0f}%"
-        health_col  = (140, 140, 160)
-    elif print_health >= 0.70:
-        badge      = _VERDICT_BADGE["clean"]
+    elif comp >= 0.70:
+        badge       = _VERDICT_BADGE["clean"]
         badge_label = "CLEAN"
-        health_txt  = f"{print_health * 100:.0f}%"
+        health_txt  = f"{comp * 100:.0f}%"
         health_col  = badge["fg"]
-    elif print_health >= 0.50:
-        badge      = _VERDICT_BADGE["warning"]
+    elif comp >= 0.50:
+        badge       = _VERDICT_BADGE["warning"]
         badge_label = "WARN"
-        health_txt  = f"{print_health * 100:.0f}%"
+        health_txt  = f"{comp * 100:.0f}%"
         health_col  = badge["fg"]
     else:
-        badge      = _VERDICT_BADGE["critical"]
+        badge       = _VERDICT_BADGE["critical"]
         badge_label = "CRIT"
-        health_txt  = f"{print_health * 100:.0f}%"
+        health_txt  = f"{comp * 100:.0f}%"
         health_col  = badge["fg"]
 
     # Verdict badge pill — original shape, composite-driven color
@@ -1155,7 +1150,7 @@ def _build_health_panel_png(
 
     # "Confidence" + value — right-justified within the badge section
     BADGE_SECTION_W = 168
-    conf_txt = f"{conf * 100:.0f}%"
+    conf_txt = f"{conf * 100:.0f}%" if conf is not None else "—"
     draw.text((x + BADGE_SECTION_W - 4, 10), "Confidence", fill=C_LBL, font=fn10, anchor="rt")
     draw.text((x + BADGE_SECTION_W - 4, 28), conf_txt,    fill=C_VAL, font=fn11, anchor="rm")
 
