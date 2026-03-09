@@ -1115,51 +1115,51 @@ def _build_health_panel_png(
     fn13 = _font(13)
     x = 6
 
-    # --- Composite badge logic ---
-    # Stage-gated: printer is in prep (homing, leveling, heating) — health is unknowable
-    if stage_gated or print_health is None:
-        badge_bg  = (60, 60, 80, 200)
-        badge_fg  = (160, 160, 180, 255)
-        health_str = "PREP"
-        conf_str   = ""
-        health_font = fn10
-    else:
-        conf = decision_confidence if decision_confidence is not None else 0.0
-        ph_val = print_health
-
-        # Confidence-adjusted color: low confidence dims the badge
-        if conf < 0.40:
-            badge_bg = (50, 50, 70, 200)
-            badge_fg = (140, 140, 160, 255)
-        elif ph_val >= 0.70:
-            badge_bg = _VERDICT_BADGE["clean"]["bg"]
-            badge_fg = _VERDICT_BADGE["clean"]["fg"]
-        elif ph_val >= 0.50:
-            badge_bg = _VERDICT_BADGE["warning"]["bg"]
-            badge_fg = _VERDICT_BADGE["warning"]["fg"]
-        else:
-            badge_bg = _VERDICT_BADGE["critical"]["bg"]
-            badge_fg = _VERDICT_BADGE["critical"]["fg"]
-
-        health_str  = f"{ph_val*100:.0f}%"
-        conf_str    = f"{conf*100:.0f}%"
-        health_font = fn13
-
-    badge_w = 64
-    draw.rounded_rectangle([x, 4, x + badge_w, ph - 4], radius=3, fill=badge_bg)
+    # --- Composite badge color: health+confidence driven; stage-gated override ---
+    conf = decision_confidence if decision_confidence is not None else 0.0
 
     if stage_gated or print_health is None:
-        # Single centered label — PREP
-        draw.text((x + badge_w // 2, ph // 2), health_str, fill=badge_fg, font=health_font, anchor="mm")
+        badge      = {"bg": (50, 50, 72), "fg": (140, 140, 175)}
+        badge_label = "PREP" if stage_gated else verdict.upper()
+        health_txt  = "PREP" if stage_gated else "—"
+        health_col  = (140, 140, 175)
+    elif conf < 0.40:
+        # Low confidence: dim the badge regardless of health value
+        badge      = {"bg": (50, 50, 70), "fg": (140, 140, 160)}
+        badge_label = verdict.upper()
+        health_txt  = f"{print_health * 100:.0f}%"
+        health_col  = (140, 140, 160)
+    elif print_health >= 0.70:
+        badge      = _VERDICT_BADGE["clean"]
+        badge_label = "CLEAN"
+        health_txt  = f"{print_health * 100:.0f}%"
+        health_col  = badge["fg"]
+    elif print_health >= 0.50:
+        badge      = _VERDICT_BADGE["warning"]
+        badge_label = "WARN"
+        health_txt  = f"{print_health * 100:.0f}%"
+        health_col  = badge["fg"]
     else:
-        # Health % — centered, upper portion
-        draw.text((x + badge_w // 2, 16), health_str, fill=badge_fg, font=health_font, anchor="mm")
-        # "Confidence" label left, value right-justified — lower portion
-        if conf_str:
-            draw.text((x + 4, 32), "Confidence", fill=(*badge_fg[:3], 160), font=fn10, anchor="lm")
-            draw.text((x + badge_w - 4, 32), conf_str, fill=badge_fg, font=fn11, anchor="rm")
+        badge      = _VERDICT_BADGE["critical"]
+        badge_label = "CRIT"
+        health_txt  = f"{print_health * 100:.0f}%"
+        health_col  = badge["fg"]
 
-    x += badge_w + 8
+    # Verdict badge pill — original shape, composite-driven color
+    BADGE_W = 54
+    draw.rounded_rectangle([x, 6, x + BADGE_W, 26], radius=3, fill=badge["bg"])
+    draw.text((x + BADGE_W // 2, 16), badge_label, fill=badge["fg"], font=fn10, anchor="mm")
+
+    # Health % — next to badge pill, replacing the old raw score
+    draw.text((x + BADGE_W + 6, 14), health_txt, fill=health_col, font=fn13, anchor="lm")
+
+    # "Confidence" + value — right-justified within the badge section
+    BADGE_SECTION_W = 168
+    conf_txt = f"{conf * 100:.0f}%"
+    draw.text((x + BADGE_SECTION_W - 4, 10), "Confidence", fill=C_LBL, font=fn10, anchor="rt")
+    draw.text((x + BADGE_SECTION_W - 4, 28), conf_txt,    fill=C_VAL, font=fn11, anchor="rm")
+
+    x += BADGE_SECTION_W
 
     # Separator
     draw.line([(x, 8), (x, ph-8)], fill=(*C_SEP[:3], 60), width=1)
