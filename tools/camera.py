@@ -790,6 +790,7 @@ def analyze_active_job(
         "stable_verdict":        report.stable_verdict,
         "success_probability":   _success_prob,
         "decision_confidence":   _decision_conf,
+        "factor_contributions":  _factors if _factors is not None else None,
         "score":                 round(report.score, 4),
         "hot_pct":               round(report.hot_pct, 4),
         "strand_score":          round(report.strand_score, 4),
@@ -815,11 +816,12 @@ def analyze_active_job(
         result["raw_png"]  = _png_uri(report.raw_png)
         result["diff_png"] = _png_uri(report.diff_png)
     if "D" in cats:
-        result["air_zone_png"]  = _png_uri(report.air_zone_png)
-        result["mask_png"]      = _png_uri(report.mask_png)
-        result["annotated_png"] = _png_uri(report.annotated_png)
-        result["heat_png"]      = _png_uri(report.heat_png)
-        result["edge_png"]      = _png_uri(report.edge_png)
+        result["air_zone_png"]      = _png_uri(report.air_zone_png)
+        result["mask_png"]          = _png_uri(report.mask_png)
+        result["annotated_png"]     = _png_uri(report.annotated_png)
+        result["heat_png"]          = _png_uri(report.heat_png)
+        result["edge_png"]          = _png_uri(report.edge_png)
+        result["factors_radar_png"] = _png_uri(getattr(report, "factors_radar_png", None))
     if "H" in cats:
         result["health_panel_png"] = _png_uri(report.health_panel_png)
 

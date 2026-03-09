@@ -499,8 +499,9 @@ class _PrinterMonitor:
 
         # Failure probability — Bayesian model, updated every analysis cycle.
         from camera.job_analyzer import compute_failure_probability, compute_decision_confidence
+        factors: dict | None = None
         try:
-            fp, _factors = compute_failure_probability(
+            fp, factors = compute_failure_probability(
                 report.score, report.thresh_warn, report.thresh_crit,
                 printer_context, stable_verdict=sv or "clean",
             )
@@ -542,8 +543,9 @@ class _PrinterMonitor:
             "precheck_hot_pct":     round(precheck_hot_pct, 4) if precheck_hot_pct is not None else None,
             "precheck_triggered":   (precheck_hot_pct is not None and precheck_hot_pct >= PRECHECK_HOT_PCT_TRIGGER),
             # primary health indicators (use these for agent decisions)
-            "print_health":          ph,
+            "success_probability":   ph,
             "decision_confidence":   dc,
+            "factor_contributions":  factors,
             # confidence internals (implementation detail — feeds print_health)
             "stable_verdict":         sv,
             "confidence_window":      window_snapshot,
