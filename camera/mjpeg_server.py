@@ -164,11 +164,9 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
   <div id="hp-score-row">
     <span id="hp-verdict" class="hpC">CLEAN</span>
     <div id="hp-score-bar-track"><div id="hp-score-bar-fill" style="width:0%;background:#60d080"></div></div>
-    <span id="hp-score-val" style="font-size:14px;color:#ddd;min-width:34px;text-align:right">0.000</span>
+    <span id="hp-score-val" style="font-size:14px;font-weight:700;color:#60d080;min-width:34px;text-align:right">—</span>
   </div>
   <div id="hp-phdc-row">
-    <span style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.06em">Health</span>
-    <span id="hp-health-val" style="color:#60d080">—</span>
     <span style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.06em">Conf</span>
     <span id="hp-conf-val">—</span>
   </div>
@@ -552,16 +550,15 @@ function hpUpdateFromResult(d){
   var vEl=document.getElementById('hp-verdict');
   vEl.textContent=v.toUpperCase();
   vEl.className=v==='critical'?'hpX':v==='warning'?'hpW':'hpC';
-  document.getElementById('hp-score-val').textContent=score.toFixed(3);
+  var hColor=v==='critical'?'#ff5050':v==='warning'?'#ffcc40':'#60d080';
+  var scoreValEl=document.getElementById('hp-score-val');
+  if(d.print_health!==null&&d.print_health!==undefined){
+    scoreValEl.textContent=Math.round(d.print_health*100)+'%';
+    scoreValEl.style.color=hColor;
+  }else{scoreValEl.textContent='—';scoreValEl.style.color='#888';}
   var fillEl=document.getElementById('hp-score-bar-fill');
   fillEl.style.width=Math.min(100,score*333)+'%';
-  fillEl.style.background=v==='critical'?'#ff5050':v==='warning'?'#ffcc40':'#60d080';
-  var hColor=v==='critical'?'#ff5050':v==='warning'?'#ffcc40':'#60d080';
-  var hEl=document.getElementById('hp-health-val');
-  if(d.print_health!==null&&d.print_health!==undefined){
-    hEl.textContent=Math.round(d.print_health*100)+'%';
-    hEl.style.color=hColor;
-  }else{hEl.textContent='—';hEl.style.color='#888';}
+  fillEl.style.background=hColor;
   var cEl=document.getElementById('hp-conf-val');
   if(d.decision_confidence!==null&&d.decision_confidence!==undefined){
     cEl.textContent=Math.round(d.decision_confidence*100)+'%';
