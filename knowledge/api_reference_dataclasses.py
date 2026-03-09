@@ -85,8 +85,9 @@ Accessible via `BambuPrinter.active_job_info`.
 | current_layer | int | print.layer_num |
 | total_layers | int | print.total_layer_num |
 | print_percentage | int | print.mc_percent |
-| elapsed_minutes | int | Computed from monotonic_start_time |
+| elapsed_minutes | int | max(0, time.time() - wall_start_time) / 60 |
 | remaining_minutes | int | print.mc_remaining_time |
+| wall_start_time | float | time.time() at PREPARE/RUNNING transition; persisted to ~/.bpm/elapsed/ |
 | subtask_name | str | print.subtask_name |
 | gcode_file | str | print.gcode_file |
 
