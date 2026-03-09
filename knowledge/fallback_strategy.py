@@ -135,6 +135,10 @@ Read the knowledge/ modules via bambu://knowledge/* resources or get_knowledge_t
    Examples: for filament state → `get_spool_info()`, `get_ams_units()`; for capabilities →
    `get_capabilities()`; for print options → `get_printer_state()` + confirm field is absent.
 3. The specific field or answer is confirmed absent across ALL relevant targeted tools.
+4. If the knowledge modules document the field as **bitfield-derivable** (e.g. `home_flag bit N`,
+   exposed in the live response as `fun`), attempt in-session decode from the raw bitfield before
+   escalating. Formula: `bool(int(state["fun"], 16) & (1 << bit_n))`. See `protocol/mqtt` for the
+   full home_flag bit table and `api_reference/state` for per-field bit assignments.
 
 Only then escalate to Tier 1b.
 

@@ -94,6 +94,20 @@ Located at: bambu-printer-manager/src/bpm/bambuconfig.py
 | airprinting_detector_sensitivity | "medium" | low/medium/high | Sensitivity for airprinting_detector. |
 | buildplate_marker_detector | False | xcam.buildplate_marker_detector | X-Cam AI: verifies build plate type via ArUco markers before print starts. No sensitivity control. Guarded by has_buildplate_marker_detector_support. |
 
+**⚠️ Live response field mapping — home_flag is NOT decoded by name:**
+In the raw response from `get_printer_state()`, `home_flag` arrives as the field **`fun`** (a hex
+string, e.g. `"4027FF18FFF9CB3"`). The PrintOption boolean fields listed above (auto_recovery,
+filament_tangle_detect, sound_enable, auto_switch_filament, nozzle_blob_detect, air_print_detect)
+are **NOT pre-decoded** into named keys — they must be derived in-session:
+
+```python
+home_flag = int(state["fun"], 16)
+auto_switch_filament = bool(home_flag & (1 << 10))   # bit 10
+auto_recovery        = bool(home_flag & (1 << 4))    # bit 4
+```
+
+See `protocol/mqtt` knowledge sub-topic for the full home_flag bit table.
+
 __post_init__: sets printer_model via getPrinterModelBySerial(serial_number).
 
 ---

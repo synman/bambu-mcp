@@ -764,9 +764,23 @@ Every fix requires three test phases — all executed by the agent, no user step
 | Fix type | Pre-fix assertion | Post-fix assertion |
 |----------|------------------|--------------------|
 | Runtime behavior (tool, stream, UI) | MCP tool call / osascript / curl — observe wrong behavior | Same — observe correct behavior + fallback path |
-| Knowledge module (Python string constants, docstrings) | `git show HEAD:file \| grep` — show the ambiguous/missing text | `grep` — confirm correct text present; confirm forbidden content absent |
+| Knowledge module (Python string constants, docstrings) | `git show HEAD:file \| grep` — show the ambiguous/missing text | `grep` — confirm correct text present; confirm forbidden content absent; **+ completeness trace (see below)** |
+| Rules file (`copilot-instructions.md`) | `git show HEAD:.github/copilot-instructions.md \| grep` — show absent/wrong rule | `grep` — confirm correct rule present; **+ completeness trace if rule alters agent behavior** |
 | Enum / data structure | `python -c "import …; assert …"` — show wrong value | Same — assert correct value |
 | Config / flag default | Source read + assert — show wrong default | Source read + assert — show correct default |
+
+**Behavioral completeness trace (required for knowledge module and rules file fixes):**
+
+A text-change assertion confirms the fix *landed*. It does not confirm the fix is *sufficient*.
+After the post-fix `grep` passes, run a completeness trace:
+
+1. Define the query: "starting from a cold-start agent with no prior context, what is the value of X?"
+2. Trace every step through the escalation tiers in order using only the documented knowledge path.
+3. At each tier, verify the knowledge provides a forward path — not just a prohibition.
+4. If any tier produces a dead end (answer unreachable without external knowledge or undocumented steps), **the fix is incomplete** — additional knowledge changes are required before Stage 7.
+5. Document the trace result explicitly: "Tier 1 → [step] → answer reached ✓" or "Tier 1b → dead end — missing: [what]".
+
+A fix that blocks wrong behavior without enabling correct behavior is not a complete fix.
 
 The agent must attempt full autonomy. When a step cannot be made autonomous (technical or rules-based), apply the autonomy principle above — name the blockage, state what is needed, ask.
 
