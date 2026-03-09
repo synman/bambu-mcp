@@ -847,16 +847,19 @@ Every fix requires three test phases — all executed by the agent, no user step
 | Fix type | Pre-fix assertion | Post-fix assertion |
 |----------|------------------|--------------------|
 | Runtime behavior (tool, stream, UI) | MCP tool call / osascript / curl — observe wrong behavior | Same — observe correct behavior + fallback path |
-| **Write-capable tool** (any tool with `user_permission` guard) | Call tool with `user_permission=False` (or omitted) — confirm it is rejected; call with `user_permission=True` — confirm it executes | Post-fix: both paths again — blocked path still blocked, permitted path still works |
+| **Write-capable tool** (any tool with `user_permission` guard) — blocked path | Call tool with `user_permission=False` (or omitted) — confirm it is rejected. Agent runs this autonomously; no write reaches the printer. | Same — confirm rejection still holds after fix |
+| **Write-capable tool** — permitted path | Agent must `ask_user` stating the exact operation before calling with `user_permission=True`. Human authorization required — test context does not exempt this step. | Same gate applies: ask, receive explicit approval, then call with `user_permission=True` and confirm correct result |
 | Knowledge module (Python string constants, docstrings) | `git show HEAD:file \| grep` — show the ambiguous/missing text | `grep` — confirm correct text present; confirm forbidden content absent; **+ completeness trace (see below)** |
 | Rules file (`copilot-instructions.md`) | `git show HEAD:.github/copilot-instructions.md \| grep` — show absent/wrong rule | `grep` — confirm correct rule present; **+ completeness trace if rule alters agent behavior** |
 | Enum / data structure | `python -c "import …; assert …"` — show wrong value | Same — assert correct value |
 | Config / flag default | Source read + assert — show wrong default | Source read + assert — show correct default |
 
 **Write-block verification (mandatory for any tool with `user_permission` parameter):**
-The blocked path must be tested independently of the permitted path. A tool that works correctly with `user_permission=True` but fails to block without it has a broken guard — this is a security gap, not a style issue. Both paths must pass before Stage 7:
-- `user_permission=False` (or omitted) → tool returns error / refuses to execute
-- `user_permission=True` → tool executes and produces the correct result
+The blocked and permitted paths are tested separately and under different authority:
+- **Blocked path** (agent-autonomous): call with `user_permission=False` or omitted → confirm the tool returns an error and no write reaches the printer. The agent runs this without asking.
+- **Permitted path** (human-gated): the agent must use `ask_user` to state the exact operation it intends to perform and receive explicit authorization before calling with `user_permission=True`. Test context is not an exception to the write-block rules — the same authorization requirement that governs all write operations governs this test step.
+
+A broken guard (permitted path works but blocked path doesn't reject) is a security gap. A test that skips the permitted path because authorization wasn't sought is an incomplete test — file an issue and note the gap.
 
 **Behavioral completeness trace (required for knowledge module and rules file fixes):**
 
