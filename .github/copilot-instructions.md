@@ -320,7 +320,10 @@ log.warning("fn: context: %s", e, exc_info=True)  # or log.error for unexpected 
 Every item reachable via an MCP tool or HTTP route MUST be documented in the appropriate `knowledge/api_reference_*.py` or `knowledge/enums_*.py` module. Coverage without documentation is an incomplete implementation.
 
 **Intentional non-coverage (must be explicit):**
-If a bpm item is intentionally not exposed (internal helper, deprecated, redundant, non-user-facing), it must be listed in the Intentional non-gaps table below with a reason. Silent non-coverage is a gap.
+If a bpm item is intentionally not exposed (internal helper, deprecated with a replacement, redundant, non-user-facing), it must be listed in the Intentional non-gaps table below with a reason. Silent non-coverage is a gap.
+
+**Deprecated-without-replacement exclusion (automatic):**
+Any bpm item marked deprecated with no defined replacement is **automatically excluded** from coverage gap assessments. Do not flag it as a gap; do not add it to the intentional exclusions table. If a replacement is defined, the replacement must be covered instead.
 
 ### Coverage Obligation on bpm dependency bump
 
@@ -351,7 +354,6 @@ The following BPM methods are **intentionally not** exposed as MCP tools or HTTP
 | `delete_all_contents` / `search_for_and_remove_*` | Internal FTPS helpers; not part of the public API |
 | `speed_level` (read) | Surfaced in `get_printer_state`; dedicated getter is redundant |
 | `set_spool_k_factor` | Firmware-broken, no-op stub; `select_extrusion_calibration` is the replacement |
-| `skipped_objects` property | `@deprecated("No replacement yet")`; internal state, not user-facing |
 
 ### Coverage audit checklist
 
@@ -362,7 +364,7 @@ Before closing any PR that adds/removes BPM methods, fields, or HTTP routes:
 - [ ] Every new MCP tool correctly wraps its BPM method with matching semantics
 - [ ] Docstrings are present on both the HTTP route handler and the MCP tool function
 - [ ] `_ROUTE_TAGS` and `_ROUTE_EXAMPLES` entries added for any new HTTP routes (per Swagger standard)
-- [ ] Intentional non-coverage is listed in the exclusions table with a reason
+- [ ] Intentional non-coverage is listed in the exclusions table with a reason (deprecated-without-replacement items are auto-excluded — no table entry required)
 
 ---
 
