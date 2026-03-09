@@ -610,11 +610,11 @@ def compute_decision_confidence(
     stage_gated: bool,
     context: dict,
 ) -> float:
-    """Estimate how much to trust the current print_health assessment.
+    """Estimate how much to trust the current success_probability assessment.
 
     Returns 0.0–1.0.  Low values (<0.4) indicate insufficient data — the
-    print_health figure is an early estimate, not a reliable verdict.  High
-    values (>0.7) indicate the system has enough context to act on print_health.
+    success_probability figure is an early estimate, not a reliable verdict.
+    High values (>0.7) indicate the system has enough context to act on it.
 
     Factors (weighted additive, sum = 1.0):
       0.30  Confidence window fill   — rises as repeated analysis cycles accumulate
@@ -1260,7 +1260,7 @@ def _build_health_panel_png(
     verdict: str,
     score: float,
     printer_context: dict,
-    print_health: Optional[float] = None,
+    success_probability: Optional[float] = None,
     decision_confidence: Optional[float] = None,
     stage_gated: bool = False,
 ) -> bytes:
@@ -1268,9 +1268,11 @@ def _build_health_panel_png(
     H1 — Print health panel. Full-width, 120px tall.
 
     Left section: Arc gauge showing success_probability with a narrow semi-transparent
-    confidence band.  The arc sweeps 225° (from 7 o'clock to 5 o'clock).  The band
-    width scales with decision_confidence — tight band = high confidence.
-    Right section: HMS status, detector states, temps, fans, AMS humidity.
+    confidence band.  The arc sweeps 270° (ARC_SPAN) starting at 135° (ARC_START).
+    Band width = max(3, int(270 × (1 - confidence) × 0.12)) degrees — tight at high
+    confidence, wide when data is sparse.  Displayed composite = success_probability
+    × decision_confidence so low-confidence readings show proportionally lower.
+    Right section: HMS status, detector states, AMS humidity.
     """
     PH = 120       # panel height
     GAUGE_W = 130  # width reserved for the gauge on the left
@@ -1286,7 +1288,7 @@ def _build_health_panel_png(
 
     # ── Composite score ────────────────────────────────────────────────────
     conf  = decision_confidence if decision_confidence is not None else None
-    ph    = print_health if print_health is not None else None
+    ph    = success_probability if success_probability is not None else None
     comp  = (ph * conf) if (ph is not None and conf is not None) else ph
 
     if stage_gated or comp is None:
@@ -1583,11 +1585,20 @@ def analyze(
 
     Args:
         frame_jpeg        : raw JPEG bytes from camera capture
-        printer_context   : dict with keys: nozzle_temp, nozzle_target, bed_temp,
-                            bed_target, chamber_temp, part_fan_pct, aux_fan_pct,
-                            exhaust_fan_pct, ams_humidity, hms_errors (list),
-                            detectors (dict), layer, total_layers, progress_pct,
-                            remaining_minutes, job_name, gcode_state
+        printer_context   : dict with keys:
+                            nozzle_temp, nozzle_target, bed_temp, bed_target,
+                            chamber_temp, part_fan_pct, aux_fan_pct, exhaust_fan_pct,
+                            ams_humidity (int, 1–5), hms_errors (list[dict]),
+                            detectors (dict with spaghetti_detector sub-key),
+                            layer, total_layers, progress_pct, remaining_minutes,
+                            job_name, gcode_state, stage (int), stage_id (int),
+                            printer_series (str), has_chamber (bool),
+                            is_chamber_door_open (bool), is_chamber_lid_open (bool),
+                            is_chamber_light_on (bool), nozzle_diameter_mm (float),
+                            nozzle_flow_type (str), speed_level (str),
+                            active_filament (dict: type, color, tray_info_idx),
+                            print_settings (dict: support, brim, raft, infill_pct,
+                                            wall_loops, layer_height)
         reference_jpeg    : prior captured frame for diff computation (optional)
         reference_age_s   : seconds since reference was captured (optional)
         quality           : "auto" | "preview" | "standard" | "full"
@@ -1678,7 +1689,7 @@ def analyze(
 
     health_panel_png = _build_health_panel_png(
         tw * 2 + 2, verdict, score, printer_context,
-        print_health=_ph,
+        success_probability=_ph,
         decision_confidence=_dc,
         stage_gated=_stage_gated,
     )
