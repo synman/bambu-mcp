@@ -5,6 +5,7 @@ Sourced from:
   ~/.copilot/copilot-instructions.md            (global rules)
   ~/bambu-printer-app/.github/copilot-instructions.md
   ~/bambu-printer-manager/.github/copilot-instructions.md
+  ~/bambu-mcp/.github/copilot-instructions.md
 
 Sensitive values (hostnames, IPs, serials, credentials, Docker/Watchtower/CI
 infrastructure details) are intentionally omitted.

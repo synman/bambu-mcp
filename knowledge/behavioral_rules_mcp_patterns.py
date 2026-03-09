@@ -71,6 +71,20 @@ Level 2 — list_sdcard_files(name, "/cache")   → files in /cache only
 Level N — list_sdcard_files(name, "/a/b/c")   → arbitrarily deep subtree
 ```
 
+### Locating a finished job's 3mf file
+
+`get_current_job_project_info()` returns `{"error": "no_active_job"}` when `gcode_state` is
+`IDLE`, `FINISH`, or `FAILED`. The correct fallback is **not** a full SD card scan —
+construct the path directly from the last job's metadata:
+
+```
+get_job_info(name) → subtask_name  →  /_jobs/{subtask_name}.gcode.3mf
+```
+
+Then call `get_project_info(name, "/_jobs/{subtask_name}.gcode.3mf", plate_num)`.
+The `/_jobs/` prefix and `.gcode.3mf` suffix are fixed. This pattern is reliable for any
+recently completed or failed job whose file is still on the SD card.
+
 ### Image quality tiers
 
 Tools returning images accept a `quality` parameter:
