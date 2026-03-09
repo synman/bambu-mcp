@@ -1121,7 +1121,7 @@ def _build_health_panel_png(
 
     if stage_gated or comp is None:
         badge       = {"bg": (50, 50, 72), "fg": (140, 140, 175)}
-        badge_label = "NEUTERED"
+        badge_label = "STANDBY"
         health_txt  = "—"
         health_col  = (140, 140, 175)
     elif comp >= 0.70:

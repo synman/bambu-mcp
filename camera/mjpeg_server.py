@@ -553,7 +553,7 @@ function hpUpdateFromResult(d){
   var comp=(ph!==null&&ph!==undefined&&dc!==null&&dc!==undefined)?(ph*dc):(ph!==null&&ph!==undefined?ph:null);
   var compVerdict,hColor;
   if(stageGated||comp===null){
-    compVerdict='neutered';hColor='#8888af';
+    compVerdict='standby';hColor='#8888af';
   }else if(comp>=0.70){
     compVerdict='clean';hColor='#60d080';
   }else if(comp>=0.50){
@@ -562,8 +562,8 @@ function hpUpdateFromResult(d){
     compVerdict='critical';hColor='#ff5050';
   }
   var vEl=document.getElementById('hp-verdict');
-  vEl.textContent=(compVerdict==='neutered'?'NEUTERED':compVerdict).toUpperCase();
-  vEl.className=compVerdict==='critical'?'hpX':compVerdict==='warning'?'hpW':compVerdict==='neutered'?'hpD':'hpC';
+  vEl.textContent=(compVerdict==='standby'?'STANDBY':compVerdict).toUpperCase();
+  vEl.className=compVerdict==='critical'?'hpX':compVerdict==='warning'?'hpW':compVerdict==='standby'?'hpD':'hpC';
   var scoreValEl=document.getElementById('hp-score-val');
   if(comp!==null){
     scoreValEl.textContent=Math.round(comp*100)+'%';
