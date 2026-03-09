@@ -95,4 +95,42 @@ Query parameters:
 - `cmd` (required) — `PAUSE` | `RESUME` | `RESET`
 
 Returns `{"success": true}`.
+
+---
+
+## GET /api/select_extrusion_calibration
+
+Select an extrusion calibration profile for a filament slot.
+
+Query parameters:
+- `tray_id` (required) — absolute tray ID: `ams_unit_index × 4 + slot` (0–3); external spool = `254`
+- `cali_idx` (optional, default `-1`) — index of the saved calibration profile to activate;
+  use `-1` to let the printer automatically select the best matching profile for the loaded filament
+
+Returns `{"success": true}`.
+
+---
+
+## GET /api/turn_on_ams_dryer
+
+Start the AMS filament dryer on a unit.
+
+Query parameters:
+- `ams_id` (required) — internal AMS chip_id: AMS 2 Pro units start at `0`, AMS HT starts at `128`
+- `target_temp` (optional, default `55`) — target drying temperature in °C
+- `duration_hours` (optional, default `4`) — drying duration in hours
+
+Only supported on AMS 2 Pro and AMS HT models. AMS Lite silently ignores this command.
+Returns `{"success": true}`.
+
+---
+
+## GET /api/turn_off_ams_dryer
+
+Stop the AMS filament dryer on a unit.
+
+Query parameters:
+- `ams_id` (required) — internal AMS chip_id: AMS 2 Pro units start at `0`, AMS HT starts at `128`
+
+Returns `{"success": true}`.
 """

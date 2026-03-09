@@ -410,6 +410,8 @@ def delete_file(
     Delete a file from the printer's SD card.
 
     Requires user_permission=True. Returns the updated SD card listing after deletion.
+    Paths ending with '/' delete folders (calls delete_sdcard_folder); all other paths
+    delete files (calls delete_sdcard_file).
     """
     log.debug("delete_file: called for name=%s remote_path=%s user_permission=%s", name, remote_path, user_permission)
     if not user_permission:
@@ -420,8 +422,12 @@ def delete_file(
         log.warning("delete_file: printer not connected: %s", name)
         return _no_printer(name)
     try:
-        log.debug("delete_file: calling printer.delete_sdcard_file for %s", name)
-        result = printer.delete_sdcard_file(remote_path)
+        if remote_path.endswith("/"):
+            log.debug("delete_file: calling printer.delete_sdcard_folder for %s", name)
+            result = printer.delete_sdcard_folder(remote_path)
+        else:
+            log.debug("delete_file: calling printer.delete_sdcard_file for %s", name)
+            result = printer.delete_sdcard_file(remote_path)
         log.debug("delete_file: success for %s remote_path=%s", name, remote_path)
         log.debug("delete_file: → remote_path=%s", remote_path)
         return {"success": True, "remote_path": remote_path, "contents": result}

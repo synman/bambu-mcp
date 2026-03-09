@@ -85,4 +85,24 @@ Enable/disable the spaghetti/failed-print detector.
 
 Detects loose spaghetti-like strands indicating a print failure. When triggered,
 the printer halts.
+
+---
+
+## GET /api/get_detector_settings
+
+Return the current state of all X-Cam AI detector settings on the printer.
+
+Returns a JSON object with one key per detector. Each entry includes:
+- `enabled` (bool) — whether the detector is currently enabled
+- `sensitivity` (str) — `low` | `medium` | `high` (present on detectors that support it)
+- `supported` (bool) — whether the printer hardware supports this detector
+
+Detectors returned:
+- `spaghetti_detector` — loose strand / print failure detection
+- `buildplate_marker_detector` — build plate ArUco marker verification
+- `airprinting_detector` — air-printing / clog detection
+- `purgechutepileup_detector` — purge chute pile-up detection
+- `nozzleclumping_detector` — nozzle blob/clump detection
+- `nozzle_blob_detect` — legacy home_flag blob detector (no sensitivity)
+- `air_print_detect` — legacy home_flag air-printing flag (no sensitivity)
 """

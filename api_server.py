@@ -176,6 +176,11 @@ _ROUTE_PARAM_DESCRIPTIONS: dict[tuple[str, str], str] = {
     ("toggle_active_tool",              "printer"):     _PRINTER_DESC,
     ("toggle_session",                  "printer"):     _PRINTER_DESC,
     ("get_printer_info",                "printer"):     _PRINTER_DESC,
+    ("clear_print_error",              "printer"):     _PRINTER_DESC,
+    ("select_extrusion_calibration",   "printer"):     _PRINTER_DESC,
+    ("turn_on_ams_dryer",              "printer"):     _PRINTER_DESC,
+    ("turn_off_ams_dryer",             "printer"):     _PRINTER_DESC,
+    ("get_detector_settings",          "printer"):     _PRINTER_DESC,
     # ── Climate ────────────────────────────────────────────────────────────────
     ("set_tool_target_temp",            "temp"):        "Target nozzle temperature in °C. Use 0 to turn off.",
     ("set_bed_target_temp",             "temp"):        "Target bed temperature in °C. Use 0 to turn off.",
@@ -234,6 +239,17 @@ _ROUTE_PARAM_DESCRIPTIONS: dict[tuple[str, str], str] = {
     ("set_print_option",                "enabled"):     "Enable or disable the option.",
     # ── G-code ─────────────────────────────────────────────────────────────────
     ("send_gcode",                      "gcode"):       "G-code commands to send. Use | as a newline separator for multiple commands.",
+    # ── Clear print error ──────────────────────────────────────────────────────
+    ("clear_print_error",              "print_error"): "Integer error code to clear. Pass 0 to clear any active error.",
+    ("clear_print_error",              "subtask_id"):  "Subtask ID of the failed job (from get_job_info). Pass empty string if not known.",
+    # ── Extrusion calibration ──────────────────────────────────────────────────
+    ("select_extrusion_calibration",   "tray_id"):     "Absolute tray ID: ams_unit_index × 4 + slot (0–3). External spool = 254.",
+    ("select_extrusion_calibration",   "cali_idx"):    "Calibration profile index to activate. Use -1 for automatic best-match.",
+    # ── AMS dryer ─────────────────────────────────────────────────────────────
+    ("turn_on_ams_dryer",              "ams_id"):      "Internal AMS unit ID (chip_id). AMS 2 Pro starts at 0; AMS HT starts at 128.",
+    ("turn_on_ams_dryer",              "target_temp"): "Target drying temperature in °C (default 55).",
+    ("turn_on_ams_dryer",              "duration_hours"): "Drying duration in hours (default 4).",
+    ("turn_off_ams_dryer",             "ams_id"):      "Internal AMS unit ID (chip_id).",
     # ── Raw MQTT ───────────────────────────────────────────────────────────────
     ("send_mqtt_command",               "command_json"): "Valid JSON string matching the Bambu Lab MQTT command schema.",
     # ── Nozzle hardware ────────────────────────────────────────────────────────
@@ -297,6 +313,7 @@ _ROUTE_TAGS: dict[str, str] = {
     "set_speed_level": "Print Control",
     "send_gcode": "Print Control",
     "send_mqtt_command": "Print Control",
+    "clear_print_error": "Print Control",
     # AMS & Filament
     "load_filament": "AMS & Filament",
     "unload_filament": "AMS & Filament",
@@ -305,6 +322,9 @@ _ROUTE_TAGS: dict[str, str] = {
     "send_ams_control_command": "AMS & Filament",
     "set_ams_user_setting": "AMS & Filament",
     "set_spool_k_factor": "AMS & Filament",
+    "select_extrusion_calibration": "AMS & Filament",
+    "turn_on_ams_dryer": "AMS & Filament",
+    "turn_off_ams_dryer": "AMS & Filament",
     # Hardware
     "set_nozzle_details": "Hardware",
     "refresh_nozzles": "Hardware",
@@ -314,6 +334,7 @@ _ROUTE_TAGS: dict[str, str] = {
     "set_nozzleclumping_detector": "Hardware",
     "set_airprinting_detector": "Hardware",
     "set_print_option": "Hardware",
+    "get_detector_settings": "Hardware",
     # Files
     "refresh_sdcard_3mf_files": "Files",
     "get_sdcard_3mf_files": "Files",
@@ -413,6 +434,10 @@ _ROUTE_EXAMPLES: dict[str, dict] = {
         "response": {"status": "success"},
         "params": {"printer": "H2D"},
     },
+    "clear_print_error": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D", "print_error": "0", "subtask_id": ""},
+    },
     "print_3mf": {
         "response": {"status": "success"},
         "params": {
@@ -491,6 +516,18 @@ _ROUTE_EXAMPLES: dict[str, dict] = {
         "response": {"status": "success"},
         "params": {"printer": "H2D", "enabled": "true", "sensitivity": "medium"},
     },
+    "get_detector_settings": {
+        "response": {
+            "spaghetti_detector": {"enabled": True, "sensitivity": "medium", "supported": True},
+            "buildplate_marker_detector": {"enabled": True, "supported": True},
+            "airprinting_detector": {"enabled": True, "sensitivity": "medium", "supported": True},
+            "purgechutepileup_detector": {"enabled": True, "sensitivity": "medium", "supported": True},
+            "nozzleclumping_detector": {"enabled": True, "sensitivity": "medium", "supported": True},
+            "nozzle_blob_detect": {"enabled": False, "supported": True},
+            "air_print_detect": {"enabled": False, "supported": True},
+        },
+        "params": {"printer": "H2D"},
+    },
     "set_print_option": {
         "response": {"status": "success"},
         "params": {"printer": "H2D", "option": "AUTO_RECOVERY", "enabled": "true"},
@@ -506,6 +543,18 @@ _ROUTE_EXAMPLES: dict[str, dict] = {
     "send_ams_control_command": {
         "response": {"status": "success"},
         "params": {"printer": "H2D", "cmd": "RESUME"},
+    },
+    "select_extrusion_calibration": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D", "tray_id": "0", "cali_idx": "-1"},
+    },
+    "turn_on_ams_dryer": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D", "ams_id": "0", "target_temp": "55", "duration_hours": "4"},
+    },
+    "turn_off_ams_dryer": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D", "ams_id": "0"},
     },
     "set_ams_user_setting": {
         "response": {"status": "success"},
@@ -1082,6 +1131,33 @@ def _build_app():
             log.error("stop_printing: error: %s", e, exc_info=True)
             return _err(str(e))
 
+    @app.route("/api/clear_print_error")
+    def clear_print_error():
+        """Clear an active print_error on the printer. ?print_error=<int>&subtask_id=<str>
+
+        Sends two commands matching the protocol BambuStudio uses when dismissing an
+        error dialog: clean_print_error (clears the error value) and a uiop signal
+        (acknowledges the dialog). Without both commands, the printer may re-raise the
+        error on the next push_status.
+
+        ?print_error=0 clears any active error without specifying a code.
+        """
+        log.debug("clear_print_error: called")
+        p, _ = _get_printer(request.args)
+        if p is None:
+            return _err("no printer")
+        try:
+            print_error = int(request.args.get("print_error", 0))
+            subtask_id = request.args.get("subtask_id", "")
+            log.debug("clear_print_error: print_error=%s subtask_id=%s", print_error, subtask_id)
+            p.clean_print_error(subtask_id=subtask_id, print_error=print_error)
+            p.clean_print_error_uiop(print_error=print_error)
+            log.debug("clear_print_error: → ok print_error=%08X", print_error)
+            return _ok()
+        except Exception as e:
+            log.error("clear_print_error: error: %s", e, exc_info=True)
+            return _err(str(e))
+
     @app.route("/api/print_3mf")
     def print_3mf():
         """Start printing a .3mf file from SD card. ?filename=&platenum=&plate=AUTO|COOL_PLATE|ENG_PLATE|HOT_PLATE|TEXTURED_PLATE&use_ams=true|false&ams_mapping=&bl=true|false&flow=true|false&tl=true|false"""
@@ -1392,6 +1468,66 @@ def _build_app():
             log.error("set_airprinting_detector: error: %s", e, exc_info=True)
             return _err(str(e))
 
+    @app.route("/api/get_detector_settings")
+    def get_detector_settings():
+        """Return the current state of all X-Cam AI detector settings on the printer.
+
+        Returns enabled/disabled state and sensitivity for each supported detector:
+        spaghetti_detector, buildplate_marker_detector, airprinting_detector,
+        purgechutepileup_detector, nozzleclumping_detector. Also returns the legacy
+        home_flag detectors: nozzle_blob_detect and air_print_detect.
+        Each entry includes 'supported' (bool) indicating hardware support.
+        """
+        log.debug("get_detector_settings: called")
+        p, name = _get_printer(request.args)
+        if p is None:
+            return _err("no printer")
+        try:
+            from session_manager import session_manager
+            config = session_manager.get_config(name)
+            if config is None:
+                return _err(f"Printer '{name}' config unavailable")
+            log.debug("get_detector_settings: building detector state for %s", name)
+            result = {
+                "spaghetti_detector": {
+                    "enabled": config.spaghetti_detector,
+                    "sensitivity": config.spaghetti_detector_sensitivity,
+                    "supported": config.capabilities.has_spaghetti_detector_support,
+                },
+                "buildplate_marker_detector": {
+                    "enabled": config.buildplate_marker_detector,
+                    "supported": config.capabilities.has_buildplate_marker_detector_support,
+                },
+                "airprinting_detector": {
+                    "enabled": config.airprinting_detector,
+                    "sensitivity": config.airprinting_detector_sensitivity,
+                    "supported": config.capabilities.has_airprinting_detector_support,
+                },
+                "purgechutepileup_detector": {
+                    "enabled": config.purgechutepileup_detector,
+                    "sensitivity": config.purgechutepileup_detector_sensitivity,
+                    "supported": config.capabilities.has_purgechutepileup_detector_support,
+                },
+                "nozzleclumping_detector": {
+                    "enabled": config.nozzleclumping_detector,
+                    "sensitivity": config.nozzleclumping_detector_sensitivity,
+                    "supported": config.capabilities.has_nozzleclumping_detector_support,
+                },
+                "nozzle_blob_detect": {
+                    "enabled": config.nozzle_blob_detect,
+                    "supported": config.capabilities.has_nozzle_blob_detect_support,
+                },
+                "air_print_detect": {
+                    "enabled": config.air_print_detect,
+                    "supported": config.capabilities.has_air_print_detect_support,
+                },
+            }
+            log.debug("get_detector_settings: → ok %d detectors", len(result))
+            return jsonify(result)
+        except Exception as e:
+            log.error("get_detector_settings: error: %s", e, exc_info=True)
+            return _err(str(e))
+
     # ── print options / gcode / AMS ───────────────────────────────────────────
 
     @app.route("/api/set_print_option")
@@ -1492,6 +1628,72 @@ def _build_app():
             return _ok()
         except Exception as e:
             log.error("set_ams_user_setting: error: %s", e, exc_info=True)
+            return _err(str(e))
+
+    @app.route("/api/select_extrusion_calibration")
+    def select_extrusion_calibration():
+        """Select an extrusion calibration profile for a filament slot. ?tray_id=<int>&cali_idx=<int>
+
+        tray_id encoding: ams_unit_index × 4 + slot (0–3). External spool = 254.
+        cali_idx = -1 to auto-select the best matching profile for the loaded filament.
+        """
+        log.debug("select_extrusion_calibration: called")
+        p, _ = _get_printer(request.args)
+        if p is None:
+            return _err("no printer")
+        try:
+            tray_id = int(request.args.get("tray_id", 0))
+            cali_idx = int(request.args.get("cali_idx", -1))
+            log.debug("select_extrusion_calibration: tray_id=%s cali_idx=%s", tray_id, cali_idx)
+            p.select_extrusion_calibration_profile(tray_id, cali_idx)
+            log.debug("select_extrusion_calibration: → ok")
+            return _ok()
+        except Exception as e:
+            log.error("select_extrusion_calibration: error: %s", e, exc_info=True)
+            return _err(str(e))
+
+    @app.route("/api/turn_on_ams_dryer")
+    def turn_on_ams_dryer():
+        """Start the AMS filament dryer. ?ams_id=<int>&target_temp=<int>&duration_hours=<int>
+
+        ams_id is the internal chip_id (not the user-facing unit_id): AMS 2 Pro starts at 0,
+        AMS HT starts at 128. target_temp defaults to 55°C; duration_hours defaults to 4.
+        Only supported on AMS 2 Pro and AMS HT models.
+        """
+        log.debug("turn_on_ams_dryer: called")
+        p, _ = _get_printer(request.args)
+        if p is None:
+            return _err("no printer")
+        try:
+            ams_id = int(request.args.get("ams_id", 0))
+            target_temp = int(request.args.get("target_temp", 55))
+            duration_hours = int(request.args.get("duration_hours", 4))
+            log.debug("turn_on_ams_dryer: ams_id=%s target_temp=%s duration_hours=%s", ams_id, target_temp, duration_hours)
+            p.turn_on_ams_dryer(target_temp=target_temp, duration=duration_hours, ams_id=ams_id)
+            log.debug("turn_on_ams_dryer: → ok")
+            return _ok()
+        except Exception as e:
+            log.error("turn_on_ams_dryer: error: %s", e, exc_info=True)
+            return _err(str(e))
+
+    @app.route("/api/turn_off_ams_dryer")
+    def turn_off_ams_dryer():
+        """Stop the AMS filament dryer. ?ams_id=<int>
+
+        ams_id is the internal chip_id: AMS 2 Pro starts at 0, AMS HT starts at 128.
+        """
+        log.debug("turn_off_ams_dryer: called")
+        p, _ = _get_printer(request.args)
+        if p is None:
+            return _err("no printer")
+        try:
+            ams_id = int(request.args.get("ams_id", 0))
+            log.debug("turn_off_ams_dryer: ams_id=%s", ams_id)
+            p.turn_off_ams_dryer(ams_id=ams_id)
+            log.debug("turn_off_ams_dryer: → ok")
+            return _ok()
+        except Exception as e:
+            log.error("turn_off_ams_dryer: error: %s", e, exc_info=True)
             return _err(str(e))
 
     # ── nozzle ─────────────────────────────────────────────────────────────────

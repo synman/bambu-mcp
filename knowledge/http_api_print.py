@@ -120,4 +120,21 @@ Query parameters:
 - `enabled` (required) — `true` | `false`
 
 Returns `{"success": true}`.
+
+---
+
+## GET /api/clear_print_error
+
+Clear an active print_error on the printer.
+
+Query parameters:
+- `print_error` (optional, default `0`) — integer error code to clear; use `0` to clear any
+  active error without specifying a code
+- `subtask_id` (optional, default `""`) — subtask ID of the failed job from `get_job_info`;
+  pass empty string if not known
+
+Sends two commands matching the BambuStudio error-dialog dismissal protocol:
+`clean_print_error` (clears the error value) followed by a `uiop` signal (acknowledges the
+dialog). Without both, the printer may re-raise the error on the next push_status.
+Returns `{"success": true}`.
 """

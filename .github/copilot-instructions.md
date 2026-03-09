@@ -362,6 +362,19 @@ The following BPM methods are **intentionally not** exposed as MCP tools or HTTP
 | `delete_all_contents` / `search_for_and_remove_*` | Internal FTPS helpers; not part of the public API |
 | `speed_level` (read) | Surfaced in `get_printer_state`; dedicated getter is redundant |
 | `set_spool_k_factor` | Firmware-broken, no-op stub; `select_extrusion_calibration` is the replacement |
+| `rename_printer()` | Low-frequency management op; MCP-only is sufficient — no automation use case for HTTP |
+| `set_first_layer_inspection()` (xcam raw) | No dedicated bpm method; MCP tool sends raw xcam command via `send_anything`; MCP-only |
+| AMS dryer status fields (read) | Dryer state fields available in full JSON via `/api/printer`; no targeted HTTP route needed |
+| Monitoring history/series (`get_monitoring_history`, `get_monitoring_data`, `get_monitoring_series`) | Large time-series data (60-min rolling, ~1440 pts/field); not suitable for synchronous HTTP polling; MCP-only |
+| Firmware version (targeted) | `firmware_version` field in BambuConfig; accessible via `/api/printer` full JSON; targeted HTTP read would be redundant |
+| Printer session lifecycle (`add_printer`, `remove_printer`, `update_printer_credentials`) | Session lifecycle operations; HTTP API operates within pre-configured sessions managed by the MCP server process itself |
+| Printer connection status (`get_printer_connection_status`, `get_configured_printers`) | Session-level queries; available via `/api/printer` or MCP tools; HTTP REST API assumes sessions are pre-configured |
+| MQTT session pause/resume (`pause_mqtt_session`, `resume_mqtt_session`) | HTTP has combined `/api/toggle_session`; deliberate consolidation into single toggle endpoint |
+| Printer discovery (`discover_printers`) | SSDP discovery is a setup-time agent/CLI tool; HTTP API assumes printer already configured in session |
+| `force_state_refresh()` | HTTP has `trigger_printer_refresh` which performs the same operation (with user_permission gate); deliberate naming divergence, not a gap |
+| `/api/health_check` (HTTP-only) | Server-level diagnostic; no printer context; no MCP tool needed — agents can call the route directly |
+| `/api/filament_catalog` (HTTP-only) | Material catalog lookup; BPA uses directly via HTTP; no agent use case for wrapping in MCP tool |
+| Targeted read MCP tools (`get_temperatures`, `get_fan_speeds`, `get_climate`, `get_print_progress`, `get_job_info`, `get_hms_errors`, `get_spool_info`, `get_ams_units`, `get_external_spool`, `get_nozzle_info`, `get_capabilities`, `get_printer_info`, `get_wifi_signal`) | By design: all targeted read tools return focused subsets of `/api/printer` full JSON. HTTP consumers get everything at once; MCP tools offer targeted slices. Asymmetry is intentional. |
 
 ### Coverage audit checklist
 
