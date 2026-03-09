@@ -241,6 +241,7 @@ def set_print_option(
     Requires user_permission=True.
     Options:
     'auto_recovery' = resume print automatically after a power loss or hardware fault.
+      Requires has_auto_recovery_support (always True on all printers).
     'filament_tangle_detect' = pause the print if AMS sensors detect a filament tangle.
       Requires has_filament_tangle_detect_support. Only meaningful when AMS is present
       and actively feeding — has no effect during external spool or standalone prints.
@@ -249,6 +250,7 @@ def set_print_option(
     'auto_switch_filament' = automatically switch to another AMS slot when the active
       spool runs out, provided a slot with the same filament type AND color is available.
       AMS-hosted spools only — external spool holder spools are not eligible.
+      Requires has_auto_switch_filament_support (True when has_ams is True).
     'nozzle_blob_detect' = legacy firmware-level (home_flag) flag that pauses the print
       if a filament blob accumulates on the nozzle. This is the older control path.
       On printers that support it, prefer set_nozzle_clumping_detection() (xcam AI detector)
