@@ -898,11 +898,16 @@ All of the following, in order:
 1. `git commit` with message referencing the issue number (`fixes #N` or `closes #N`)
 2. `git push`
 3. **Rules update** — if the fix reveals a behavioral gap that was previously undocumented, write it into the rules before closing the issue. A fix without a rules update is a fix that can be undone.
-4. **Live verification** — query the running system to confirm the fix is observable. Commit evidence alone does not satisfy this gate. The verification method must match the issue type:
-   - Capability/state bug → call the relevant MCP tool and confirm the corrected value in the response
-   - Knowledge gap → call `get_knowledge_topic()` and confirm the corrected text is present
-   - Tool behavior bug → invoke the tool and observe the corrected behavior
-   - HTTP API bug → make the HTTP request and confirm the corrected response
-   If the fix requires a reinstall or server restart to take effect, perform that first, then verify.
-5. GitHub issue: close only after step 4 passes. Include the verification result (tool name + observed value) in the closing comment.
+4. **Live verification** — three mandatory steps, all required:
+   1. **Baseline** — before or immediately after the fix is staged, record what the broken system currently returns for the affected interface. This is the "before" value. If the fix is already deployed and the baseline wasn't captured, call the interface now and note the current value as the starting point.
+   2. **Deploy** — ensure the fix is running in the live system. If the fix is in a library (e.g. bpm), reinstall it in the consuming venv. If it requires a server restart, restart it. Confirm the process running is the one with the fix.
+   3. **Observe delta** — call the same interface that exposed the bug and confirm the value changed from broken → correct. The corrected value must appear verbatim in the response. A correct value that was already present before the fix was deployed does not count.
+
+   Verification method by issue type:
+   - Capability/state bug → call the relevant MCP tool; confirm field value changed
+   - Knowledge gap → call `get_knowledge_topic()`; confirm corrected text is present
+   - Tool behavior bug → invoke the tool; observe corrected behavior
+   - HTTP API bug → make the HTTP request; confirm corrected response
+
+5. GitHub issue: close only after step 4 passes. The closing comment must include: interface queried, before value, after value.
 6. `bambu-rules` sync — push updated project rules to remote mirror
