@@ -113,7 +113,7 @@ __post_init__: sets printer_model via getPrinterModelBySerial(serial_number).
 
 ### set_new_bpm_cache_path(path: Path)
 
-Changes the bpm metadata cache directory at runtime. The user may invoke this to relocate the cache (e.g. to a different volume or mount point).
+Changes the bpm metadata cache directory at runtime. Called automatically during `BambuConfig.__post_init__` to initialize the default cache at `~/.bpm`. Not exposed via MCP tool or HTTP route — internal use only.
 
 **Signature:** `config.set_new_bpm_cache_path(path: Path) -> None`
 
