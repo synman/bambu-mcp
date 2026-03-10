@@ -392,32 +392,47 @@ When any of the following change, run the coverage audit and close any new gaps 
 
 ### Intentional non-gaps (documented exclusions)
 
+**Exclusion taxonomy** — every entry in this table must cite one of these categories:
+
+| Category | Name | Meaning |
+|----------|------|---------|
+| **A** | No public bpm API | Method/field is internal-only, a private helper, or does not exist in the public bpm surface |
+| **B** | Server/process lifecycle | Managed by the mcp server process itself; exposing to external callers is unsafe or meaningless |
+| **C** | Aggregate coverage | Data is already accessible via a broader response (e.g. `/api/printer` full JSON); a targeted getter is genuinely redundant |
+| **D** | Deliberate asymmetry | Intentional MCP-only or HTTP-only decision; documented and architectural, not an oversight |
+| **E** | Deprecated / broken | Firmware no-op, replaced by another method, or otherwise non-functional |
+| **F** | Physical locality | Operation requires local desktop access (browser open, file viewer); cannot be meaningfully served over HTTP |
+
+**Not valid exclusion reasons:**
+- "Low-frequency" or "rarely used" — subjective; does not change the coverage obligation
+- "Workaround available" — a workaround is not coverage
+- "No bpm wrapper method" — the mcp can call `send_anything()` directly; not an architectural boundary
+- Circular reasoning — "MCP-only because no HTTP route exists" when sibling operations all have routes
+- Phantom items — if the method/field does not exist in the installed bpm package, it has no place in this table
+
 The following BPM methods are **intentionally not** exposed as MCP tools or HTTP routes:
 
-| BPM Method / Property | Reason |
-|------------------------|--------|
-| `get_current_bind_list` | Internal H2D helper called only by `print_3mf_file`; not a user-facing operation |
-| `delete_all_contents` / `search_for_and_remove_*` | Internal FTPS helpers; not part of the public API |
-| `speed_level` (read) | Surfaced in `get_printer_state`; dedicated getter is redundant |
-| `set_spool_k_factor` | Firmware-broken, no-op stub; `select_extrusion_calibration` is the replacement |
-| `rename_printer()` | Low-frequency management op; MCP-only is sufficient — no automation use case for HTTP |
-| `set_first_layer_inspection()` (xcam raw) | No dedicated bpm method; MCP tool sends raw xcam command via `send_anything`; MCP-only |
-| AMS dryer status fields (read) | Dryer state fields available in full JSON via `/api/printer`; no targeted HTTP route needed |
-| Monitoring history/series (`get_monitoring_history`, `get_monitoring_data`, `get_monitoring_series`) | Large time-series data (60-min rolling, ~1440 pts/field); not suitable for synchronous HTTP polling; MCP-only |
-| Firmware version (targeted) | `firmware_version` field in BambuConfig; accessible via `/api/printer` full JSON; targeted HTTP read would be redundant |
-| Printer session lifecycle (`add_printer`, `remove_printer`, `update_printer_credentials`) | Session lifecycle operations; HTTP API operates within pre-configured sessions managed by the MCP server process itself |
-| Printer connection status (`get_printer_connection_status`, `get_configured_printers`) | Session-level queries; available via `/api/printer` or MCP tools; HTTP REST API assumes sessions are pre-configured |
-| MQTT session pause/resume (`pause_mqtt_session`, `resume_mqtt_session`) | HTTP has combined `/api/toggle_session`; deliberate consolidation into single toggle endpoint |
-| Printer discovery (`discover_printers`) | SSDP discovery is a setup-time agent/CLI tool; HTTP API assumes printer already configured in session |
-| `force_state_refresh()` | HTTP has `trigger_printer_refresh` which performs the same operation (with user_permission gate); deliberate naming divergence, not a gap |
-| `/api/health_check` (HTTP-only) | Server-level diagnostic; no printer context; no MCP tool needed — agents can call the route directly |
-| `/api/filament_catalog` (HTTP-only) | Material catalog lookup; BPA uses directly via HTTP; no agent use case for wrapping in MCP tool |
-| Targeted read MCP tools (`get_temperatures`, `get_fan_speeds`, `get_climate`, `get_print_progress`, `get_job_info`, `get_hms_errors`, `get_spool_info`, `get_ams_units`, `get_external_spool`, `get_nozzle_info`, `get_capabilities`, `get_printer_info`, `get_wifi_signal`) | By design: all targeted read tools return focused subsets of `/api/printer` full JSON. HTTP consumers get everything at once; MCP tools offer targeted slices. Asymmetry is intentional. |
-| `bed_temp_target_time`, `chamber_temp_target_time`, `tool_temp_target_time`, `fan_speed_target_time` | Internal timing metadata — timestamps tracking when each target was last set. No agent use case; surfaced in `/api/printer` full JSON for completeness. |
-| `start_session()` | Session lifecycle managed by the mcp server process at startup. Not a user-facing operation; calling it outside the server's initialization sequence is unsafe. |
-| `quit()` | Hard-shutdown of the bpm session. Managed by the mcp server process lifecycle. User-facing teardown path is `remove_printer` / `pause_mqtt_session`. |
-| `sdcard_file_exists()` | Low-level FTPS utility helper. No dedicated MCP tool needed — callers can use `list_sdcard_files()` and filter client-side. Workaround is available and sufficient. |
-| `set_chamber_temp()` + `external_chamber` flag | Advanced external sensor injection framework for non-managed chamber solutions. `set_chamber_temp()` injects a current ambient reading into local state; `external_chamber=True` in BambuConfig suppresses MQTT telemetry parsing so injected readings persist. This is a hardware configuration feature requiring matching bpm config setup; no agent use case without that context. `set_chamber_temp_target()` (covered) handles the standard target-setting path for all printer types. |
+| BPM Method / Property | Category | Reason |
+|------------------------|----------|--------|
+| `get_current_bind_list` | **A** | Internal H2D helper called only by `print_3mf_file`; not a user-facing operation |
+| `delete_all_contents` / `search_for_and_remove_*` | **A** | Internal FTPS helpers; not part of the public API |
+| `speed_level` (read) | **C** | Surfaced in `get_printer_state`; dedicated getter is redundant |
+| `set_spool_k_factor` | **E** | Firmware-broken, no-op stub; `select_extrusion_calibration` is the replacement |
+| AMS dryer status fields (`heater_state`, `dry_fan1_status`, `dry_fan2_status`, `dry_sub_status`) | **C** | Dryer state fields accessible via `/api/printer` full JSON; no targeted HTTP getter needed |
+| Monitoring history/series (`get_monitoring_history`, `get_monitoring_data`, `get_monitoring_series`) | **D** | Large rolling time-series (~1440 pts/field, 60-min window) is not suitable for synchronous HTTP polling; HTTP clients should use the MCP tool path; intentional architectural asymmetry |
+| Firmware version (targeted) | **C** | `firmware_version` field in BambuConfig; accessible via `/api/printer` full JSON; targeted HTTP read would be redundant |
+| Printer session lifecycle (`add_printer`, `remove_printer`, `update_printer_credentials`) | **B** | Session lifecycle operations; HTTP API operates within pre-configured sessions managed by the MCP server process itself |
+| Printer connection status (`get_printer_connection_status`, `get_configured_printers`) | **B** | Session-level queries; HTTP REST API assumes sessions are pre-configured; state accessible via `/api/printer` or MCP tools |
+| MQTT session pause/resume (`pause_mqtt_session`, `resume_mqtt_session`) | **D** | HTTP has combined `/api/toggle_session`; deliberate consolidation into single toggle endpoint |
+| Printer discovery (`discover_printers`) | **B** | SSDP discovery is a setup-time agent/CLI tool; HTTP API assumes printer already configured in session |
+| `force_state_refresh()` | **D** | HTTP has `trigger_printer_refresh` which performs the same operation (with user_permission gate); deliberate naming divergence, not a gap |
+| `/api/health_check` (HTTP-only) | **D** | Server-level diagnostic; no printer context; no MCP tool needed — agents can call the route directly |
+| `/api/filament_catalog` (HTTP-only) | **D** | Material catalog lookup; BPA uses directly via HTTP; no agent use case for wrapping in MCP tool |
+| Targeted read MCP tools (`get_temperatures`, `get_fan_speeds`, `get_climate`, `get_print_progress`, `get_job_info`, `get_hms_errors`, `get_spool_info`, `get_ams_units`, `get_external_spool`, `get_nozzle_info`, `get_capabilities`, `get_printer_info`, `get_wifi_signal`) | **D** | By design: all targeted read tools return focused subsets of `/api/printer` full JSON. HTTP consumers get everything at once; MCP tools offer targeted slices. Asymmetry is intentional. |
+| `bed_temp_target_time`, `chamber_temp_target_time`, `tool_temp_target_time`, `fan_speed_target_time` | **A** | Internal timing metadata — timestamps tracking when each target was last set. No agent use case; surfaced in `/api/printer` full JSON for completeness. |
+| `start_session()` | **B** | Session lifecycle managed by the mcp server process at startup. Not a user-facing operation; calling it outside the server's initialization sequence is unsafe. |
+| `quit()` | **B** | Hard-shutdown of the bpm session. Managed by the mcp server process lifecycle. User-facing teardown path is `remove_printer` / `pause_mqtt_session`. |
+| `set_chamber_temp()` + `external_chamber` flag | **D** | Advanced external sensor injection framework for non-managed chamber solutions. `set_chamber_temp()` injects a current ambient reading into local state; `external_chamber=True` in BambuConfig suppresses MQTT telemetry parsing so injected readings persist. This is a hardware configuration feature requiring matching bpm config setup; no agent use case without that context. `set_chamber_temp_target()` (covered) handles the standard target-setting path for all printer types. |
 
 ### Coverage audit checklist
 

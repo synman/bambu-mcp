@@ -159,6 +159,7 @@ _ROUTE_PARAM_DESCRIPTIONS: dict[tuple[str, str], str] = {
     ("upload_file_to_printer",          "printer"):     _PRINTER_DESC,
     ("download_file_from_printer",      "printer"):     _PRINTER_DESC,
     ("set_buildplate_marker_detector",  "printer"):     _PRINTER_DESC,
+    ("set_first_layer_inspection",      "printer"):     _PRINTER_DESC,
     ("set_spaghetti_detector",          "printer"):     _PRINTER_DESC,
     ("set_purgechutepileup_detector",   "printer"):     _PRINTER_DESC,
     ("set_nozzleclumping_detector",     "printer"):     _PRINTER_DESC,
@@ -176,6 +177,7 @@ _ROUTE_PARAM_DESCRIPTIONS: dict[tuple[str, str], str] = {
     ("toggle_active_tool",              "printer"):     _PRINTER_DESC,
     ("toggle_session",                  "printer"):     _PRINTER_DESC,
     ("get_printer_info",                "printer"):     _PRINTER_DESC,
+    ("rename_printer",                  "printer"):     _PRINTER_DESC,
     ("clear_print_error",              "printer"):     _PRINTER_DESC,
     ("select_extrusion_calibration",   "printer"):     _PRINTER_DESC,
     ("turn_on_ams_dryer",              "printer"):     _PRINTER_DESC,
@@ -226,6 +228,7 @@ _ROUTE_PARAM_DESCRIPTIONS: dict[tuple[str, str], str] = {
     ("get_3mf_props_for_file",          "plate"):       "Plate number within the .3mf project (1-based). Use 0 to return all plates.",
     # ── AI detectors ───────────────────────────────────────────────────────────
     ("set_buildplate_marker_detector",  "enabled"):     "Enable or disable the detector.",
+    ("set_first_layer_inspection",      "enabled"):     "Enable or disable first-layer LiDAR/camera inspection.",
     ("set_spaghetti_detector",          "enabled"):     "Enable or disable the detector.",
     ("set_spaghetti_detector",          "sensitivity"): "Detection sensitivity.",
     ("set_purgechutepileup_detector",   "enabled"):     "Enable or disable the detector.",
@@ -255,6 +258,8 @@ _ROUTE_PARAM_DESCRIPTIONS: dict[tuple[str, str], str] = {
     # ── Nozzle hardware ────────────────────────────────────────────────────────
     ("set_nozzle_details",              "nozzle_diameter"): "Nozzle diameter in mm.",
     ("set_nozzle_details",              "nozzle_type"):     "Nozzle material type.",
+    # ── System ─────────────────────────────────────────────────────────────────
+    ("rename_printer",                  "new_name"):        "New display name to set on the printer firmware (visible on touchscreen and in Bambu Studio).",
 }
 
 
@@ -329,12 +334,14 @@ _ROUTE_TAGS: dict[str, str] = {
     "set_nozzle_details": "Hardware",
     "refresh_nozzles": "Hardware",
     "set_buildplate_marker_detector": "Hardware",
+    "set_first_layer_inspection": "Hardware",
     "set_spaghetti_detector": "Hardware",
     "set_purgechutepileup_detector": "Hardware",
     "set_nozzleclumping_detector": "Hardware",
     "set_airprinting_detector": "Hardware",
     "set_print_option": "Hardware",
     "get_detector_settings": "Hardware",
+    "rename_printer": "System",
     # Files
     "refresh_sdcard_3mf_files": "Files",
     "get_sdcard_3mf_files": "Files",
@@ -360,6 +367,10 @@ _ROUTE_EXAMPLES: dict[str, dict] = {
     "get_printer_info": {
         "response": {"gcode_state": "RUNNING", "print_percentage": 42, "nozzle_temp": 220, "nozzle_temp_target": 220, "bed_temp": 35, "bed_temp_target": 35, "chamber_temp": 21, "speed_level": "standard"},
         "params": {"printer": "H2D"},
+    },
+    "rename_printer": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D", "new_name": "My Printer"},
     },
     "toggle_active_tool": {
         "response": {"status": "success"},
@@ -497,6 +508,10 @@ _ROUTE_EXAMPLES: dict[str, dict] = {
         "params": {"printer": "H2D", "src": "/_jobs/myprint.gcode.3mf"},
     },
     "set_buildplate_marker_detector": {
+        "response": {"status": "success"},
+        "params": {"printer": "H2D", "enabled": "true"},
+    },
+    "set_first_layer_inspection": {
         "response": {"status": "success"},
         "params": {"printer": "H2D", "enabled": "true"},
     },
@@ -1396,6 +1411,33 @@ def _build_app():
             log.error("set_buildplate_marker_detector: error: %s", e, exc_info=True)
             return _err(str(e))
 
+    @app.route("/api/set_first_layer_inspection")
+    def set_first_layer_inspection():
+        """Enable/disable first-layer LiDAR/camera inspection. ?enabled=true|false"""
+        log.debug("set_first_layer_inspection: called")
+        p, _ = _get_printer(request.args)
+        if p is None:
+            return _err("no printer")
+        try:
+            enabled = request.args.get("enabled") == "true"
+            log.debug("set_first_layer_inspection: enabled=%s", enabled)
+            cmd = {
+                "xcam": {
+                    "command": "xcam_control_set",
+                    "control": enabled,
+                    "enable": enabled,
+                    "module_name": "first_layer_inspector",
+                    "print_halt": False,
+                    "sequence_id": "0",
+                }
+            }
+            p.send_anything(json.dumps(cmd))
+            log.debug("set_first_layer_inspection: → ok")
+            return _ok()
+        except Exception as e:
+            log.error("set_first_layer_inspection: error: %s", e, exc_info=True)
+            return _err(str(e))
+
     @app.route("/api/set_spaghetti_detector")
     def set_spaghetti_detector():
         """Enable/disable spaghetti detector. ?enabled=true|false&sensitivity=low|medium|high"""
@@ -1779,6 +1821,25 @@ def _build_app():
             return _err(str(e))
 
     # ── session / system ───────────────────────────────────────────────────────
+
+    @app.route("/api/rename_printer")
+    def rename_printer():
+        """Rename the printer on its own firmware. ?new_name=<name>"""
+        log.debug("rename_printer: called")
+        p, _ = _get_printer(request.args)
+        if p is None:
+            return _err("no printer")
+        try:
+            new_name = request.args.get("new_name", "").strip()
+            if not new_name:
+                return _err("new_name is required")
+            log.debug("rename_printer: new_name=%s", new_name)
+            p.rename_printer(new_name)
+            log.debug("rename_printer: → ok")
+            return _ok()
+        except Exception as e:
+            log.error("rename_printer: error: %s", e, exc_info=True)
+            return _err(str(e))
 
     @app.route("/api/trigger_printer_refresh")
     def trigger_printer_refresh():
