@@ -135,6 +135,28 @@ Override gate (strict):
 
 ---
 
+## Printer Name Verification (Mandatory)
+
+Printer names are not stable across sessions. After any MCP reload, tool
+reconnect, or at the start of a new session, treat all printer names as unknown.
+
+Rules:
+- Before calling any per-printer tool (get_printer_state, view_stream,
+  get_temperatures, etc.), verify the target name exists by calling
+  get_configured_printers() if the name has not already been confirmed in the
+  current session context.
+- Do NOT assume printer names from prior sessions, documentation examples, or
+  model names (e.g. "X1E", "H2D") — the registered name is user-chosen and
+  may differ from the hardware model.
+- After a get_configured_printers() call, use the exact "name" value returned.
+  The name is case-sensitive.
+
+Common failure mode: calling a per-printer tool with a guessed name immediately
+after an MCP reload, before verifying configured printers. Always resolve names
+first.
+
+---
+
 ## Response Endings Rule (Mandatory)
 
 Close responses with the task result only. Do not append unsolicited recommendations,
