@@ -465,6 +465,7 @@ Polls `/job_state` every 8s (separate polling loop from `/status`). Auto-expands
 - Stream endpoints + `/status` schema → `knowledge/api_reference_camera.py` (Stream Server Endpoints section added v1.0.2)
 - Job state result dict → `knowledge/api_reference_camera.py` (JobStateReport + background monitor result dict)
 - Push alert types + semantics → `knowledge/behavioral_rules_alerts.py` (sub-topic `behavioral_rules/alerts`); access via `get_knowledge_topic('behavioral_rules/alerts')`
+- Session management (printer name verification, post-reload checklist) → `knowledge/behavioral_rules_session.py` (sub-topic `behavioral_rules/session`); access via `get_knowledge_topic('behavioral_rules/session')`
 
 **Knowledge obligation (mandatory for all covered items):**
 Every item reachable via an MCP tool or HTTP route MUST be documented in the appropriate `knowledge/api_reference_*.py` or `knowledge/enums_*.py` module. Coverage without documentation is an incomplete implementation.

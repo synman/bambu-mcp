@@ -17,6 +17,7 @@ Sub-topic resources (behavioral_rules):
   bambu://knowledge/behavioral-rules/methodology   → behavioral_rules_methodology.py
   bambu://knowledge/behavioral-rules/mcp-patterns  → behavioral_rules_mcp_patterns.py
   bambu://knowledge/behavioral-rules/alerts        → behavioral_rules_alerts.py
+  bambu://knowledge/behavioral-rules/session       → behavioral_rules_session.py
 
 Sub-topic resources (protocol):
   bambu://knowledge/protocol/concepts → protocol_concepts.py
@@ -55,6 +56,7 @@ from knowledge.behavioral_rules_print_state import BEHAVIORAL_RULES_PRINT_STATE_
 from knowledge.behavioral_rules_methodology import BEHAVIORAL_RULES_METHODOLOGY_TEXT
 from knowledge.behavioral_rules_mcp_patterns import BEHAVIORAL_RULES_MCP_PATTERNS_TEXT
 from knowledge.behavioral_rules_alerts import BEHAVIORAL_RULES_ALERTS_TEXT
+from knowledge.behavioral_rules_session import BEHAVIORAL_RULES_SESSION_TEXT
 from knowledge.protocol import PROTOCOL_TEXT
 from knowledge.protocol_concepts import PROTOCOL_CONCEPTS_TEXT
 from knowledge.protocol_mqtt import PROTOCOL_MQTT_TEXT
@@ -91,6 +93,7 @@ _KNOWLEDGE_MAP = {
     "behavioral-rules/methodology":      BEHAVIORAL_RULES_METHODOLOGY_TEXT,
     "behavioral-rules/mcp-patterns":     BEHAVIORAL_RULES_MCP_PATTERNS_TEXT,
     "behavioral-rules/alerts":           BEHAVIORAL_RULES_ALERTS_TEXT,
+    "behavioral-rules/session":          BEHAVIORAL_RULES_SESSION_TEXT,
     "protocol":                          PROTOCOL_TEXT,
     "protocol/concepts":                 PROTOCOL_CONCEPTS_TEXT,
     "protocol/mqtt":                     PROTOCOL_MQTT_TEXT,
@@ -154,6 +157,11 @@ def get_behavioral_rules_mcp_patterns() -> str:
 def get_behavioral_rules_alerts() -> str:
     """Return push alerts sub-topic (alert types, semantics, severity, recommended actions)."""
     return BEHAVIORAL_RULES_ALERTS_TEXT
+
+
+def get_behavioral_rules_session() -> str:
+    """Return session management sub-topic (printer name verification, post-reload checklist)."""
+    return BEHAVIORAL_RULES_SESSION_TEXT
 
 
 def get_protocol() -> str:
