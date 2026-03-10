@@ -121,7 +121,8 @@ data = json.loads(gzip.decompress(base64.b64decode(r["data"])))
 ```
 
 Tools that may return compressed responses: `get_monitoring_series`,
-`list_sdcard_files`, `get_printer_state`.
+`list_sdcard_files`, `get_printer_state`, `get_monitoring_data`,
+`get_monitoring_history` (raw=True).
 
 ### `MAX_MCP_OUTPUT_TOKENS` configuration
 
@@ -150,4 +151,63 @@ gh copilot ...
 
 Both paths propagate to the bambu-mcp server. When to raise it: if a single-field
 `get_monitoring_series` response is still too large for the client to handle.
+
+---
+
+## Pre-Authorized HTTP API Escalation (Truncated Responses)
+
+When the Copilot CLI truncates an MCP tool response (saving it to a temp file), switching
+to the HTTP REST API is **pre-authorized** — no human permission is needed. This is NOT a
+Tier 2 escalation in the normal sense; it is a mechanical fallback for a client rendering
+limitation, not a scope expansion.
+
+### When to escalate
+
+- The CLI truncates the response and reports it saved to a temp file, OR
+- A tool response contains a `data_uri` field that the CLI cannot render inline, OR
+- A compressed response (`compressed: true`) was decompressed but is still too large to
+  display (extremely rare — the compressed envelope itself is always small)
+
+### How to escalate
+
+1. **Find the api_port** — call `get_server_info()` or read it from any prior response.
+   The REST API is always at `http://localhost:{api_port}/api`.
+2. **Look up the equivalent HTTP route** — call `get_knowledge_topic('http_api/<module>')`
+   for the relevant module (printer, files, system, ams, climate, hardware, print).
+3. **Call the endpoint directly** using bash/curl — no user permission needed.
+
+```bash
+# Example: retrieve full printer state via HTTP when get_printer_state was truncated
+PORT=$(curl -s http://localhost:49152/api/server_info | python3 -c "import json,sys; print(json.load(sys.stdin)['api_port'])")
+curl -s "http://localhost:$PORT/api/printer?printer=H2D" | python3 -m json.tool
+```
+
+### Key properties of HTTP escalation
+
+- **Local only** — all HTTP routes are on `localhost`. No external network access.
+- **Read-only routes are always safe** — GET routes read state, never modify it.
+- **Write routes require the same human permission as MCP tools** — do not call POST/PATCH/DELETE
+  routes as an escalation path without the same `user_permission=True` authorization.
+- **Not a premium action** — curl to localhost is not a web search, not Tier 3, and does
+  not require a Premium Requests `ask_user` gate.
+- **Not a scope expansion** — the HTTP API exposes the same operations as the MCP tools.
+  Using it to retrieve data that an MCP tool returned but the CLI couldn't display is
+  transparent substitution, not a new capability.
+
+### Inherently large responses (image data_uri)
+
+Some tools always return large data regardless of compression because they contain JPEG or
+PNG image bytes (already compressed — gzip would not reduce them further):
+
+| Tool | HTTP equivalent |
+|------|----------------|
+| `get_snapshot` | MJPEG stream server `/snapshot` endpoint (see `get_stream_url()`) |
+| `get_plate_thumbnail` | No direct HTTP route — use `get_plate_thumbnail()` MCP tool at lower quality |
+| `get_plate_topview` | No direct HTTP route — use `get_plate_topview()` MCP tool at lower quality |
+| `get_project_info(include_images=True)` | `GET /api/get_3mf_props_for_file?printer=P&file=F&plate=N` |
+| `get_current_job_project_info(include_images=True)` | `GET /api/get_current_3mf_props?printer=P` |
+| `analyze_active_job` | `GET /api/analyze_active_job?printer=P&categories=X` |
+
+For image tools with no direct HTTP equivalent, use a lower `quality` parameter
+(`"preview"` or `"standard"`) to reduce response size before escalating.
 """

@@ -122,8 +122,13 @@ def get_printer_state(name: str) -> dict:
       get_hms_errors()       — active and historical HMS errors
       get_fan_speeds()       — all fan speeds as percentages
       get_climate()          — temperatures and chamber door state
+
+    Response may be gzip+base64 compressed if the payload is large. Decompress:
+      import gzip, json, base64
+      data = json.loads(gzip.decompress(base64.b64decode(r["data"])))
     """
     log.debug("get_printer_state: called for printer=%s", name)
+    from tools._response import compress_if_large
     state = session_manager.get_state(name)
     if state is None:
         log.warning("get_printer_state: printer %s not connected", name)
@@ -134,7 +139,7 @@ def get_printer_state(name: str) -> dict:
         result["hms_errors"] = _apply_hms_historical(result["hms_errors"])
     log.debug("get_printer_state: hms_errors count=%d for %s", len(result.get("hms_errors", [])), name)
     log.debug("get_printer_state: returning result for %s", name)
-    return result
+    return compress_if_large(result)
 
 
 def get_job_info(name: str) -> dict:
@@ -438,12 +443,17 @@ def get_monitoring_data(name: str) -> dict:
     The rolling window captures the prior job's terminal state before the current job
     started. A print that has been RUNNING continuously will show a small FAILED duration
     from the previous job alongside its dominant RUNNING duration.
+
+    Response may be gzip+base64 compressed if the payload is large. Decompress:
+      import gzip, json, base64
+      data = json.loads(gzip.decompress(base64.b64decode(r["data"])))
     """
     log.debug("get_monitoring_data: called for printer=%s", name)
+    from tools._response import compress_if_large
     data = data_collector.get_all_data(name)
     log.debug("get_monitoring_data: data present=%s for %s", data is not None, name)
     if data is None:
         log.warning("get_monitoring_data: printer %s not connected", name)
         return _no_printer(name)
     log.debug("get_monitoring_data: returning result for %s", name)
-    return data
+    return compress_if_large(data)

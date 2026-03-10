@@ -183,8 +183,13 @@ def get_monitoring_history(name: str, raw: bool = False) -> dict:
     The rolling window captures the prior job's terminal state before the current job
     started. A print that has been RUNNING continuously will show a small FAILED duration
     from the previous job alongside its dominant RUNNING duration.
+
+    Response may be gzip+base64 compressed if the payload is large. Decompress:
+      import gzip, json, base64
+      data = json.loads(gzip.decompress(base64.b64decode(r["data"])))
     """
     log.debug("get_monitoring_history: called for name=%s raw=%s", name, raw)
+    from tools._response import compress_if_large
     if raw:
         data = data_collector.get_all_data(name)
     else:
@@ -193,7 +198,7 @@ def get_monitoring_history(name: str, raw: bool = False) -> dict:
         log.warning("get_monitoring_history: printer %s not connected", name)
         return _no_printer(name)
     log.debug("get_monitoring_history: returning data for %s raw=%s", name, raw)
-    return data
+    return compress_if_large(data)
 
 
 def get_monitoring_series(name: str, field: str) -> dict:
