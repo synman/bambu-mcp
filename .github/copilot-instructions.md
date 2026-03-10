@@ -360,6 +360,11 @@ log.warning("fn: context: %s", e, exc_info=True)  # or log.error for unexpected 
 2. **HTTP REST API** — a route in `api_server.py` exposes it (must trace to an actual bpm call)
 3. **Both** — best coverage; required for all high-value operational methods
 
+**mcp-native features (not bpm wrappers):**
+Some mcp features have no corresponding bpm method — they are implemented entirely within the mcp. These are not gaps. They must still be covered by at least one access path and documented in the appropriate knowledge module. Examples:
+- `notifications.NotificationManager` — push alert system; covered by `get_pending_alerts()` tool + `GET/DELETE /api/alerts` + `bambu://alerts/{name}` resource
+- `bambu://alerts/{name}` — MCP resource template for alert subscriptions; distinct from `bambu://knowledge/*` resources; registered in `server.py` via `@mcp.resource("bambu://alerts/{name}")` decorator (FastMCP auto-converts URIs with `{param}` to resource templates)
+
 **Asymmetric coverage is not self-resolving (Type G gaps):**
 A bpm item covered by an MCP tool but missing an HTTP route (or vice versa) is a **Type G gap** that requires explicit resolution — not an assumed design choice. An audit agent must NOT classify a G-type gap as "acceptable" or "intentional" based on inference. Every G-type finding must be resolved by either:
 - Adding the missing access path (preferred), or
@@ -459,6 +464,7 @@ Polls `/job_state` every 8s (separate polling loop from `/status`). Auto-expands
 - JOB HEALTH panel → `knowledge/behavioral_rules_camera.py` (new section added v1.0.2)
 - Stream endpoints + `/status` schema → `knowledge/api_reference_camera.py` (Stream Server Endpoints section added v1.0.2)
 - Job state result dict → `knowledge/api_reference_camera.py` (JobStateReport + background monitor result dict)
+- Push alert types + semantics → `knowledge/behavioral_rules_alerts.py` (sub-topic `behavioral_rules/alerts`); access via `get_knowledge_topic('behavioral_rules/alerts')`
 
 **Knowledge obligation (mandatory for all covered items):**
 Every item reachable via an MCP tool or HTTP route MUST be documented in the appropriate `knowledge/api_reference_*.py` or `knowledge/enums_*.py` module. Coverage without documentation is an incomplete implementation.
@@ -541,6 +547,7 @@ The following BPM methods are **intentionally not** exposed as MCP tools or HTTP
 | `BambuPrinter.on_update` | **A** | Internal telemetry update callback wired by the mcp session manager. Not a user-facing operation. |
 | `BambuPrinter.recent_update` | **A** | Internal readiness flag; `True` after first telemetry push. No direct agent use case. |
 | `BambuPrinter.internalException` | **A** | Internal error tracker for MQTT communication faults. Not actionable; error state is surfaced via HMS errors and gcode_state. |
+| `notifications.NotificationManager` (mcp-internal) | **A** | mcp-native state transition tracker; not a bpm item. Exposed via `get_pending_alerts()` MCP tool, `GET/DELETE /api/alerts` HTTP routes, and `bambu://alerts/{name}` resource subscription. No direct bpm wrapping needed. |
 | `BambuPrinter.sdcard_file_exists()` | **A** | Internal file existence check used within file operations. No standalone user use case; file operations handle this internally. |
 | `BambuConfig.set_new_bpm_cache_path()` | **A** | Internal config method for relocating the bpm metadata cache. Set at session init by the mcp server; no runtime agent use case. |
 | `BambuConfig.verbose` | **A** | Internal debug logging flag. Controlled by `BAMBU_MCP_DEBUG` env var at the server level, not per-printer config. No agent use case. |

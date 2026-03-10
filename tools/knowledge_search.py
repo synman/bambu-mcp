@@ -23,6 +23,7 @@ _KNOWN_TOPICS: dict[str, tuple[str, str]] = {
     "behavioral_rules/print_state":      ("knowledge.behavioral_rules_print_state",     "BEHAVIORAL_RULES_PRINT_STATE_TEXT"),
     "behavioral_rules/methodology": ("knowledge.behavioral_rules_methodology", "BEHAVIORAL_RULES_METHODOLOGY_TEXT"),
     "behavioral_rules/mcp_patterns":("knowledge.behavioral_rules_mcp_patterns","BEHAVIORAL_RULES_MCP_PATTERNS_TEXT"),
+    "behavioral_rules/alerts":      ("knowledge.behavioral_rules_alerts",       "BEHAVIORAL_RULES_ALERTS_TEXT"),
     # api_reference sub-topics
     "api_reference/session":        ("knowledge.api_reference_session",        "API_REFERENCE_SESSION_TEXT"),
     "api_reference/files":          ("knowledge.api_reference_files",          "API_REFERENCE_FILES_TEXT"),
@@ -130,6 +131,7 @@ def get_knowledge_topic(topic: str) -> dict | str:
     - behavioral_rules/print_state — gcode_state FAILED, HMS active/historical, stage codes
     - behavioral_rules/methodology — KISS, quality-first, verification, parity, cross-model
     - behavioral_rules/mcp_patterns — array param pattern, multi-level hierarchy, compressed responses
+    - behavioral_rules/alerts — push alert types, semantics, severity, recommended agent actions
     - api_reference/session — BambuPrinter session management and raw command methods
     - api_reference/files — FTPS file management methods
     - api_reference/print — print control, temperature, and fan methods

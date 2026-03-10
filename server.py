@@ -203,6 +203,27 @@ for _uri, _fn, _desc in _RESOURCES:
         )
     )
 
+# ── Alert subscription resource template ──────────────────────────────────────
+@mcp.resource(
+    "bambu://alerts/{name}",
+    description=(
+        "Per-printer push alert feed. Subscribe to receive notifications when high-visibility "
+        "printer state transitions occur (job start/finish/fail, HMS errors, health changes). "
+        "Returns pending alerts as JSON array. Clear them after reading via get_pending_alerts(). "
+        "See get_knowledge_topic('behavioral_rules/alerts') for full alert type semantics."
+    ),
+    mime_type="application/json",
+)
+def _get_alerts_resource(name: str) -> str:
+    """Return pending alerts for a printer as a JSON array (non-destructive read)."""
+    import json
+    try:
+        from notifications import notifications as _notif
+        alerts = _notif.get_pending(name, clear=False)
+        return json.dumps(alerts, default=str)
+    except Exception:
+        return "[]"
+
 # ── Register prompt ────────────────────────────────────────────────────────────
 @mcp.prompt(
     name="bambu_system_context",

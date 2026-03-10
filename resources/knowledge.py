@@ -16,6 +16,7 @@ Sub-topic resources (behavioral_rules):
   bambu://knowledge/behavioral-rules/print-state   → behavioral_rules_print_state.py
   bambu://knowledge/behavioral-rules/methodology   → behavioral_rules_methodology.py
   bambu://knowledge/behavioral-rules/mcp-patterns  → behavioral_rules_mcp_patterns.py
+  bambu://knowledge/behavioral-rules/alerts        → behavioral_rules_alerts.py
 
 Sub-topic resources (protocol):
   bambu://knowledge/protocol/concepts → protocol_concepts.py
