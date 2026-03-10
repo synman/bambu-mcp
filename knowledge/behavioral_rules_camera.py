@@ -80,7 +80,10 @@ the following named components (polls `/status` every 2 s):
 - **Temps section**: nozzle temp(s) (°C / target), bed temp, chamber temp
 - **Fans section**: part cooling %, aux %, exhaust %, heatbreak % (zero-value fans are hidden)
 - **Filament swatch**: colored dot + filament type label for the active AMS spool
-- **AMS humidity index**: numeric humidity reading from the active AMS unit
+- **AMS humidity index**: shown only when elevated — `hIdx in {1, 2}` (i.e. index ≤ 2 and > 0);
+  1 = red (#ff5050), 2 = amber (#ffcc40); hidden at 0 (unavailable) or 3–5 (acceptable/dry)
+- **Heating animation**: temperature value spans get a pulsing CSS `heating` class when
+  `target > 0` and `target − current > 10 °C`; applies to nozzle(s), bed, and chamber temp rows
 - **Wi-Fi signal bars**: unicode block-character bar graph, color-tiered by signal strength
 - **HMS error links**: clickable error entries; clicking opens the Bambu error page in a popup
 - **Chamber door/lid warning** (`#door-warn`): orange banner reading "⚠ DOOR OPEN", "⚠ LID OPEN",
