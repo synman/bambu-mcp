@@ -74,6 +74,72 @@ publish these commands explicitly.
 
 ---
 
+## Print Control Commands
+
+These are the commands sent to `device/{serial}/request` to control print jobs.
+`print.resume` and `print.ams_control` are **independent protocol commands** — they
+are not automatically paired; each does only what it says.
+
+### print.resume
+
+Resumes a paused print job. Sent with **QoS 1** (higher delivery priority).
+
+```json
+{
+    "print": {
+        "sequence_id": "0",
+        "command": "resume",
+        "param": ""
+    }
+}
+```
+
+Use for: user pauses (`stg_cur=17`), M400 pauses (`stg_cur=6`), and most non-AMS
+sensor pauses. See behavioral_rules/print_state for the full pause-cause decision table.
+
+### print.pause
+
+Pauses the active print job.
+
+```json
+{
+    "print": {
+        "sequence_id": "0",
+        "command": "pause",
+        "param": ""
+    }
+}
+```
+
+### print.ams_control
+
+Controls the AMS feed state. Operates on the AMS independently of the print job state.
+
+```json
+{
+    "print": {
+        "sequence_id": "0",
+        "command": "ams_control",
+        "param": "resume"
+    }
+}
+```
+
+`param` values: `"resume"` / `"pause"` / `"reset"`.
+
+**`param: "resume"`** unblocks the AMS feed after a filament runout or AMS fault.
+This is the correct command when `stg_cur=7` (filament runout) or when an active AMS
+HMS error (`HMS_05xx`) is present. In the MCP, calling `send_ams_control_command(RESUME)`
+sends this command and also resumes the print job — use it as the single recovery action
+for AMS-triggered pauses.
+
+**`param: "reset"`** resets the AMS to its idle/ready state (use after mechanical jam
+or to clear AMS state without resuming).
+
+**`param: "pause"`** pauses the AMS feed mid-print.
+
+---
+
 ## home_flag Bitfield (from push_status)
 
 The `home_flag` integer in `push_status` is the steady-state source for these

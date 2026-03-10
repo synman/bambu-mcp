@@ -63,6 +63,46 @@ is `gcode_state: "FAILED"` + `print_error: 0`.
 
 ---
 
+## Pause State Recovery
+
+When `gcode_state="PAUSE"`, identify the cause from `stg_cur` before choosing a resume command.
+
+### Pause cause → resume command
+
+| stg_cur | Pause cause | Resume command |
+|---------|-------------|---------------|
+| 17 | User-initiated pause | `resume_print()` |
+| 6 | M400 (GCode pause point) | `resume_print()` |
+| 7 | Filament runout detected by AMS | `send_ams_control_command(RESUME)` |
+| 4 | Filament change in progress (stuck) | `send_ams_control_command(RESUME)` |
+| 18 | Front cover removed | Replace cover, then `resume_print()` |
+| 20 | Nozzle temp malfunction | Fix condition, then `resume_print()` |
+| 21 | Heatbed temp malfunction | Restore temps, then `resume_print()` |
+
+**Rule:** Use `send_ams_control_command(RESUME)` only when the pause is AMS-triggered
+(filament runout, AMS fault). For all other pause causes, use `resume_print()`.
+
+`send_ams_control_command(RESUME)` unblocks the AMS feed **and** resumes the halted
+print job in a single operation. Do not also call `resume_print()` after it — that
+would be a duplicate command.
+
+### AMS fault full recovery sequence
+
+When active HMS errors include an AMS fault (`HMS_05xx-xxxx-xxxx-xxxx`) and the print
+is paused:
+
+1. **Check errors**: `get_hms_errors()` — identify active codes and `print_error` value.
+2. **Clear print error**: `clear_print_error(print_error=<code>)` — dismisses the UI fault.
+3. **Restore temperatures** (if targets dropped to 0): `set_bed_temp()` and/or
+   `set_chamber_temp()` to restore correct values. Wait for temps to recover before
+   resuming if they dropped significantly.
+4. **Resume**: `send_ams_control_command(RESUME)` — unblocks AMS and resumes print.
+
+Do not skip step 2. The printer stays in a UI-acknowledgment pending state until the
+print error is cleared, even if temps are restored.
+
+---
+
 ## Stage Code Reference
 
 Key `stg_cur` values (from push_status):

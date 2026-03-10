@@ -451,10 +451,10 @@ def send_ams_control_command(
     cmd must be one of: 'PAUSE', 'RESUME', 'RESET' (case-insensitive).
 
     - 'PAUSE'  — pause the AMS feed mid-print.
-    - 'RESUME' — resume AMS feed after a pause. Note: when RESUME is sent,
-      the underlying BPM method automatically calls resume_printing() as well,
-      restarting the paused print job. This is a side effect of the BPM
-      implementation, not a separate call.
+    - 'RESUME' — unblocks the AMS feed AND resumes the halted print job in a
+      single operation. Use this for AMS-triggered pauses (filament runout,
+      AMS fault). Do not also call resume_print() after this — that would be
+      a duplicate command.
     - 'RESET'  — reset the AMS to its idle/ready state.
 
     Requires user_permission=True.
@@ -475,8 +475,7 @@ def send_ams_control_command(
         log.debug("send_ams_control_command: calling printer.send_ams_control_command(%s) for %s", ams_cmd, name)
         printer.send_ams_control_command(ams_cmd)
         log.debug("send_ams_control_command: command sent to %s", name)
-        note = " (resume_printing() also called automatically)" if cmd_upper == "RESUME" else ""
-        return f"AMS control command {cmd_upper} sent to '{name}'.{(' ' + note) if note else ''}"
+        return f"AMS control command {cmd_upper} sent to '{name}'."
     except KeyError:
         log.error("send_ams_control_command: unknown cmd '%s' for %s", cmd, name)
         return f"Error: Unknown AMS control command '{cmd}'. Must be one of: PAUSE, RESUME, RESET."

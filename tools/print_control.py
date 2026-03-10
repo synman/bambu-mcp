@@ -51,6 +51,17 @@ def resume_print(name: str, user_permission: bool = False) -> str:
     Resume a paused print job on the named printer.
 
     Requires user_permission=True. Has no effect if the printer is not paused.
+
+    Use this for user-initiated pauses (stg_cur=17), M400 GCode pauses (stg_cur=6),
+    and non-AMS sensor pauses (cover removed, temp malfunction — after fixing the
+    underlying condition).
+
+    For AMS-triggered pauses (filament runout stg_cur=7, or active AMS HMS error),
+    use send_ams_control_command(RESUME) instead — it unblocks the AMS feed and
+    resumes the print in one operation.
+
+    See get_knowledge_topic('behavioral_rules/print_state') for the full pause-cause
+    decision table.
     """
     log.debug("resume_print: called for name=%s user_permission=%s", name, user_permission)
     if not user_permission:
