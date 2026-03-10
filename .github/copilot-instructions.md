@@ -452,9 +452,9 @@ fps, fps_cap  ← fps/fps_cap added by _serve_status(), not _build_status()
 
 Complete UI element inventory with DOM IDs and data sources (baseline state after v1.0.2):
 
-**Top-right FPS counter** (`#fps-display`): `fps` + `fps_cap` from `/status`; animated 5-column bar graph; color-tiered.
+**Top-right FPS counter** (`#fps`): `fps` + `fps_cap` from `/status`; animated 5-column bar graph; color-tiered.
 
-**Top-left HUD panel** (`#hud-panel`): polls `/status` every 2s.
+**Top-left HUD panel** (`#hud`): polls `/status` every 2s.
 - Badge row: `#badge` (gcode_state, color-coded) + `#speed-badge` (speed_level label, only when active)
 - Subtask line: `#subtask` (subtask_name, truncated)
 - Progress bar: `#progress-fill` (print_percentage)
@@ -481,7 +481,7 @@ Polls `/job_state` every 8s (separate polling loop from `/status`). Auto-expands
 - `#hp-radar-section` (Failure Drivers): `/factors_radar` PNG (8-factor spider chart); toggled via `hudToggle` (narrow panel, collapses within 180px)
 
 **Key element IDs for Type I audit verification:**
-`#hud-panel`, `#fps-display`, `#badge`, `#speed-badge`, `#subtask`, `#progress-fill`, `#door-warn`,
+`#hud`, `#fps`, `#badge`, `#speed-badge`, `#subtask`, `#progress-fill`, `#door-warn`,
 `#filament-row`, `#humidity-row`, `#wifi`, `#errors`,
 `#health-panel`, `#hp-verdict`, `#hp-sec-score`, `#hp-sec-metrics`, `#hp-sec-trends`,
 `#hp-anomaly-section`, `#hp-radar-section`,

@@ -79,7 +79,9 @@ Same state data as `/api/printer`, wrapped in a health envelope:
 
 ---
 
-## GET /api/toggle_session
+## PATCH /api/toggle_session
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
 
 Pause or resume the MQTT session for the printer.
 
@@ -94,7 +96,9 @@ Use sparingly — pausing the session stops all telemetry updates.
 
 ---
 
-## GET /api/trigger_printer_refresh
+## POST /api/trigger_printer_refresh
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
 
 Force the printer to re-broadcast its full state.
 
@@ -114,7 +118,9 @@ Useful for diagnosing connection issues, MQTT errors, or unexpected behavior.
 
 ---
 
-## GET /api/truncate_log
+## DELETE /api/truncate_log
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
 
 Truncate the bambu-mcp server log.
 

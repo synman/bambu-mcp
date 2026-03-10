@@ -73,7 +73,7 @@ Returns `{"success": true}`.
 
 ---
 
-## GET /api/set_spool_k_factor
+## POST /api/set_spool_k_factor
 
 Set extrusion calibration k-factor for a spool. (Stub — returns not-implemented.)
 
