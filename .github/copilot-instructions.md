@@ -136,7 +136,7 @@ Apply when authoring or reviewing tools and docstrings: if a naive agent could n
 - `bambu-printer-app` is a **knowledge reference only** — it must not be referenced or imported at runtime. **Never search, grep, read, or mention `bambu-printer-app` source during any coverage audit, baseline audit, or bpm→mcp traceability work.** It is entirely out of scope for these processes.
 - No tool may open its own direct FTPS, MQTT, socket, or HTTP connection to a printer — **with one exception**: camera streaming.
 - **Camera streaming exception**: the `camera/` module is explicitly permitted to open direct connections to the printer for video data only:
-  - **TCP+TLS port 6000** — A1/P1 series camera protocol (`TCPFrameBuffer` in `camera/tcp_stream.py`)
+  - **TCP+TLS port 6000** `[VERIFIED: bambu-mcp camera/tcp_stream.py:76,121 — socket.create_connection((ip, 6000))]` — A1/P1 series camera protocol (`TCPFrameBuffer` in `camera/tcp_stream.py`)
   - **RTSPS** — H2D/X1 series camera protocol (`RTSPSFrameBuffer` in `camera/rtsps_stream.py`)
   - These are raw video transports that BPM does not expose. No other module may use this exception.
 
