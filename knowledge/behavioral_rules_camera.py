@@ -105,7 +105,7 @@ every 8 s):
 - **Trends section** (`#hp-sec-trends`): 4 rolling sparkline canvases — Success % (30-sample,
   green solid), Confidence % (dashed blue), Nozzle °C (mini), Bed °C (mini); plus a status
   text row showing gcode_state + layer + AMS humidity %
-- **AI Detection section** (`#hp-sec-anomaly`): `/annotated` PNG when available (anomaly
+- **AI Detection section** (`#hp-anomaly-section` / inner `#hp-sec-anomaly`): `/annotated` PNG when available (anomaly
   detection overlay); legend swatches — Air Zone (yellow border), Plate Zone (green border),
   Heat Map (orange-red gradient); clicking expands the health panel to full width via
   `hpAnomalyToggle`

@@ -137,4 +137,33 @@ Upload a file to the local uploads directory on the bambu-mcp server.
 POST multipart/form-data with the file in a field named `file`.
 Returns `{"success": true, "filename": "<saved filename>"}`.
 After uploading, use `/api/upload_file_to_printer` to push it to the printer SD card.
+
+---
+
+## 3MF File Search
+
+### GET /api/find_3mf_by_name
+
+Search the SD card 3MF file tree by filename.
+
+Query parameters:
+- `name` (required) — exact filename to find, e.g. `myjob.gcode.3mf`
+
+Returns the matching node dict with keys: `id` (full SD card path), `name`, `size` (bytes),
+`timestamp` (epoch float). Returns `{"error": "Not found: <name>"}` when no match is found.
+Use when you know the filename but not its full path.
+
+Equivalent MCP tool: `get_3mf_entry_by_name()`
+
+### GET /api/find_3mf_by_id
+
+Search the SD card 3MF file tree by full SD card path.
+
+Query parameters:
+- `id` (required) — full SD card path, e.g. `/cache/myjob.gcode.3mf`
+
+Returns the matching node dict with keys: `id`, `name`, `size` (bytes), `timestamp` (epoch float).
+Returns `{"error": "Not found: <id>"}` when no match is found. Use when you know the full path.
+
+Equivalent MCP tool: `get_3mf_entry_by_id()`
 """

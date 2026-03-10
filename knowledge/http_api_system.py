@@ -115,4 +115,77 @@ Truncate the bambu-mcp server log.
 
 Clears the log file on disk. Returns `{"success": true}`.
 Use before a test sequence to get a clean log capture.
+
+---
+
+## Printer Discovery
+
+### GET /api/printers
+
+Return all configured printers and their current connection status.
+
+No printer parameter required — this is server-level discovery data.
+
+Response fields:
+- `printers`: list of dicts with `name`, `connected`, `session_active`
+- `total`: count of configured printers
+
+Use this route to enumerate all available printer names before making targeted requests.
+Note: `connected_printers` in `/api/default_printer` lists only currently-connected printers;
+this route includes all configured printers regardless of connection state.
+
+Equivalent MCP tool: `get_configured_printers()`
+
+---
+
+## Reference Data
+
+### GET /api/filament_catalog
+
+Return the full filament profile catalog as a JSON array.
+
+No printer parameter required — this is static reference data from BPM.
+
+Each entry contains: `tray_info_idx`, `name`, `vendor`, `filament_type`,
+`nozzle_temp_min`, `nozzle_temp_max`, `hot_plate_temp`.
+
+Use `tray_info_idx` (e.g. `GFA00`) to identify Bambu Lab filament profiles when
+calling `set_ams_filament_setting` or cross-referencing spool catalog codes.
+
+---
+
+## Camera & Print Health Analysis
+
+### GET /api/analyze_active_job
+
+Capture the live camera frame and produce a full active job state report.
+
+Query parameters:
+- `printer` (required) — printer name
+- `store_reference` — `"true"` to store the current frame as the diff baseline (in-memory)
+- `quality` — `"auto"` | `"preview"` | `"standard"` | `"full"` (default: `"auto"`)
+- `categories` — comma-separated asset category letters (default `"X"` — composite only):
+  - `P` = project thumbnail + plate layout images
+  - `C` = raw camera frame + diff frame
+  - `D` = anomaly detection overlays (air zone, mask, annotated, heat map, edge)
+  - `H` = print health panel
+  - `X` = job state composite (default primary output)
+
+Response fields (always present when a print is active):
+- `verdict` — `"clean"` | `"warning"` | `"critical"`
+- `anomaly_score` — composite anomaly score (0–1)
+- `success_probability` — Bayesian print health score (0–1; 1.0 = fully healthy)
+- `decision_confidence` — agent ability to assess failure given current data (0–1)
+- `stable_verdict` — consensus verdict from recent analysis window, or null
+- `stage` / `stage_name` — current printer stage code and human-readable name
+- `layer` — current layer number
+- Image keys (base64 data URIs) present when the corresponding category is requested.
+
+Error responses: `{"error": "no_active_job"}`, `{"error": "no_camera"}`, `{"error": "not_connected"}`.
+
+**Note:** `store_reference=true` has an in-memory side effect (stores a reference frame for
+diff analysis). This is transient analysis state — not printer state — and is lost on server
+restart. No `user_permission` guard is required for this operation.
+
+Equivalent MCP tool: `analyze_active_job()`
 """

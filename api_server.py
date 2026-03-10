@@ -1,7 +1,7 @@
 """
 bambu-mcp-api — HTTP REST API server for the bambu-mcp MCP service.
 
-Exposes 66 routes mirroring the bambu-printer-app container API so existing clients
+Exposes 67 routes mirroring the bambu-printer-app container API so existing clients
 work unchanged. Backed directly by session_manager / BambuPrinter — no dependency
 on the bambu-printer-app container.
 
@@ -23,7 +23,7 @@ Lifecycle:
   get_url()    — returns "http://localhost:{port}".
   get_port()   — returns the currently bound port integer (0 if not running).
 
-Route categories (66 routes total):
+Route categories (67 routes total):
   Printer state  (6)  — full state, progress, temperatures, spools, nozzle, AMS
   Print control  (8)  — print 3mf, pause, resume, stop, speed, skip objects, options
   AMS/filament   (7)  — load, unload, set filament, dryer start/stop, RFID calibrate
@@ -292,6 +292,7 @@ def _extract_query_params(view_func: Callable) -> list[dict]:
 _ROUTE_TAGS: dict[str, str] = {
     # System
     "health_check": "System",
+    "list_printers": "System",
     "default_printer": "System",
     "get_printer_info": "System",
     "trigger_printer_refresh": "System",
@@ -364,6 +365,10 @@ _ROUTE_EXAMPLES: dict[str, dict] = {
     "health_check": {
         "response": {"status": "success", "printer": {"gcode_state": "RUNNING", "print_percentage": 42, "nozzle_temp": 220, "bed_temp": 35}},
         "params": {"printer": "H2D"},
+    },
+    "list_printers": {
+        "params": {},
+        "response": {"printers": [{"name": "H2D", "connected": True, "session_active": True}], "total": 1},
     },
     "default_printer": {
         "params": {},
@@ -918,6 +923,25 @@ def _build_app():
             return _err("no data", HTTPStatus.INTERNAL_SERVER_ERROR)
         result = {"status": "success", "printer": p.toJson()}
         log.debug("health_check: → ok")
+        return jsonify(result)
+
+    @app.route("/api/printers")
+    def list_printers():
+        """Return all configured printers and their current connection status.
+
+        No printer parameter required — this is server-level discovery data.
+
+        Response fields:
+        - `printers`: list of dicts, each with `name`, `connected`, `session_active`
+        - `total`: count of configured printers
+
+        Use this route to discover which printer names are available before calling
+        printer-specific routes. Equivalent to the MCP `get_configured_printers()` tool.
+        """
+        log.debug("list_printers: called")
+        from tools.management import get_configured_printers as _get_configured
+        result = _get_configured()
+        log.debug("list_printers: → %d printers", result.get("total", 0))
         return jsonify(result)
 
     @app.route("/api/default_printer")
@@ -1599,7 +1623,10 @@ def _build_app():
 
     @app.route("/api/download_file_from_printer", methods=["GET", "POST"])
     def download_file_from_printer():
-        """Download a file from the printer SD card and return it. ?src=<remote_path>"""
+        """⚠️ Download a file from the printer SD card and return it. ?src=<remote_path>
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("download_file_from_printer: called")
         p, _ = _get_printer(_rargs())
         if p is None:

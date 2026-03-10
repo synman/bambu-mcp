@@ -556,7 +556,7 @@ The following BPM methods are **intentionally not** exposed as MCP tools or HTTP
 | Monitoring history/series (`get_monitoring_history`, `get_monitoring_data`, `get_monitoring_series`) | **D** | Large rolling time-series (~1440 pts/field, 60-min window) is not suitable for synchronous HTTP polling; HTTP clients should use the MCP tool path; intentional architectural asymmetry |
 | Firmware version (targeted) | **C** | `firmware_version` field in BambuConfig; accessible via `/api/printer` full JSON; targeted HTTP read would be redundant |
 | Printer session lifecycle (`add_printer`, `remove_printer`, `update_printer_credentials`) | **B** | Session lifecycle operations; HTTP API operates within pre-configured sessions managed by the MCP server process itself |
-| Printer connection status (`get_printer_connection_status`, `get_configured_printers`) | **B** | Session-level queries; HTTP REST API assumes sessions are pre-configured; state accessible via `/api/printer` or MCP tools |
+| Printer connection status (`get_printer_connection_status`) | **B** | Single-printer session query; HTTP REST API assumes sessions are pre-configured; overall state accessible via `/api/printer`. `get_configured_printers` now has `GET /api/printers` HTTP route. |
 | MQTT session pause/resume (`pause_mqtt_session`, `resume_mqtt_session`) | **D** | HTTP has combined `/api/toggle_session`; deliberate consolidation into single toggle endpoint |
 | Printer discovery (`discover_printers`) | **B** | SSDP discovery is a setup-time agent/CLI tool; HTTP API assumes printer already configured in session |
 | `force_state_refresh()` | **D** | HTTP has `trigger_printer_refresh` which performs the same operation (with user_permission gate); deliberate naming divergence, not a gap |
@@ -584,6 +584,16 @@ The following BPM methods are **intentionally not** exposed as MCP tools or HTTP
 | `NozzleCharacteristics.from_telemetry` | **A** | Internal factory classmethod constructing `NozzleCharacteristics` from raw telemetry. Called by `BambuState.fromJson`; not user-facing. |
 | `NozzleCharacteristics.to_identifier` | **A** | Internal nozzle identifier encoder (e.g. `"HS00-0.4"`). Used for telemetry encoding internally; not user-facing. |
 | `DiscoveredPrinter.fromData` | **A** | Internal SSDP packet parser called by `BambuDiscovery._discovery_thread`. Discovery results are returned by the `discover_printers` MCP tool. |
+| `BambuDiscovery.start()` / `stop()` / `running` / `discovered_printers` | **A** | Internal SSDP discovery lifecycle methods/properties used exclusively within `discover_printers` MCP tool. Not a user-facing operation; agents use `discover_printers()` which wraps the full discovery lifecycle. |
+| `BambuPrinter.clean_print_error_uiop()` | **A** | Internal protocol helper called within the `clear_print_error` MCP tool after `clean_print_error()` to send the UI dialog-acknowledged signal. Not a standalone user operation. |
+| `BambuPrinter.set_active_tool()` | **A** | Internal tool selection helper called by `set_nozzle_config` and `swap_tool` MCP tools when the target extruder differs from the current active tool. Not a standalone user operation. |
+| `BambuPrinter.toJson()` | **A** | Internal bpm serialization method for the full printer state. Not for agent use; state is surfaced via `get_printer_state()` and targeted state tools. |
+| `BambuPrinter.pause_session()` / `resume_session()` | **A** | Internal session lifecycle methods called by the MCP `session_manager` within `pause_mqtt_session` / `resume_mqtt_session`. Not invoked directly by agents. |
+| `BambuPrinter.printer_state` property | **A** | Internal state accessor returning the live `BambuState`. Accessed by all MCP state tools; results surfaced via `get_printer_state()` and targeted tools. No standalone tool needed. |
+| `BambuPrinter.active_job_info` property | **A** | Internal job accessor returning the live `ActiveJobInfo`. Results surfaced via `get_job_info()`, `get_print_progress()`, `get_current_job_project_info()`. No standalone tool needed. |
+| `BambuPrinter.cached_sd_card_contents` / `cached_sd_card_3mf_files` properties | **A** | Internal SD card cache accessors. Results surfaced via `list_sdcard_files()` and `refresh_sdcard()`. No standalone tool needed. |
+| `BambuPrinter.nozzle_diameter` (deprecated) | **A** | `@deprecated` — replacement is `printer_state.active_nozzle.diameter_mm`, which is covered by `get_nozzle_info()`. Excluded per deprecated-with-replacement rule. |
+| `BambuPrinter.nozzle_type` (deprecated) | **A** | `@deprecated` — replacement is `printer_state.active_nozzle.material`, which is covered by `get_nozzle_info()`. Excluded per deprecated-with-replacement rule. |
 
 ### Coverage audit checklist
 
