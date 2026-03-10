@@ -2348,7 +2348,9 @@ def _build_app():
         log.debug("analyze_active_job: called")
         import importlib
         try:
-            printer_name = _rargs().get("printer", "")
+            p, printer_name = _get_printer(_rargs())
+            if p is None:
+                return jsonify({"error": "not_connected"}), 400
             store_ref    = _rargs().get("store_reference", "false").lower() == "true"
             quality      = _rargs().get("quality", "auto")
             cats_raw     = _rargs().get("categories", "")
