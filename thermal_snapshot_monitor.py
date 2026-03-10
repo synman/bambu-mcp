@@ -1,0 +1,588 @@
+"""
+thermal_snapshot_monitor.py — Issue #10 thermal data collection script.
+
+Runs the heatmap POC once per minute from print job start through cool-down.
+Saves PNG + JSON sidecar per frame for model refinement.
+
+Usage:
+    cd ~/bambu-mcp && nohup .venv/bin/python thermal_snapshot_monitor.py > ~/thermal_captures/monitor_stdout.log 2>&1 &
+
+Start BEFORE the print job so baseline temps are captured at true ambient.
+"""
+
+import io
+import json
+import logging
+import os
+import subprocess
+import sys
+import time
+import urllib.request
+import warnings
+from datetime import datetime, timezone
+from pathlib import Path
+
+import av
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.cm as cm
+import matplotlib.patches as patches
+import matplotlib.pyplot as plt
+import numpy as np
+from PIL import Image
+from scipy.ndimage import binary_closing, binary_dilation
+from scipy.ndimage import label as ndlabel
+from scipy.spatial import ConvexHull as SpatialHull
+from matplotlib.path import Path as MPath
+
+warnings.filterwarnings('ignore')
+
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+PRINTER_NAME        = "H2D"
+PRINTER_SECRET_PFX  = "bambu-h2d-printer"
+FLOOR_TEMP_DEFAULT  = 25       # fallback ambient °C
+CAPTURE_INTERVAL_S  = 60       # seconds between captures
+POLL_INTERVAL_S     = 10       # seconds between job-start polls
+COOLDOWN_READINGS   = 3        # consecutive readings required to confirm cool-down
+BED_COOLDOWN_DELTA  = 10.0     # bed must drop to within this many °C of baseline
+CHAM_COOLDOWN_DELTA = 5.0      # chamber must drop to within this many °C of baseline
+GITHUB_ISSUE        = 10
+GITHUB_REPO         = "synman/bambu-mcp"
+OUTPUT_ROOT         = Path.home() / "thermal_captures"
+MCP_PORTS           = [49152, 49153, 49154, 49155, 49156]
+
+# ---------------------------------------------------------------------------
+# Secrets + camera
+# ---------------------------------------------------------------------------
+def _secret(key: str) -> str:
+    secrets = Path.home() / "bambu-printer-manager" / "secrets.py"
+    return subprocess.check_output([sys.executable, str(secrets), "get", key], text=True).strip()
+
+
+def _rtsps_frame(ip: str, access_code: str, timeout_s: int = 15) -> Image.Image:
+    url = f"rtsps://bblp:{access_code}@{ip}:322/streaming/live/1"
+    opts = {"rtsp_transport": "tcp", "stimeout": str(int(timeout_s * 1_000_000))}
+    container = av.open(url, options=opts)
+    frame = next(container.decode(video=0))
+    container.close()
+    return frame.to_image()
+
+
+def _get_printer_state(auth: str) -> dict:
+    for port in MCP_PORTS:
+        try:
+            req = urllib.request.Request(
+                f"http://localhost:{port}/api/printer?printer={PRINTER_NAME}",
+                headers={"Authorization": f"Basic {auth}"})
+            data = json.loads(urllib.request.urlopen(req, timeout=3).read())
+            return data
+        except Exception:
+            continue
+    return {}
+
+
+def fetch_snapshot(ip: str, access_code: str, auth: str) -> tuple:
+    """Returns (pil_image, bed_temp, chamber_temp, gcode_state, layer, progress, subtask_name)."""
+    state = _get_printer_state(auth)
+    climate = (state.get("_printer_state") or {}).get("climate") or {}
+    job_info = state.get("_active_job_info") or {}
+
+    bed_temp     = climate.get("bed_temp")
+    chamber_temp = climate.get("chamber_temp")
+    gcode_state  = (state.get("_printer_state") or {}).get("gcode_state", "UNKNOWN")
+    layer        = job_info.get("current_layer")
+    progress     = job_info.get("print_percentage")
+    subtask      = job_info.get("subtask_name", "unknown")
+
+    img = _rtsps_frame(ip, access_code)
+    return (img,
+            float(bed_temp) if bed_temp is not None else None,
+            float(chamber_temp) if chamber_temp is not None else None,
+            gcode_state, layer, progress, subtask)
+
+
+# ---------------------------------------------------------------------------
+# Thermal analysis (from h2d_heatmap.py POC)
+# ---------------------------------------------------------------------------
+def _largest_component(mask):
+    labeled, n = ndlabel(mask)
+    if n == 0:
+        return mask
+    counts = np.bincount(labeled.ravel())
+    counts[0] = 0
+    return labeled == int(counts.argmax())
+
+
+def _hull_solidity(mask, subsample=6):
+    ys, xs = np.where(mask)
+    if len(ys) < 10:
+        return 0.0, 0.0
+    pts = np.column_stack([xs[::subsample], ys[::subsample]])
+    if len(pts) < 4:
+        pts = np.column_stack([xs, ys])
+    try:
+        hull = SpatialHull(pts)
+        return float(mask.sum()) / max(float(hull.volume), 1.0), float(hull.volume)
+    except Exception:
+        return 0.0, 0.0
+
+
+def _quad_corners(mask, subsample=4):
+    ys, xs = np.where(mask)
+    if len(ys) < 8:
+        return None
+    pts = np.column_stack([xs[::subsample], ys[::subsample]])
+    if len(pts) < 8:
+        pts = np.column_stack([xs, ys])
+    try:
+        hull   = SpatialHull(pts)
+        hverts = pts[hull.vertices].astype(float)
+    except Exception:
+        return None
+    closed = np.vstack([hverts, hverts[0]])
+    codes  = [MPath.MOVETO] + [MPath.LINETO] * (len(hverts) - 1) + [MPath.CLOSEPOLY]
+    return MPath(closed, codes)
+
+
+def compute_heat(arr, bsz=25):
+    H, W = arr.shape[:2]
+    lum = (0.299*arr[:,:,0] + 0.587*arr[:,:,1] + 0.114*arr[:,:,2]) / 255.0
+    var_map = np.zeros_like(lum)
+    for r in range(0, H-bsz, bsz):
+        for c in range(0, W-bsz, bsz):
+            var_map[r:r+bsz, c:c+bsz] = lum[r:r+bsz, c:c+bsz].var()
+    lum_n = (lum - lum.min()) / (lum.max() - lum.min() + 1e-8)
+    var_n = (var_map - var_map.min()) / (var_map.max() - var_map.min() + 1e-8)
+    return 0.5*lum_n + 0.5*var_n, lum_n
+
+
+def detect_plate_thermal(arr, floor_temp, bed_temp):
+    H, W = arr.shape[:2]
+    heat, lum_n = compute_heat(arr)
+    lum_floor = float(np.percentile(lum_n, 2))
+
+    NOZZLE_CLIP = 0.90
+    lum_det = lum_n.copy()
+    hot_frac = float((lum_det > NOZZLE_CLIP).mean())
+    if 0 < hot_frac < 0.04:
+        lum_det = np.clip(lum_det, None, NOZZLE_CLIP)
+
+    bsz = 25
+    best, best_pos = -1, (H//2, W//2)
+    for r in range(0, H-bsz, bsz):
+        for c in range(0, W-bsz, bsz):
+            m = lum_det[r:r+bsz, c:c+bsz].mean()
+            if m > best:
+                best = m; best_pos = (r+bsz//2, c+bsz//2)
+    hy_seed, hx_seed = best_pos
+    lum_anchor = float(lum_det[hy_seed, hx_seed])
+
+    if bed_temp and floor_temp:
+        scale    = (bed_temp - floor_temp) / max(lum_anchor - lum_floor, 1e-4)
+        temp_map = floor_temp + (lum_n - lum_floor) * scale
+    else:
+        bed_temp   = 100.0
+        floor_temp = 0.0
+        temp_map   = (lum_n - lum_floor) / max(lum_anchor - lum_floor, 1e-4) * 100.0
+
+    MIN_PX        = int(0.05 * H * W)
+    CLIFF_THRESH  = 0.05
+    MIN_COV_CLIFF = 0.25
+    N_STEPS       = 60
+    thresholds    = np.linspace(lum_anchor, lum_floor + 0.05, N_STEPS)
+    sweep = []
+
+    for t in thresholds:
+        mask = _largest_component(binary_closing(lum_det >= t, iterations=2))
+        px = int(mask.sum())
+        if px < MIN_PX:
+            continue
+        sol, _ = _hull_solidity(mask)
+        sweep.append((t, px, sol, mask))
+
+    best_thresh = None
+    best_mask   = None
+    cliff_delta = 0.0
+    best_sol    = 0.0
+
+    if len(sweep) >= 2:
+        max_drop, cliff_i = 0.0, -1
+        for i in range(1, len(sweep)):
+            drop = sweep[i-1][2] - sweep[i][2]
+            pre_cov = sweep[i-1][1] / (H * W)
+            if drop > max_drop and pre_cov >= MIN_COV_CLIFF:
+                max_drop, cliff_i = drop, i
+        if max_drop >= CLIFF_THRESH and cliff_i > 0:
+            best_thresh, _, best_sol, best_mask = sweep[cliff_i - 1]
+            cliff_delta = max_drop
+        else:
+            valid = [(t, px, sol, m) for t, px, sol, m in sweep if sol >= 0.82]
+            if valid:
+                best_thresh, _, best_sol, best_mask = max(valid, key=lambda x: x[1])
+
+    if best_mask is None:
+        best_thresh = (lum_anchor + lum_floor) / 2.0
+        best_mask   = _largest_component(
+            binary_closing(lum_n >= best_thresh, iterations=2))
+
+    plate_mask = best_mask
+    coverage_pct = 100.0 * plate_mask.sum() / (H * W)
+
+    ys, xs = np.where(plate_mask)
+    if len(ys) < 10:
+        ys, xs = np.mgrid[H//4:3*H//4, W//4:3*W//4]
+        ys, xs = ys.ravel(), xs.ravel()
+    cy = int(ys.mean());  cx = int(xs.mean())
+
+    boundary_path = _quad_corners(plate_mask)
+    if boundary_path is None:
+        x0, x1, y0, y1 = int(xs.min()), int(xs.max()), int(ys.min()), int(ys.max())
+        verts = [(x0,y0),(x1,y0),(x1,y1),(x0,y1),(x0,y0)]
+        codes = [MPath.MOVETO]+[MPath.LINETO]*3+[MPath.CLOSEPOLY]
+        boundary_path = MPath(verts, codes)
+
+    yy, xx  = np.mgrid[0:H, 0:W]
+    grid_xy = np.stack([xx.ravel(), yy.ravel()], axis=1)
+    hull_mask = boundary_path.contains_points(grid_xy).reshape(H, W)
+    ring = binary_dilation(hull_mask, iterations=6) & ~hull_mask
+
+    outside_norm = 0.0
+    if ring.any():
+        outside_norm = float((lum_n[ring].mean() - lum_floor) /
+                              max(lum_anchor - lum_floor, 1e-4))
+
+    hot_flat  = int(np.argmax(lum_n * plate_mask.astype(float)))
+    hy_g = hot_flat // W;  hx_g = hot_flat % W
+    cool_flat = np.argmin(lum_n); cy_c = cool_flat // W; cx_c = cool_flat % W
+    hot_in    = bool(hull_mask[hy_g, hx_g])
+    cool_out  = not bool(hull_mask[cy_c, cx_c])
+    validation_pass = hot_in and cool_out
+
+    tick_temps = [floor_temp,
+                  int(floor_temp + 0.33*(bed_temp - floor_temp)),
+                  int(floor_temp + 0.67*(bed_temp - floor_temp)),
+                  bed_temp]
+    tick_norms = [(t - floor_temp) / max(bed_temp - floor_temp, 1) for t in tick_temps]
+
+    return dict(
+        arr=arr, heat=heat, lum_n=lum_n, temp_map=temp_map,
+        boundary_path=boundary_path, hull_mask=hull_mask,
+        cen=(cy, cx), hot=(hx_g, hy_g), cool=(cx_c, cy_c),
+        val=f"▲ hot {'✓' if hot_in else '✗'} inside · ▼ cool {'✓' if cool_out else '✗'} outside",
+        floor_temp=floor_temp, bed_temp=bed_temp,
+        tick_temps=tick_temps, tick_norms=tick_norms,
+        lum_anchor=lum_anchor, lum_floor=lum_floor,
+        coverage_pct=coverage_pct, cliff_delta=cliff_delta,
+        solidity=best_sol, outside_norm=outside_norm,
+        validation_pass=validation_pass,
+    )
+
+
+def _add_colorbar(ax, fig, p):
+    from mpl_toolkits.axes_grid1 import make_axes_locatable
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes('right', size='3%', pad=0.05)
+    sm = plt.cm.ScalarMappable(cmap='inferno', norm=plt.Normalize(0, 1))
+    sm.set_array([])
+    cbar = fig.colorbar(sm, cax=cax)
+    cbar.set_ticks(p['tick_norms'])
+    cbar.set_ticklabels([f"{t}°" for t in p['tick_temps']])
+    cbar.ax.yaxis.set_tick_params(color='lightgray', labelsize=7)
+    plt.setp(cbar.ax.yaxis.get_ticklabels(), color='lightgray')
+    cbar.set_label('°C', color='lightgray', fontsize=7)
+
+
+def _offset_path(path, dy):
+    verts = path.vertices.copy()
+    verts[:, 1] += dy
+    return MPath(verts, path.codes)
+
+
+def render_and_save(raw_img: Image.Image, p: dict, out_path: Path,
+                    title: str, bed_label: str, floor_label: str,
+                    path_dy: int) -> None:
+    disp_arr = np.array(raw_img)
+
+    def make_comp(img_pil, heat):
+        rgba = (cm.get_cmap('inferno')(heat)*255).astype(np.uint8)
+        hp = Image.fromarray(rgba, 'RGBA')
+        hp.putalpha(Image.fromarray((heat*140).astype(np.uint8)))
+        return Image.alpha_composite(img_pil.convert('RGBA'), hp).convert('RGB')
+
+    bpath = _offset_path(p['boundary_path'], path_dy)
+    floor_temp = p['floor_temp']
+    bed_temp   = p['bed_temp']
+
+    # Panel 1: camera + overlay
+    comp = make_comp(Image.fromarray(disp_arr),
+                     np.zeros(disp_arr.shape[:2]))
+    # Panel 2: thermal map
+    dH, dW = disp_arr.shape[:2]
+    lum_d = (0.299*disp_arr[:,:,0] + 0.587*disp_arr[:,:,1] +
+             0.114*disp_arr[:,:,2]) / 255.0
+    lum_d_n = (lum_d - lum_d.min()) / (lum_d.max() - lum_d.min() + 1e-8)
+    temp_d  = floor_temp + (lum_d_n - p['lum_floor']) / \
+              max(p['lum_anchor'] - p['lum_floor'], 1e-4) * (bed_temp - floor_temp)
+    temp_norm = np.clip((temp_d - floor_temp) / max(bed_temp - floor_temp, 1), 0, 1)
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(22, 9), facecolor='#111')
+    ax1.set_facecolor('#111'); ax2.set_facecolor('#111')
+
+    ax1.imshow(np.array(comp))
+    ax1.add_patch(patches.PathPatch(bpath, lw=2, edgecolor='cyan', facecolor='none', linestyle='--'))
+    cy, cx = p['cen'][0] + path_dy, p['cen'][1]
+    ax1.plot(cx, cy, 'w*', ms=10, label='centroid')
+    ax1.plot(p['hot'][0], p['hot'][1]+path_dy, 'ro', ms=7, label='hottest ▲')
+    ax1.plot(p['cool'][0], p['cool'][1]+path_dy, 'bs', ms=7, label='coolest ▼')
+    ax1.set_title("Camera + Boundary", fontsize=9, pad=4, color='white')
+    ax1.set_xlabel(p['val'], fontsize=7, color='lightgray')
+    ax1.set_xticks([]); ax1.set_yticks([])
+    ax1.legend(fontsize=6, loc='upper right', framealpha=0.4, labelcolor='white', facecolor='#333')
+    _add_colorbar(ax1, fig, p)
+
+    ax2.imshow(temp_norm, cmap='inferno', vmin=0, vmax=1, interpolation='bilinear')
+    ax2.add_patch(patches.PathPatch(bpath, lw=2, edgecolor='cyan', facecolor='none', linestyle='--'))
+    ax2.plot(cx, cy, 'w*', ms=10, label='centroid')
+    ax2.plot(p['hot'][0], p['hot'][1]+path_dy, 'ro', ms=7, label='hottest ▲')
+    ax2.plot(p['cool'][0], p['cool'][1]+path_dy, 'bs', ms=7, label='coolest ▼')
+    ax2.set_title(f"Thermal Map  —  floor {floor_label} → bed {bed_label}", fontsize=9, pad=4, color='white')
+    ax2.set_xlabel(p['val'], fontsize=7, color='lightgray')
+    ax2.set_xticks([]); ax2.set_yticks([])
+    ax2.legend(fontsize=6, loc='upper right', framealpha=0.4, labelcolor='white', facecolor='#333')
+    _add_colorbar(ax2, fig, p)
+
+    fig.suptitle(title, color='lightgray', fontsize=10, y=1.01)
+    plt.tight_layout(pad=0.5)
+    plt.savefig(str(out_path), dpi=150, bbox_inches='tight', facecolor='#111')
+    plt.close()
+
+
+def crop_plate(img: Image.Image) -> Image.Image:
+    W, H = img.size
+    return img.crop((int(0.06*W), int(0.36*H), int(0.78*W), H))
+
+def crop_plate_display(img: Image.Image) -> Image.Image:
+    W, H = img.size
+    return img.crop((int(0.06*W), int(0.28*H), int(0.78*W), H))
+
+def path_dy_for(img: Image.Image) -> int:
+    _, H = img.size
+    return int(0.36 * H) - int(0.28 * H)
+
+
+# ---------------------------------------------------------------------------
+# GitHub comment
+# ---------------------------------------------------------------------------
+def post_github_comment(body: str) -> None:
+    try:
+        subprocess.run(
+            ["gh", "issue", "comment", str(GITHUB_ISSUE),
+             "--repo", GITHUB_REPO, "--body", body],
+            check=True, capture_output=True)
+    except Exception as e:
+        logging.warning(f"Failed to post GitHub comment: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Monitor loop
+# ---------------------------------------------------------------------------
+def run_monitor() -> None:
+    OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s  %(levelname)s  %(message)s",
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+        ])
+    log = logging.getLogger("thermal_monitor")
+
+    log.info("Starting thermal snapshot monitor")
+    ip          = _secret(f"{PRINTER_SECRET_PFX}_ip")
+    access_code = _secret(f"{PRINTER_SECRET_PFX}_access_code")
+    auth        = _secret("bpm_api_auth")
+
+    # --- Baseline (ambient) temps ---
+    # If the printer is already hot (job already running), use the floor default
+    # so cool-down detection targets actual ambient, not the preheated state.
+    log.info("Capturing baseline temperatures (ambient)...")
+    state = _get_printer_state(auth)
+    climate = (state.get("_printer_state") or {}).get("climate") or {}
+    raw_bed     = float(climate.get("bed_temp") or 0)
+    raw_chamber = float(climate.get("chamber_temp") or 0)
+    if raw_bed > 50 or raw_chamber > 35:
+        baseline_bed     = float(FLOOR_TEMP_DEFAULT)
+        baseline_chamber = float(FLOOR_TEMP_DEFAULT)
+        log.info(f"Printer already hot ({raw_bed}°C bed / {raw_chamber}°C chamber) — using ambient baseline: {baseline_bed}°C")
+    else:
+        baseline_bed     = raw_bed or float(FLOOR_TEMP_DEFAULT)
+        baseline_chamber = raw_chamber or float(FLOOR_TEMP_DEFAULT)
+        log.info(f"Baseline: bed={baseline_bed}°C  chamber={baseline_chamber}°C")
+
+    # --- Wait for job start ---
+    log.info(f"Waiting for print job to start (polling every {POLL_INTERVAL_S}s)...")
+    subtask_name = "unknown"
+    while True:
+        state = _get_printer_state(auth)
+        gcode_state = (state.get("_printer_state") or {}).get("gcode_state", "UNKNOWN")
+        job = state.get("_active_job_info") or {}
+        subtask_name = job.get("subtask_name", "unknown") or "unknown"
+        if gcode_state in ("RUNNING", "PREPARE"):
+            log.info(f"Job started: '{subtask_name}' (gcode_state={gcode_state})")
+            break
+        log.info(f"  gcode_state={gcode_state} — waiting...")
+        time.sleep(POLL_INTERVAL_S)
+
+    # --- Setup output directory ---
+    safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in subtask_name)
+    ts_start  = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    out_dir   = OUTPUT_ROOT / f"{safe_name}_{ts_start}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    log_handler = logging.FileHandler(out_dir / "monitor.log")
+    log_handler.setFormatter(logging.Formatter("%(asctime)s  %(levelname)s  %(message)s"))
+    log.addHandler(log_handler)
+    log.info(f"Output directory: {out_dir}")
+    log.info(f"Capture interval: {CAPTURE_INTERVAL_S}s")
+
+    captures = []
+    seq = 0
+    cooldown_count = 0
+    job_done = False
+
+    # --- Capture loop ---
+    while True:
+        seq += 1
+        ts = datetime.now(timezone.utc)
+        ts_str = ts.strftime("%Y%m%d_%H%M%S")
+        log.info(f"--- Capture #{seq} ---")
+
+        try:
+            raw_img, bed_temp, chamber_temp, gcode_state, layer, progress, subtask_name = \
+                fetch_snapshot(ip, access_code, auth)
+        except Exception as e:
+            log.warning(f"  fetch_snapshot failed: {e} — skipping")
+            time.sleep(CAPTURE_INTERVAL_S)
+            continue
+
+        bed_label   = f"{bed_temp:.0f}°" if bed_temp else "?"
+        floor_label = f"{chamber_temp:.0f}°" if chamber_temp else f"{FLOOR_TEMP_DEFAULT}°"
+        log.info(f"  bed={bed_label}  chamber={floor_label}  state={gcode_state}  "
+                 f"layer={layer}  progress={progress}%")
+
+        floor_temp = chamber_temp if chamber_temp else FLOOR_TEMP_DEFAULT
+
+        try:
+            crop_pil = crop_plate(raw_img)
+            disp_pil = crop_plate_display(raw_img)
+            dy       = path_dy_for(raw_img)
+            p        = detect_plate_thermal(np.array(crop_pil), floor_temp, bed_temp)
+
+            png_name  = f"{seq:04d}_{ts_str}_b{int(bed_temp or 0)}_c{int(chamber_temp or 0)}.png"
+            json_name = f"{seq:04d}_{ts_str}.json"
+            png_path  = out_dir / png_name
+
+            title = (f"H2D Thermal  |  #{seq}  |  {ts_str}  |  "
+                     f"Bed: {bed_label}C  ·  Chamber: {floor_label}C  |  "
+                     f"State: {gcode_state}  Layer: {layer}  {progress}%")
+            render_and_save(disp_pil, p, png_path, title, bed_label, floor_label, dy)
+
+            meta = {
+                "seq": seq,
+                "timestamp": ts.isoformat(),
+                "gcode_state": gcode_state,
+                "layer": layer,
+                "progress": progress,
+                "bed_temp": bed_temp,
+                "chamber_temp": chamber_temp,
+                "baseline_bed": baseline_bed,
+                "baseline_chamber": baseline_chamber,
+                "lum_anchor": round(p["lum_anchor"], 4),
+                "lum_floor": round(p["lum_floor"], 4),
+                "coverage_pct": round(p["coverage_pct"], 1),
+                "cliff_delta": round(p["cliff_delta"], 4),
+                "solidity": round(p["solidity"], 4),
+                "outside_norm": round(p["outside_norm"], 4),
+                "validation_pass": p["validation_pass"],
+                "png": png_name,
+            }
+            (out_dir / json_name).write_text(json.dumps(meta, indent=2))
+            captures.append(meta)
+            log.info(f"  saved {png_name}  coverage={p['coverage_pct']:.1f}%  "
+                     f"norm={p['outside_norm']:.2f}  val={'✓' if p['validation_pass'] else '✗'}")
+
+        except Exception as e:
+            log.warning(f"  thermal analysis failed: {e}")
+            captures.append({"seq": seq, "timestamp": ts.isoformat(),
+                              "gcode_state": gcode_state, "bed_temp": bed_temp,
+                              "chamber_temp": chamber_temp, "error": str(e)})
+
+        # --- Check for job completion ---
+        if not job_done and gcode_state in ("FINISH", "FAILED", "IDLE"):
+            log.info(f"Job ended (gcode_state={gcode_state}). Entering cool-down monitoring.")
+            job_done = True
+
+        # --- Cool-down check (only after job ends) ---
+        if job_done and bed_temp is not None:
+            bed_ok  = bed_temp <= baseline_bed + BED_COOLDOWN_DELTA
+            cham_ok = (chamber_temp is None or
+                       chamber_temp <= baseline_chamber + CHAM_COOLDOWN_DELTA)
+            if bed_ok and cham_ok:
+                cooldown_count += 1
+                log.info(f"  Cool-down reading {cooldown_count}/{COOLDOWN_READINGS} "
+                         f"(bed={bed_label}, chamber={floor_label})")
+                if cooldown_count >= COOLDOWN_READINGS:
+                    log.info("Cool-down complete. Stopping monitor.")
+                    break
+            else:
+                if cooldown_count > 0:
+                    log.info(f"  Temps not yet stable — resetting cooldown counter")
+                cooldown_count = 0
+
+        time.sleep(CAPTURE_INTERVAL_S)
+
+    # --- Summary ---
+    total = len(captures)
+    errors = sum(1 for c in captures if "error" in c)
+    first = next((c for c in captures if "error" not in c), None)
+    last  = next((c for c in reversed(captures) if "error" not in c), None)
+    duration_min = (datetime.now(timezone.utc) -
+                    datetime.fromisoformat(captures[0]["timestamp"])).seconds // 60
+
+    summary_lines = [
+        f"## Thermal Snapshot Monitor — Run Complete",
+        f"",
+        f"**Job:** {subtask_name}",
+        f"**Output:** `{out_dir}`",
+        f"**Duration:** ~{duration_min} min  |  **Captures:** {total} total, {errors} errors",
+        f"",
+        f"**Baseline (ambient):** bed={baseline_bed}°C, chamber={baseline_chamber}°C",
+        f"",
+    ]
+    if first:
+        summary_lines += [
+            f"**First capture (#{first['seq']}):** "
+            f"bed={first.get('bed_temp')}°C, chamber={first.get('chamber_temp')}°C, "
+            f"coverage={first.get('coverage_pct', '?')}%, norm={first.get('outside_norm', '?')}",
+        ]
+    if last and last != first:
+        summary_lines += [
+            f"**Last capture (#{last['seq']}):** "
+            f"bed={last.get('bed_temp')}°C, chamber={last.get('chamber_temp')}°C, "
+            f"coverage={last.get('coverage_pct', '?')}%, norm={last.get('outside_norm', '?')}",
+        ]
+    summary_lines += [
+        f"",
+        f"Captures saved to `{out_dir}` — PNG + JSON sidecar per frame.",
+        f"Ready for model refinement analysis.",
+    ]
+    summary = "\n".join(summary_lines)
+    log.info("\n" + summary)
+
+    post_github_comment(summary)
+    log.info(f"Summary posted to issue #{GITHUB_ISSUE}.")
+
+
+if __name__ == "__main__":
+    run_monitor()
