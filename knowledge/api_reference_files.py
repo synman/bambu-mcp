@@ -52,7 +52,25 @@ Renames file on SD card via FTPS move. Returns updated SD card contents.
 Creates directory on SD card. Returns updated SD card contents.
 
 #### sdcard_file_exists(path: str) -> bool
-Checks if file exists at path on SD card.
+Checks whether a specific file exists on the printer's SD card via a live FTPS query
+(`ftps.fexists(path)`). Returns `True` if the file is present, `False` otherwise.
+
+Unlike `get_sdcard_contents()` and `get_sdcard_3mf_files()` which use a cached directory
+tree, `sdcard_file_exists()` opens a fresh FTPS connection and queries the printer directly —
+the result is always current, not stale cache.
+
+**When to use it:**
+- Verify a file upload succeeded before starting a print job
+- Check whether a .3mf file already exists before uploading to avoid overwriting
+- Confirm a file was deleted after calling `delete_sdcard_file()`
+- Pre-print validation: ensure the target gcode file is present before calling `print_3mf_file()`
+
+**Path format:** full SD card path, e.g. `"/cache/my_model.gcode.3mf"` or `"/model/parts.3mf"`.
+Same path convention used by all other FTPS methods.
+
+**Cost:** opens an FTPS connection for each call — prefer the cached listing tools
+(`list_sdcard_files`, `get_sdcard_contents`) for bulk enumeration. Use `sdcard_file_exists()`
+only when a single authoritative yes/no answer is needed.
 
 ---
 
