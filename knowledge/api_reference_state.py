@@ -88,6 +88,7 @@ Located at: bambu-printer-manager/src/bpm/bambuconfig.py
 | spaghetti_detector | False | xcam.cfg bit 7 | X-Cam AI: detects loose spaghetti strands from a delaminated/detached print. Guarded by has_spaghetti_detector_support. |
 | spaghetti_detector_sensitivity | "medium" | low/medium/high | Sensitivity for spaghetti_detector. Low = fewer false positives; high = catches subtle failures earlier. |
 | purgechutepileup_detector | False | xcam.cfg bit 10 | X-Cam AI: detects purge waste pile-up in chute. Primarily relevant during multi-color prints. Guarded by has_purgechutepileup_detector_support. |
+| purgechutepileup_detector_sensitivity | "medium" | low/medium/high | Sensitivity for the purge chute pile-up detector. Mirrors the documented pattern of spaghetti_detector_sensitivity, nozzleclumping_detector_sensitivity, airprinting_detector_sensitivity. |
 | nozzleclumping_detector | False | xcam.cfg bit 13 | X-Cam AI: newer/preferred path for nozzle blob detection; supersedes nozzle_blob_detect on supported printers. Guarded by has_nozzleclumping_detector_support. |
 | nozzleclumping_detector_sensitivity | "medium" | low/medium/high | Sensitivity for nozzleclumping_detector. |
 | airprinting_detector | False | xcam.cfg bit 16 | X-Cam AI: newer/preferred path for air-printing detection; supersedes air_print_detect on supported printers. Guarded by has_airprinting_detector_support. |
@@ -136,6 +137,7 @@ Auto-discovered from telemetry on connection.
 | has_nozzleclumping_detector_support | fun bit 44 | xcam nozzleclumping_detector is supported (preferred over nozzle_blob_detect). |
 | has_airprinting_detector_support | fun bit 45 | xcam airprinting_detector is supported (preferred over air_print_detect). |
 | has_buildplate_marker_detector_support | **always False in current bpm** (not decoded from telemetry; xcam.buildplate_marker_detector is the protocol source but bpm bambustate.py does not read it) | xcam buildplate_marker_detector is supported. |
+| has_air_filtration | device.airduct block present in push_status | True when an airduct/air-filtration unit is connected (H2D). Enables zone-based fan and airduct fields in BambuClimate. |
 
 ---
 
@@ -163,6 +165,9 @@ Key fields:
 | print_error | int | print.print_error |
 | hms_errors | list[dict] | print.hms |
 | climate | BambuClimate | Multiple telemetry sources |
+| stat | str (hex) | print.stat — raw bitfield used to derive is_chamber_door_open (bit 23) and is_chamber_lid_open (bit 24). Sibling of fun (also hex, documented in BambuConfig). |
+| target_tray_id | int | Tray ID the active extruder is loading toward (target, not yet active). -1 if none. |
+| ams_exist_bits | int | ams.ams_exist_bits — decoded bitmask of which AMS slots have trays present. |
 
 BambuClimate key fields:
 
@@ -176,9 +181,30 @@ BambuClimate key fields:
 | aux_fan_speed_percent | print.big_fan1_speed OR zone_aux |
 | exhaust_fan_speed_percent | print.big_fan2_speed OR zone_exhaust |
 | is_chamber_door_open | stat bit 23 (if has_chamber_door_sensor) |
+| is_chamber_lid_open | stat bit 24 (if has_chamber_door_sensor) — chamber lid open state; sibling of is_chamber_door_open (stat bit 23) |
+| airduct_mode | device.airduct.modeCur — raw int: 0=COOL_MODE, 1=HEAT_MODE, other=NOT_SUPPORTED. air_conditioning_mode (enum) is preferred; this is the underlying raw int. |
+| airduct_sub_mode | device.airduct.subMode — raw airduct sub-mode int. |
+| zone_part_fan_percent | airduct.parts[id=16].state — H2D zone-based part cooling fan (0–100). Present only when has_chamber_temp=True (H2D). |
+| zone_aux_percent | airduct.parts[id=32].state — H2D zone-based aux fan (0–100). H2D only. |
+| zone_exhaust_percent | airduct.parts[id=48].state — H2D zone-based exhaust fan (0–100). H2D only. |
+| zone_intake_open | airduct.parts[id=96].state != 0 — whether the intake zone is open. H2D only. |
+| zone_top_vent_open | Derived: zone_exhaust_percent > 0 AND NOT zone_intake_open. H2D only. |
 | air_conditioning_mode | device.airduct.modeCur |
 
 Fan speed scaling: raw 0-15 → percent: `round((val/15.0)*100)`.
+
+ExtruderState key fields (per-extruder; from `extruders` list in BambuState):
+
+| Field | Type | Description |
+|---|---|---|
+| extruder_id | int | 0=right/primary, 1=left (H2D only) |
+| diameter_mm | float | Nozzle diameter in mm |
+| nozzle_type | NozzleType | Nozzle material (HARDENED_STEEL, BRASS, etc.) |
+| flow_type | NozzleFlowType | Flow characteristic (STANDARD, HIGH_FLOW, TPU_HIGH_FLOW) |
+| active_tray_id | int | Currently loaded spool slot (0–3, 254=external) |
+| tray_state | TrayState | LOADED/UNLOADED/LOADING/UNLOADING |
+| target_tray_id | int | Target tray the extruder is loading toward. Sibling of active_tray_id. -1 if none. |
+| assigned_to_ams_id | int | AMS unit ID this extruder is assigned to (-1 if none). Used to match extruder↔AMS on H2D. |
 
 ---
 

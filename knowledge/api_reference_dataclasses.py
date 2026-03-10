@@ -35,6 +35,9 @@ BambuSpool(
     remaining_percent: int = 0,  # -1 if unknown
     slot_id: int = -1,      # Slot within AMS (0-3) or external tray ID (254-255)
     ams_id: int = -1,       # AMS unit ID (-1 = no AMS)
+    state: int = 0,         # Raw RFID state value from AMS tray. Interpretable via parseRFIDStatus(). 0 = no tag read.
+    total_length: int = 0,  # Total filament length (mm) from RFID tag data. 0 if unavailable.
+    tray_weight: int = 0,   # Spool weight (grams) from RFID tag data. 0 if unavailable.
 )
 ```
 
@@ -90,6 +93,9 @@ Accessible via `BambuPrinter.active_job_info`.
 | wall_start_time | float | time.time() at PREPARE/RUNNING transition; persisted to ~/.bpm/elapsed/ |
 | subtask_name | str | print.subtask_name |
 | gcode_file | str | print.gcode_file |
+| plate_type | PlateType enum | Build plate type from the active job's 3mf metadata (e.g. PlateType.HOT_PLATE). Set from project_file command. |
+| print_type | str | Print type string from project_file command (e.g. "idle", "normal", "calibration"). |
+| plate_num | int | Plate number being printed (-1 if not yet set). Complements project_info.plate_num. |
 
 ---
 

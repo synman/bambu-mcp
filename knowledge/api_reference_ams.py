@@ -117,4 +117,23 @@ Enables/disables nozzle clumping/blob detector. module_name="clump_detector".
 
 #### set_airprinting_detector(enabled: bool, sensitivity: DetectorSensitivity = DetectorSensitivity.MEDIUM) -> None
 Enables/disables air-printing/no-extrusion detector. module_name="airprint_detector".
+
+---
+
+## AMSUnitState (dataclass)
+
+Located at: bambu-printer-manager/src/bpm/bambustate.py
+Populated from `ams.ams[]` combined with `info.module[]`. Accessible via `BambuState.ams_units`.
+
+| Field | Type | Description |
+|---|---|---|
+| unit_id | int | 0-based user-facing index (0=first AMS, 1=second). NOT the same as chip_id. |
+| model | AMSModel | AMS hardware model (AMS_2_PRO, AMS_HT, AMS_LITE, etc.) |
+| humidity_index | int | 1=WET (alert) to 5=DRY (good). Higher = drier. 0=unavailable. Only 1–2 indicate a moisture problem. |
+| temp | float | Current AMS temperature (°C) |
+| temp_target | int | Dryer target temperature (°C); 0 when not drying |
+| heater_state | bool | True when the dryer heater is active |
+| is_drying | bool | True when dryer is running |
+| tray_exist | list[bool] | Slot presence flags for all 4 slots (index 0–3) |
+| assigned_to_extruder | ActiveTool enum | Which extruder this AMS unit feeds. H2D: AMS 2 Pro (unit_id 0) → RIGHT extruder (0), AMS HT (unit_id 1) → LEFT extruder (1). Set from ams_info parsing when has_dual_extruder. Critical for H2D AMS routing decisions. Single-extruder printers: always RIGHT_EXTRUDER (0). |
 """

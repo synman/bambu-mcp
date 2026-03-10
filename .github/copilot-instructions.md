@@ -433,6 +433,10 @@ The following BPM methods are **intentionally not** exposed as MCP tools or HTTP
 | `start_session()` | **B** | Session lifecycle managed by the mcp server process at startup. Not a user-facing operation; calling it outside the server's initialization sequence is unsafe. |
 | `quit()` | **B** | Hard-shutdown of the bpm session. Managed by the mcp server process lifecycle. User-facing teardown path is `remove_printer` / `pause_mqtt_session`. |
 | `set_chamber_temp()` + `external_chamber` flag | **D** | Advanced external sensor injection framework for non-managed chamber solutions. `set_chamber_temp()` injects a current ambient reading into local state; `external_chamber=True` in BambuConfig suppresses MQTT telemetry parsing so injected readings persist. This is a hardware configuration feature requiring matching bpm config setup; no agent use case without that context. `set_chamber_temp_target()` (covered) handles the standard target-setting path for all printer types. |
+| `BambuState.active_tray_state_name` | **A** | Derived convenience string — string name of `active_tray_state` enum. Surfaced in `/api/printer` full JSON; no separate documentation needed. |
+| `ExtruderState.info_bits` | **A** | Raw extruder info bitfield used internally to derive `state` (ExtruderInfoState). No direct agent use case; present in serialized output only. |
+| `ActiveJobInfo.project_info_fetch_attempted` | **A** | Internal diagnostic flag — whether `get_project_info()` has been attempted for this job. Not user-actionable; present in serialized output only. |
+| `BambuSpool.state` (raw RFID) | **C** | Raw RFID state integer. Surfaced in `/api/printer` full JSON; the derived `display_name` and `color` fields provide all user-relevant spool identification. |
 
 ### Coverage audit checklist
 
