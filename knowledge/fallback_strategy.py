@@ -15,6 +15,23 @@ from knowledge.references import REFERENCES
 
 ESCALATION_TIERS = [
     {
+        "tier": "0",
+        "name": "Mechanism Recovery Gate (pre-escalation)",
+        "description": (
+            "Before treating any tier as exhausted, determine WHY Tier 1 failed. "
+            "There are two distinct failure modes — only one justifies escalation: "
+            "(1) MECHANISM FAILURE — tools are unavailable or uncallable (FastMCP connection "
+            "down, tools not registered after session resume). Recovery: run mcp-reload, wait "
+            "for tools to return, retry Tier 1. Do NOT escalate to Tier 1b or beyond. "
+            "(2) COVERAGE FAILURE — tools are callable and return data, but the required field "
+            "or action is genuinely absent. This is the only condition that justifies advancing "
+            "to Tier 1b. Escalating due to mechanism failure is a Root Cause Fix Rule violation."
+        ),
+        "tool": "~/bin/mcp-reload via bash",
+        "reliability": "Resolves mechanism failure completely — restores full Tier 1 access",
+        "permission_gate": False,
+    },
+    {
         "tier": 1,
         "name": "Baked-in Knowledge + MCP Tools",
         "description": (
@@ -102,7 +119,28 @@ ESCALATION_POLICY_TEXT = """
 ## Knowledge Escalation Policy
 
 When baked-in knowledge does not fully answer a question about Bambu Lab protocol,
-API behavior, or firmware semantics, follow this mandatory 3-tier escalation:
+API behavior, or firmware semantics, follow this mandatory escalation sequence.
+
+### Mechanism Recovery Gate (before Tier 1 exhaustion applies)
+Before treating Tier 1 as exhausted and escalating, determine WHY the tools failed.
+Two distinct failure modes exist — only one justifies escalation:
+
+**MECHANISM FAILURE** — tools are unavailable or uncallable:
+- `tools_changed_notice` removed bambu-mcp tools
+- Tool call fails because tool no longer exists
+- Session resumed (`-i done`) but bambu-mcp tools are absent from the tool list
+
+→ **Recovery action:** run `~/bin/mcp-reload` via bash, wait for session to resume,
+  verify bambu-mcp tools are present, then retry Tier 1.
+→ **Do NOT escalate to Tier 1b or beyond** — mechanism failure is recoverable.
+  Escalating to HTTP REST / curl / Python imports before running mcp-reload is a
+  Root Cause Fix Rule violation: the fix is known and direct; workarounds are prohibited.
+
+**COVERAGE FAILURE** — tools are callable and return data, but the required field or
+action is genuinely absent across all relevant targeted tools.
+
+→ This is the only condition that satisfies "Tier 1 exhausted" and permits escalation.
+→ Follow the exhaustion criteria below before advancing.
 
 ### Tier 1 — MCP's Own Knowledge (always first)
 Read the knowledge/ modules via bambu://knowledge/* resources or get_knowledge_topic():
