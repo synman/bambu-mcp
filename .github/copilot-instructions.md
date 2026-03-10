@@ -133,7 +133,7 @@ Apply when authoring or reviewing tools and docstrings: if a naive agent could n
 - Use `printer.*` methods for all printer interactions.
 - Import BPM library modules (`from bpm.*`) only for types, helpers, and project parsing.
 - BPM is stable — do not modify it to solve MCP-layer problems.
-- `bambu-printer-app` is a **knowledge reference only** — it must not be referenced or imported at runtime.
+- `bambu-printer-app` is a **knowledge reference only** — it must not be referenced or imported at runtime. **Never search, grep, read, or mention `bambu-printer-app` source during any coverage audit, baseline audit, or bpm→mcp traceability work.** It is entirely out of scope for these processes.
 - No tool may open its own direct FTPS, MQTT, socket, or HTTP connection to a printer — **with one exception**: camera streaming.
 - **Camera streaming exception**: the `camera/` module is explicitly permitted to open direct connections to the printer for video data only:
   - **TCP+TLS port 6000** — A1/P1 series camera protocol (`TCPFrameBuffer` in `camera/tcp_stream.py`)
