@@ -161,4 +161,43 @@ Returns `{"status": "ok"}`.
 
 Use `GET /api/alerts` to both retrieve and clear in one call.
 See `get_knowledge_topic('behavioral_rules/alerts')` for alert type schemas and payload fields.
+
+---
+
+## GET /api/user_prefs
+
+Return the stored user preference for a printer+key pair.
+
+Query parameters:
+- `printer` — printer name (required)
+- `key`     — preference key without the printer prefix (required). Examples: `bed_leveling`,
+  `flow_calibration`, `timelapse`, `speed_level`, `ams0:target_temp`, `ams0:duration_hours`
+
+The full storage key is `"{printer}:{key}"`.
+
+Returns `{"key": "<printer>:<key>", "value": <stored_value>}` or `{"key": ..., "value": null}` if not set.
+No user_permission guard — preferences are non-destructive read operations.
+
+Sticky field keys by tool:
+- `print_file`: `bed_leveling` (default True), `flow_calibration` (default False), `timelapse` (default False)
+- `start_ams_dryer`: `ams{unit_id}:target_temp` (default 55), `ams{unit_id}:duration_hours` (default 4), `ams{unit_id}:rotate_tray` (default False)
+- `set_print_speed`: `speed_level` (no factory default — required field)
+
+---
+
+## POST /api/user_prefs
+
+Set a stored user preference for a printer+key pair.
+
+JSON body:
+- `printer` — printer name (required)
+- `key`     — preference key without the printer prefix (required; same key space as GET)
+- `value`   — value to store (required; any JSON-serializable type: bool, int, float, str)
+
+The full storage key is `"{printer}:{key}"`.
+
+Returns `{"success": true}`.
+No user_permission guard — preferences are non-destructive and do not affect the printer.
+
+Preferences are persisted to `~/.bambu-mcp/user_prefs.json` and survive server restarts.
 """

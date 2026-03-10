@@ -2401,6 +2401,64 @@ def _build_app():
             log.error("alerts: error: %s", e, exc_info=True)
             return _err(str(e))
 
+    @app.route("/api/user_prefs", methods=["GET"])
+    def get_user_pref():
+        """Return the stored preference for a printer+key pair.
+
+        Query parameters:
+          printer — printer name (required)
+          key     — preference key, e.g. "bed_leveling" (required)
+
+        Returns {"key": "<printer>:<key>", "value": <value>} or {"value": null} if not set.
+        No write operation — no user_permission required.
+        """
+        log.debug("get_user_pref: called")
+        args = _rargs()
+        printer_name = args.get("printer", "")
+        key = args.get("key", "")
+        if not printer_name or not key:
+            return _err("printer and key are required", HTTPStatus.BAD_REQUEST)
+        try:
+            from user_prefs import get_pref
+            full_key = f"{printer_name}:{key}"
+            value = get_pref(full_key)
+            log.debug("get_user_pref: %s → %r", full_key, value)
+            return jsonify({"key": full_key, "value": value})
+        except Exception as e:
+            log.error("get_user_pref: error: %s", e, exc_info=True)
+            return _err(str(e))
+
+    @app.route("/api/user_prefs", methods=["POST"])
+    def set_user_pref():
+        """Set a stored preference for a printer+key pair.
+
+        JSON body:
+          printer — printer name (required)
+          key     — preference key, e.g. "bed_leveling" (required)
+          value   — value to store (required; any JSON-serializable type)
+
+        Returns {"success": true}.
+        No write operation on the printer — no user_permission required.
+        """
+        log.debug("set_user_pref: called")
+        args = _rargs()
+        printer_name = args.get("printer", "")
+        key = args.get("key", "")
+        if not printer_name or not key:
+            return _err("printer, key, and value are required", HTTPStatus.BAD_REQUEST)
+        if "value" not in args:
+            return _err("printer, key, and value are required", HTTPStatus.BAD_REQUEST)
+        try:
+            from user_prefs import set_pref
+            full_key = f"{printer_name}:{key}"
+            value = args["value"]
+            set_pref(full_key, value)
+            log.debug("set_user_pref: %s ← %r", full_key, value)
+            return jsonify({"success": True})
+        except Exception as e:
+            log.error("set_user_pref: error: %s", e, exc_info=True)
+            return _err(str(e))
+
     @app.errorhandler(500)
     def handle_500(e):
         import traceback

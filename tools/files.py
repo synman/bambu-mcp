@@ -606,20 +606,33 @@ def print_file(
     STEP 1 — Gather everything first (no user interaction yet):
       Call get_project_info(), get_ams_units(), get_spool_info() to collect all data
       needed to build the complete summary before asking the user anything.
+      Also look up stored preferences for each sticky field using user_prefs:
+        from user_prefs import get_pref
+        bed_leveling     = get_pref(f"{name}:bed_leveling",     True)
+        flow_calibration = get_pref(f"{name}:flow_calibration", False)
+        timelapse        = get_pref(f"{name}:timelapse",        False)
+      Factory defaults: bed_leveling=True, flow_calibration=False, timelapse=False.
+      Label each field "(your preference)" if the stored value differs from the factory
+      default, or "(default)" if it matches the factory default.
 
     STEP 2 — Present ONE complete summary containing ALL of the following:
       - Part name(s) and filament(s) from the project metadata
       - bed_type (from metadata) — ask: is this correct for the plate physically on the bed?
       - ams_mapping — show each filament → AMS unit/slot; ask: matches what's loaded?
-      - flow_calibration (default False) — ask: run flow calibration before printing?
-      - timelapse (default False) — ask: record a timelapse?
-      - bed_leveling (default True) — ask: run bed leveling, or skip for speed?
+      - flow_calibration — show stored value with label; ask: run flow calibration before printing?
+      - timelapse — show stored value with label; ask: record a timelapse?
+      - bed_leveling — show stored value with label; ask: run bed leveling, or skip for speed?
 
     STEP 3 — Wait for explicit go-ahead AFTER the complete summary.
       Do NOT call print_file after confirming individual parameters across separate turns.
       Confirming flow_calibration, timelapse, or bed_leveling mid-conversation does NOT
       satisfy this gate. The go-ahead must come in the turn immediately after the full
       summary is shown with all six items visible.
+      After print_file is called successfully, update stored preferences:
+        from user_prefs import set_pref
+        set_pref(f"{name}:bed_leveling",     bed_leveling)
+        set_pref(f"{name}:flow_calibration", flow_calibration)
+        set_pref(f"{name}:timelapse",        timelapse)
     """
     log.debug("print_file: called for name=%s file_path=%s plate_num=%s bed_type=%s user_permission=%s", name, file_path, plate_num, bed_type, user_permission)
     if not user_permission:

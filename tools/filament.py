@@ -274,6 +274,19 @@ def start_ams_dryer(
     (transition state — firmware verifying conditions). Active drying is confirmed by
     heater_state=DRYING with dry_sub_status=HEATING. This tool polls up to 10 seconds
     waiting for DRYING before returning.
+
+    Sticky preferences: before presenting parameters to the user, look up stored values:
+      from user_prefs import get_pref
+      target_temp    = get_pref(f"{name}:ams{unit_id}:target_temp",    55)
+      duration_hours = get_pref(f"{name}:ams{unit_id}:duration_hours", 4)
+      rotate_tray    = get_pref(f"{name}:ams{unit_id}:rotate_tray",    False)
+    Factory defaults: target_temp=55, duration_hours=4, rotate_tray=False.
+    Label each "(your preference)" if stored value differs from factory default, "(default)" otherwise.
+    After a successful call, store the confirmed values:
+      from user_prefs import set_pref
+      set_pref(f"{name}:ams{unit_id}:target_temp",    target_temp)
+      set_pref(f"{name}:ams{unit_id}:duration_hours", duration_hours)
+      set_pref(f"{name}:ams{unit_id}:rotate_tray",    rotate_tray)
     """
     log.debug("start_ams_dryer: called for name=%s unit_id=%s target_temp=%s duration_hours=%s user_permission=%s", name, unit_id, target_temp, duration_hours, user_permission)
     import time

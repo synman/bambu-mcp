@@ -173,6 +173,15 @@ def set_print_speed(
     Quiet = reduced speed and acceleration (quieter operation, good for overnight prints).
     Standard = default balanced speed. Sport = faster than standard, slightly louder.
     Ludicrous = maximum speed, highest vibration and noise.
+
+    Sticky preference: before suggesting a speed level, look up the stored value:
+      from user_prefs import get_pref
+      speed_level = get_pref(f"{name}:speed_level", None)
+    If a stored preference exists, present it pre-selected labeled "(your preference)".
+    If no preference is stored, show all options without a pre-selection.
+    After a successful call, store the confirmed speed level:
+      from user_prefs import set_pref
+      set_pref(f"{name}:speed_level", speed_level)
     """
     log.debug("set_print_speed: called for name=%s speed_level=%s user_permission=%s", name, speed_level, user_permission)
     if not user_permission:
