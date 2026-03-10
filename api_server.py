@@ -1423,14 +1423,24 @@ def _build_app():
 
     @app.route("/api/get_sdcard_3mf_files")
     def get_sdcard_3mf_files():
-        """Return list of .3mf files on SD card."""
+        """Return list of .3mf files on SD card.
+
+        ?cached=true returns the in-memory cached copy without a live FTPS fetch.
+        Use when stale data is acceptable and low latency matters.
+        Default (cached=false) performs a live FTPS fetch for up-to-date results.
+        """
         log.debug("get_sdcard_3mf_files: called")
-        p, _ = _get_printer(_rargs())
+        p, args = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
-            log.debug("get_sdcard_3mf_files: calling printer.get_sdcard_3mf_files()")
-            result = p.get_sdcard_3mf_files()
+            use_cache = str(args.get("cached", "false")).lower() == "true"
+            if use_cache:
+                log.debug("get_sdcard_3mf_files: returning cached_sd_card_3mf_files")
+                result = p.cached_sd_card_3mf_files
+            else:
+                log.debug("get_sdcard_3mf_files: calling printer.get_sdcard_3mf_files()")
+                result = p.get_sdcard_3mf_files()
             log.debug("get_sdcard_3mf_files: → ok")
             return jsonify(result)
         except Exception as e:
@@ -1458,14 +1468,24 @@ def _build_app():
 
     @app.route("/api/get_sdcard_contents")
     def get_sdcard_contents():
-        """Return full SD card directory listing."""
+        """Return full SD card directory listing.
+
+        ?cached=true returns the in-memory cached copy without a live FTPS fetch.
+        Use when stale data is acceptable and low latency matters.
+        Default (cached=false) performs a live FTPS fetch for up-to-date results.
+        """
         log.debug("get_sdcard_contents: called")
-        p, _ = _get_printer(_rargs())
+        p, args = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
-            log.debug("get_sdcard_contents: calling printer.get_sdcard_contents()")
-            result = p.get_sdcard_contents()
+            use_cache = str(args.get("cached", "false")).lower() == "true"
+            if use_cache:
+                log.debug("get_sdcard_contents: returning cached_sd_card_contents")
+                result = p.cached_sd_card_contents
+            else:
+                log.debug("get_sdcard_contents: calling printer.get_sdcard_contents()")
+                result = p.get_sdcard_contents()
             log.debug("get_sdcard_contents: → ok")
             return jsonify(result)
         except Exception as e:

@@ -591,7 +591,6 @@ The following BPM methods are **intentionally not** exposed as MCP tools or HTTP
 | `BambuPrinter.pause_session()` / `resume_session()` | **A** | Internal session lifecycle methods called by the MCP `session_manager` within `pause_mqtt_session` / `resume_mqtt_session`. Not invoked directly by agents. |
 | `BambuPrinter.printer_state` property | **A** | Internal state accessor returning the live `BambuState`. Accessed by all MCP state tools; results surfaced via `get_printer_state()` and targeted tools. No standalone tool needed. |
 | `BambuPrinter.active_job_info` property | **A** | Internal job accessor returning the live `ActiveJobInfo`. Results surfaced via `get_job_info()`, `get_print_progress()`, `get_current_job_project_info()`. No standalone tool needed. |
-| `BambuPrinter.cached_sd_card_contents` / `cached_sd_card_3mf_files` properties | **A** | Internal SD card cache accessors. Results surfaced via `list_sdcard_files()` and `refresh_sdcard()`. No standalone tool needed. |
 | `BambuPrinter.nozzle_diameter` (deprecated) | **A** | `@deprecated` — replacement is `printer_state.active_nozzle.diameter_mm`, which is covered by `get_nozzle_info()`. Excluded per deprecated-with-replacement rule. |
 | `BambuPrinter.nozzle_type` (deprecated) | **A** | `@deprecated` — replacement is `printer_state.active_nozzle.material`, which is covered by `get_nozzle_info()`. Excluded per deprecated-with-replacement rule. |
 

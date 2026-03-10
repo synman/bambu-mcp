@@ -33,7 +33,7 @@ def _find_file_in_tree(tree: dict, target_path: str) -> dict | None:
     return None
 
 
-def list_sdcard_files(name: str, path: str = "/") -> dict:
+def list_sdcard_files(name: str, path: str = "/", cached: bool = False) -> dict:
     """
     Return the SD card directory listing for the named printer.
 
@@ -46,19 +46,31 @@ def list_sdcard_files(name: str, path: str = "/") -> dict:
       list_sdcard_files(name, "/cache") → only the /cache subtree
       list_sdcard_files(name, "/model") → only the /model subtree
 
+    cached=False (default): performs a live FTPS fetch from the printer — guaranteed
+    up-to-date but requires an active connection and takes a moment. Use for
+    reliable, current listings.
+    cached=True: returns the in-memory cached copy immediately without contacting
+    the printer. The cache is populated by the most recent list_sdcard_files() or
+    refresh_sdcard() call. Returns None fields if the cache has never been populated.
+    Use when stale data is acceptable and low latency matters.
+
     Response may be gzip+base64 compressed if the full tree is large. Decompress:
       import gzip, json, base64
       data = json.loads(gzip.decompress(base64.b64decode(r["data"])))
     """
-    log.debug("list_sdcard_files: called for name=%s path=%s", name, path)
+    log.debug("list_sdcard_files: called for name=%s path=%s cached=%s", name, path, cached)
     from tools._response import compress_if_large
     printer = session_manager.get_printer(name)
     if printer is None:
         log.warning("list_sdcard_files: printer not connected: %s", name)
         return _no_printer(name)
     try:
-        log.debug("list_sdcard_files: calling printer.get_sdcard_contents() for %s", name)
-        contents = printer.get_sdcard_contents()
+        if cached:
+            log.debug("list_sdcard_files: returning cached_sd_card_contents for %s", name)
+            contents = printer.cached_sd_card_contents
+        else:
+            log.debug("list_sdcard_files: calling printer.get_sdcard_contents() for %s", name)
+            contents = printer.get_sdcard_contents()
         if contents is None:
             log.debug("list_sdcard_files: → error: no contents for %s", name)
             return {"error": "Failed to retrieve SD card contents"}

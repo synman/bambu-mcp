@@ -35,8 +35,8 @@ Handles dataclasses, objects with __dict__. Skips MQTT clients, threads.
 | tool_temp_target_time | int | Timestamp of last nozzle temp target change |
 | chamber_temp_target_time | int | Timestamp of last chamber temp target change |
 | fan_speed_target_time | int | Timestamp of last fan speed target change |
-| cached_sd_card_contents | dict or None | All files on SD card (cached) |
-| cached_sd_card_3mf_files | dict or None | Only .3mf files on SD card (cached) |
+| cached_sd_card_contents | dict or None | All files on SD card (in-memory cache). Populated by the most recent get_sdcard_contents() or refresh_sdcard() call. Returns None if cache has never been populated. Exposed via list_sdcard_files(name, cached=True) and GET /api/get_sdcard_contents?cached=true. Use when stale data is acceptable. |
+| cached_sd_card_3mf_files | dict or None | Only .3mf files on SD card (in-memory cache). Populated by the most recent get_sdcard_3mf_files() or refresh_sdcard(mode='3mf') call. Returns None if cache has never been populated. Exposed via GET /api/get_sdcard_3mf_files?cached=true. Use when stale data is acceptable. |
 
 ## Properties with Setters
 

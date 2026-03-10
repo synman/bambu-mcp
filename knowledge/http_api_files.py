@@ -21,6 +21,9 @@ All routes accept `?printer=<name>` (or `printer` in POST body) to select the ta
 
 Return the full SD card directory listing.
 
+Query parameters:
+- `cached` (optional, default `false`) — when `true`, returns the in-memory cached copy immediately without a live FTPS fetch. Use when stale data is acceptable and low latency matters. Returns `null` if cache has never been populated (no prior `list_sdcard_files` or `refresh_sdcard` call). When `false` (default), performs a live FTPS scan for up-to-date results.
+
 Returns a nested dict representing the SD card file tree. May be large for cards with many
 files. Use subdirectory-scoped queries when possible.
 
@@ -35,6 +38,9 @@ Forces a fresh FTPS directory scan. Returns the updated listing.
 ### GET /api/get_sdcard_3mf_files
 
 Return a list of .3mf files on the SD card.
+
+Query parameters:
+- `cached` (optional, default `false`) — when `true`, returns the in-memory cached copy immediately without a live FTPS fetch. Use when stale data is acceptable. Returns `null` if cache has never been populated. When `false` (default), performs a live FTPS scan.
 
 Filtered listing — only `.3mf` project files are returned.
 
