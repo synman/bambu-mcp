@@ -1131,3 +1131,45 @@ All of the following, in order:
 4. **Verification carried forward** — Stage 6 pre-fix confirmation + post-fix verification results satisfy Stage 7. Reproduce them here in the closing comment. If Stage 6 was skipped or incomplete, do not close the issue — rerun Stage 6 first.
 5. GitHub issue: close only after step 4 is satisfied. The closing comment must include: interface queried, before value, after value.
 6. `bambu-rules` sync — push updated project rules to remote mirror
+
+---
+
+## Bambu GCode Flavor — Camera Calibration Commands (Mandatory)
+
+**Claim status: `[VERIFIED: BambuStudio]`** — BambuStudio machine profiles confirm `gcode_flavor: marlin` for all Bambu printers.
+- Evidence: `resources/profiles/BBL/machine/fdm_machine_common.json` → `"gcode_flavor": "marlin"` (base profile; H2D inherits via `fdm_bbl_3dp_002_common`; A1 via `fdm_bbl_3dp_001_common`; all Bambu printers share this base)
+- Confirmed: 2026-03-10
+- Note: Prior session cited `resources/profiles/machine/Bambu Lab H2D.json` — this path does NOT exist in BambuStudio repo. All profiles live under `resources/profiles/BBL/`. Prior claim of `gcode_flavor = marlin2` is **REFUTED**; the correct value is `marlin`.
+
+The following applies specifically to any agent-generated GCode for pre-print camera calibration sequences issued via `send_gcode()` or the HTTP `POST /api/send_gcode` route.
+
+**Command set for calibration (all Bambu models — `[VERIFIED: BambuStudio]`):**
+
+| Command | Purpose | Notes |
+|---------|---------|-------|
+| `G28` | Home all axes | Firmware-controlled homing order (H2D: X first, then Z separately per BambuStudio start gcode); safe to issue at any time |
+| `G90` | Set absolute coordinate mode | Must be issued explicitly at calibration start; never assume prior state |
+| `G0 X<n> Y<n> F<n>` | Rapid XY move | Always include `F`; Bambu accepts mm/min (standard Marlin units) |
+| `G0 Z<n> F<n>` | Rapid Z move | Always include `F`; separate command from XY — never combined |
+| `M400` | Wait for moves to complete | Mandatory before every Z transition and every frame capture |
+
+**Safe calibration feedrates (conservative design choices — not sourced from printer specs):**
+- `F3000` — XY/Y travel (50 mm/s): deliberate undershot of firmware-capable speeds (BambuStudio uses F30000 for XY travel); safe margin for agent-controlled motion
+- `F600` — Z moves (10 mm/s): conservative descent/ascent; prevents nozzle crash from feedrate overshoot
+
+**Coordinate system:** Always `G90` (absolute). Corner positions are expressed as absolute machine coordinates from the Bambu bed origin. Never use `G91` (relative) in a calibration sequence — position errors accumulate and are not recoverable without rehoming.
+
+**Confirmed pattern from `print_control.py`:** `G91\nG0 X10\nG90` demonstrates that Bambu firmware correctly handles relative-then-back-to-absolute patterns if ever needed for auxiliary moves. This is **not used** in calibration sequences (which are always absolute), but confirms `G91`/`G90` mode switching works as expected on all Bambu models.
+
+**Complete safe calibration sequence preamble (required at top of every generated sequence):**
+```gcode
+G28          ; home all axes — firmware handles safe homing order
+M400         ; confirmed stopped
+G90          ; absolute coordinate mode — explicit, never assumed
+G0 Z10 F600  ; lift to clearance height before any XY travel
+M400         ; confirmed at clearance
+```
+
+**Do not use:** `G1` (controlled-rate feed) is not necessary for calibration moves — `G0` (rapid move) is the correct command. Do not use firmware-specific extensions (e.g., Bambu's `M622`, AMS commands) in calibration sequences — use only the verified command set above.
+
+This section is the Bambu-specific extension of the global "GCode Calibration Motion Safety" rule. The global rule governs structure and safety; this section governs the exact command syntax for Bambu printers.
