@@ -749,21 +749,88 @@ bambu-mcp uses a two-level knowledge hierarchy:
 **Hard requirements:**
 - Any new MCP tool must have its primary guidance in `behavioral_rules_camera.py` (or the relevant sub-module) AND its return schema in `api_reference_dataclasses.py`.
 - Stage codes, threshold values, and enum tables appear in exactly one module — not duplicated.
-- No knowledge module may exceed 200 lines. Split by sub-topic if it does.
-  **Split rule (mandatory):** When splitting, content MUST be moved intact to the new
-  sub-topic file. Condensing, shortening, or summarizing content to fit within the limit
-  is never acceptable — it degrades agent knowledge. The only valid response to a size
-  violation is reorganization (split into a new sub-topic), never information loss.
-  After any split, update the parent module's sub-topic index so the new file is
-  discoverable.
+- No knowledge module's TEXT content may approach or exceed `MAX_MCP_OUTPUT_TOKENS × 4` characters (default 100,000 chars — the FastMCP response size limit). This is a hard constraint: content beyond this is truncated by the MCP client and becomes silently unreadable. The 200-line heuristic is not the constraint — character count against the response limit is.
+  **Split rule (mandatory):** When a module approaches the limit, split by sub-topic. Content MUST be moved intact to the new sub-topic file — condensing or summarizing to fit is never acceptable. It degrades agent knowledge. The only valid response to a size violation is reorganization (split into a new sub-topic), never information loss.
+  After any split, update the parent module's sub-topic index so the new file is discoverable.
 - After any new feature is committed, `get_knowledge_topic('behavioral_rules/camera')` must include the new tool name and guidance.
 - Docstring size estimates, stable_verdict semantics, confidence window interpretation — these belong in the knowledge layer, not repeated in tool docstrings.
 
 **Knowledge update checklist (run on every feature commit):**
-- [ ] `behavioral_rules_camera.py` updated with agent guidance for any new tool
-- [ ] `api_reference_dataclasses.py` updated with new dataclass fields and semantics
+- [ ] Relevant `behavioral_rules_*.py` updated with agent guidance for the new tool/feature
+- [ ] Relevant `api_reference_*.py` updated with new dataclass fields, return shapes, and semantics
 - [ ] No content duplicated across knowledge modules
 - [ ] `get_knowledge_topic()` returns the new content when called
+
+---
+
+## Knowledge Freshness Obligation (Mandatory)
+
+The Knowledge Module Maintenance Standard governs **new** features. This section governs **changes** to existing coverage.
+
+When any of the following change, knowledge must update in the same work session — not deferred:
+- A bpm method's signature, behavior, or return shape changes
+- An MCP tool's logic, parameters, or side effects change
+- An HTTP route's behavior, response, or semantics change
+- A protocol field's semantics are clarified or corrected
+
+**Hard requirements:**
+- A tool docstring that describes behavior the code no longer has is a Type C gap and blocks the next baseline.
+- A knowledge module TEXT block that describes a method or field differently than the code behaves is a Type C gap and blocks the next baseline.
+- The change and its knowledge update are one atomic unit — they commit together.
+
+**Knowledge update checklist (for changes to existing coverage):**
+- [ ] Tool docstring reflects current behavior (not prior behavior)
+- [ ] Relevant knowledge module TEXT block reflects current behavior
+- [ ] Any threshold, enum value, or semantic field in knowledge matches the code
+- [ ] No knowledge module documents a deprecated path without noting the deprecation
+
+---
+
+## Rules–Knowledge Consistency Standard (Mandatory)
+
+Facts encoded in the rules files that also appear in knowledge modules must be **identical** — not paraphrased, not summarized, not approximated.
+
+Examples of facts that must stay in sync:
+- Humidity index scale: rules say "1=WET, 5=DRY; higher=drier; counterintuitive" — knowledge must say exactly that
+- Stage codes: if rules document `stage_id=17` as "paused by user", knowledge must match
+- Threshold values: any numeric threshold in both must be identical
+
+**Hard requirements:**
+- When editing a rules file, search for any related knowledge module entry and update it to match in the same session.
+- When editing a knowledge module, check whether the fact is also in a rules file. Both must end in the same state.
+- Divergence between rules and knowledge is a Type C gap: a cold agent using knowledge gets different behavior than an agent using rules. Both are authoritative for overlapping facts — they must agree.
+
+**Agent B checks this:** The MCP↔HTTP contract audit includes a rules↔knowledge consistency spot-check. Any divergence found must be resolved before baseline.
+
+---
+
+## Knowledge Proactive Guidance Standard (Mandatory)
+
+Knowledge modules are the primary interface through which AI agents interpret printer state and decide next actions. They must be designed to **drive intelligent behavior** — not just describe data fields or tool mechanics.
+
+**State → suggestion (mandatory for any state with a canonical next action):**
+When a printer state has a well-known appropriate follow-on action, the knowledge for that state must include the suggestion using the escalation hierarchy.
+- `humidity_index ≤ 2` → suggest `start_ams_dryer()` (dedicated MCP tool)
+- `gcode_state="FAILED"` with only historical HMS errors → "printer is idle and ready; call `print_file()` to start a new job"
+
+**Event → action (mandatory for all alert types):**
+Every alert type in `behavioral_rules/alerts` must document the recommended agent action — not just field descriptions.
+- `job_paused` + `stage_id=7` → "AMS runout path — call `send_ams_control_command('RESUME')`, not `resume_print()`"
+- Correlations between events that change the appropriate action must be explicit
+
+**Escalation compliance (mandatory for all knowledge-driven suggestions):**
+All next-step suggestions in knowledge modules must follow the MCP escalation hierarchy:
+1. Dedicated MCP tool (always preferred)
+2. HTTP REST API (when no MCP tool exists)
+3. `send_mqtt_command` (last resort only — never suggest without explicit "last resort" label)
+Never suggest bypassing `user_permission` gates.
+
+**Anti-patterns (prohibited):**
+- Knowledge that only describes what a field *is* without saying what an agent *should do* with it when there is a canonical action
+- Suggestions that use `send_mqtt_command` when a dedicated tool exists
+- Alert documentation that lists fields but omits the recommended response
+
+**Agent B checks this:** The MCP↔HTTP contract audit includes a proactive guidance spot-check: for each alert type in `behavioral_rules/alerts`, verify a recommended action is documented.
 
 ---
 
