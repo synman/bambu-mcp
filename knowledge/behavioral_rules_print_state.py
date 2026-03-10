@@ -105,7 +105,8 @@ print error is cleared, even if temps are restored.
 
 ## Stage Code Reference
 
-Key `stg_cur` values (from push_status):
+Key `stg_cur` values (from push_status). This table covers action-relevant stages;
+for the complete enumeration see `stage_id` in `get_job_info()` tool docstring.
 
 | ID | Stage | ID | Stage |
 |---|---|---|---|

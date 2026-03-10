@@ -130,7 +130,7 @@ Populated from `ams.ams[]` combined with `info.module[]`. Accessible via `BambuS
 | ams_id | int | Raw chip hardware ID. On AMS 2 Pro: 0 for first unit; on AMS HT: 128. The 0-based positional unit_id concept in tool docstrings refers to this value's position in the ams_units list. |
 | chip_id | str | Hardware serial string. Same value as ams_id encoded as a string; present as a separate field. Redundant with ams_id. |
 | model | AMSModel | AMS hardware model (AMS_2_PRO, AMS_HT, AMS_LITE, etc.) |
-| humidity_index | int | 1=WET (alert) to 5=DRY (good). Higher = drier. 0=unavailable. Only 1–2 indicate a moisture problem. |
+| humidity_index | int | 1=WET (alert) to 5=DRY (good). **Higher numbers mean DRIER — the scale is counterintuitive.** Only 1–2 indicate a moisture problem. 0=unavailable (do not treat as wet). |
 | humidity_raw | int | Raw humidity integer from telemetry, before mapping to the humidity_index 1–5 scale. |
 | ams_info | int | Raw integer bitmask from which heater_state, dry_fan1_status, dry_fan2_status, and dry_sub_status are decoded. Bit positions: heater_state=bits 4–7, dry_fan1_status=bits 18–19, dry_fan2_status=bits 20–21, dry_sub_status=bits 22–25. |
 | temp_actual | float | Current AMS temperature (°C) |
