@@ -75,6 +75,8 @@ Returns `{"success": true}`.
 
 ## POST /api/set_spool_k_factor
 
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
+
 Set extrusion calibration k-factor for a spool. (Stub — returns not-implemented.)
 
 This endpoint exists for API compatibility but is not yet implemented.

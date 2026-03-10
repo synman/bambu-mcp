@@ -114,6 +114,8 @@ Both paths must be on the SD card — no data is re-uploaded. Returns `{"success
 
 ### GET,POST /api/download_file_from_printer
 
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
+
 Download a file from the printer SD card and return it.
 
 Query parameters:
