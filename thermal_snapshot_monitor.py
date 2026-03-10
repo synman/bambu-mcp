@@ -397,7 +397,17 @@ def detect_plate_thermal(arr, floor_temp, bed_temp):
 
     hot_flat  = int(np.argmax(lum_n * plate_mask.astype(float)))
     hy_g = hot_flat // W;  hx_g = hot_flat % W
-    cool_flat = np.argmin(lum_n); cy_c = cool_flat // W; cx_c = cool_flat % W
+    # Use absolute-minimum pixel only if it's in the top 5 rows or left/right 5 cols
+    # (guaranteed outside-plate region).  If it's interior, fall back to the top-left
+    # corner which is always outside the plate for both H2D and A1 camera geometries.
+    cool_flat = int(np.argmin(lum_n))
+    cy_c_raw = cool_flat // W; cx_c_raw = cool_flat % W
+    in_border = (cy_c_raw < 5 or cy_c_raw >= H - 5 or cx_c_raw < 5 or cx_c_raw >= W - 5)
+    if in_border or not hull_mask[cy_c_raw, cx_c_raw]:
+        cy_c, cx_c = cy_c_raw, cx_c_raw          # original path — pixel is outside hull
+    else:
+        # Min pixel is inside hull (e.g. cooled print object on bed); use top-left corner
+        cy_c, cx_c = 2, 2
     hot_in    = bool(hull_mask[hy_g, hx_g])
     cool_out  = not bool(hull_mask[cy_c, cx_c])
     validation_pass = hot_in and cool_out
