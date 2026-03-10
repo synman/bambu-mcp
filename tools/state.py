@@ -141,17 +141,11 @@ def get_job_info(name: str) -> dict:
     """
     Return the ActiveJobInfo for the current (or last) print job as a dict.
 
-    Includes subtask name, gcode file, plate number, stage, layer counts,
+    Includes subtask name, gcode file, plate number, stage_id, layer counts,
     print percentage, and elapsed/remaining time in minutes.
 
     Field semantics:
-    - gcode_state: string — known values: "IDLE", "PREPARE", "RUNNING", "PAUSE",
-      "FINISH", "FAILED", "SLICING", "INIT".
-      IMPORTANT: "FAILED" means the *last* job failed — it is a terminal state for
-      that job, not an indication the printer is currently broken or blocked. The
-      printer is idle and ready to accept a new print job when gcode_state is
-      "FAILED". Do NOT treat FAILED as a reason to withhold or delay a new job.
-    - stage: integer stage code —
+    - stage_id: integer stage code —
         0=idle/finished, 1=auto-leveling, 2=heatbed preheating,
         3=sweeping XY mech, 4=changing filament, 6=M400 pause,
         7=paused by filament runout, 8=heating nozzle,
@@ -162,6 +156,8 @@ def get_job_info(name: str) -> dict:
         18=paused by front cover removal, 19=calibrating extrusion flow,
         20=paused by nozzle temp malfunction,
         21=paused by heat bed temp malfunction, 255=printing normally.
+    Note: gcode_state is NOT a field of ActiveJobInfo and is not returned by this
+    tool. Read gcode_state from get_print_progress() or get_printer_state() instead.
     """
     log.debug("get_job_info: called for printer=%s", name)
     job = session_manager.get_job(name)
@@ -254,8 +250,8 @@ def get_spool_info(name: str) -> dict:
       128 = AMS HT unit (Bambu's internal ID for AMS HT). NOT the same as the
       0-based unit_id used by get_ams_units() / load_filament().
     - active_tray_id: slot index within the AMS (0–3). 254 = external spool holder.
-    - Each spool dict: filament_type (str), color (hex string e.g. '#FF0000'),
-      remaining_pct (0–100), nozzle_temp_min/max (°C), dry_temp (°C), dry_time (hours).
+    - Each spool dict: type (str), color (hex string e.g. '#FF0000'),
+      remaining_percent (0–100), nozzle_temp_min/max (°C), drying_temp (°C), drying_time (hours).
     - name (if present): Bambu Lab vendor-specific brand label (e.g. "Bambu PLA Basic").
       Not present on third-party spools and not a reliable identifier. The true identity
       of a spool is color + tray_info_idx (base profile catalog code, e.g. "GFA00").

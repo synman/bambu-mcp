@@ -53,6 +53,7 @@ from knowledge.behavioral_rules_job_analysis import BEHAVIORAL_RULES_JOB_ANALYSI
 from knowledge.behavioral_rules_print_state import BEHAVIORAL_RULES_PRINT_STATE_TEXT
 from knowledge.behavioral_rules_methodology import BEHAVIORAL_RULES_METHODOLOGY_TEXT
 from knowledge.behavioral_rules_mcp_patterns import BEHAVIORAL_RULES_MCP_PATTERNS_TEXT
+from knowledge.behavioral_rules_alerts import BEHAVIORAL_RULES_ALERTS_TEXT
 from knowledge.protocol import PROTOCOL_TEXT
 from knowledge.protocol_concepts import PROTOCOL_CONCEPTS_TEXT
 from knowledge.protocol_mqtt import PROTOCOL_MQTT_TEXT
@@ -88,6 +89,7 @@ _KNOWLEDGE_MAP = {
     "behavioral-rules/print-state":      BEHAVIORAL_RULES_PRINT_STATE_TEXT,
     "behavioral-rules/methodology":      BEHAVIORAL_RULES_METHODOLOGY_TEXT,
     "behavioral-rules/mcp-patterns":     BEHAVIORAL_RULES_MCP_PATTERNS_TEXT,
+    "behavioral-rules/alerts":           BEHAVIORAL_RULES_ALERTS_TEXT,
     "protocol":                          PROTOCOL_TEXT,
     "protocol/concepts":                 PROTOCOL_CONCEPTS_TEXT,
     "protocol/mqtt":                     PROTOCOL_MQTT_TEXT,
@@ -146,6 +148,11 @@ def get_behavioral_rules_methodology() -> str:
 def get_behavioral_rules_mcp_patterns() -> str:
     """Return MCP patterns sub-topic (array params, multi-level hierarchy, compressed responses)."""
     return BEHAVIORAL_RULES_MCP_PATTERNS_TEXT
+
+
+def get_behavioral_rules_alerts() -> str:
+    """Return push alerts sub-topic (alert types, semantics, severity, recommended actions)."""
+    return BEHAVIORAL_RULES_ALERTS_TEXT
 
 
 def get_protocol() -> str:

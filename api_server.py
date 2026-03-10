@@ -1282,6 +1282,52 @@ def _build_app():
             log.error("get_sdcard_contents: error: %s", e, exc_info=True)
             return _err(str(e))
 
+    @app.route("/api/find_3mf_by_name")
+    def find_3mf_by_name():
+        """Search SD card 3MF file tree by filename. ?name=<filename>"""
+        log.debug("find_3mf_by_name: called")
+        p, _ = _get_printer(request.args)
+        if p is None:
+            return _err("no printer")
+        try:
+            target_name = request.args.get("name", "")
+            log.debug("find_3mf_by_name: target_name=%s", target_name)
+            if not target_name:
+                return _err("name parameter required")
+            from bpm.bambuproject import get_3mf_entry_by_name as _bpm_search
+            tree = p.get_sdcard_3mf_files()
+            if tree is None:
+                return _err("failed to retrieve SD card contents")
+            result = _bpm_search(tree, target_name)
+            log.debug("find_3mf_by_name: → %s", "found" if result else "not found")
+            return jsonify({"entry": result} if result else {"error": f"Not found: {target_name}"})
+        except Exception as e:
+            log.error("find_3mf_by_name: error: %s", e, exc_info=True)
+            return _err(str(e))
+
+    @app.route("/api/find_3mf_by_id")
+    def find_3mf_by_id():
+        """Search SD card 3MF file tree by full path ID. ?id=<path>"""
+        log.debug("find_3mf_by_id: called")
+        p, _ = _get_printer(request.args)
+        if p is None:
+            return _err("no printer")
+        try:
+            target_id = request.args.get("id", "")
+            log.debug("find_3mf_by_id: target_id=%s", target_id)
+            if not target_id:
+                return _err("id parameter required")
+            from bpm.bambuproject import get_3mf_entry_by_id as _bpm_search
+            tree = p.get_sdcard_3mf_files()
+            if tree is None:
+                return _err("failed to retrieve SD card contents")
+            result = _bpm_search(tree, target_id)
+            log.debug("find_3mf_by_id: → %s", "found" if result else "not found")
+            return jsonify({"entry": result} if result else {"error": f"Not found: {target_id}"})
+        except Exception as e:
+            log.error("find_3mf_by_id: error: %s", e, exc_info=True)
+            return _err(str(e))
+
     @app.route("/api/delete_sdcard_file")
     def delete_sdcard_file():
         """Delete a file or folder from SD card. ?file=<path> (trailing / for folder)"""
@@ -2041,6 +2087,38 @@ def _build_app():
             return jsonify({"status": "error", "message": str(e)}), 500
 
     # ── error handler ─────────────────────────────────────────────────────────
+
+    @app.route("/api/alerts", methods=["GET", "DELETE"])
+    def alerts():
+        """Return or clear pending state-change alerts for a printer.
+
+        Query parameters:
+          printer — printer name (required)
+          all     — "true" to return alerts for all printers (GET only; ignores printer param)
+
+        GET  returns pending alerts (clears queue by default).
+        DELETE clears the queue without returning alerts.
+        """
+        log.debug("alerts: called method=%s", request.method)
+        from notifications import notifications as _notifications
+        try:
+            if request.method == "GET":
+                all_printers = request.args.get("all", "false").lower() == "true"
+                if all_printers:
+                    return jsonify(_notifications.get_all_pending(clear=True))
+                p, name = _get_printer(request.args)
+                if p is None:
+                    return _err("no printer")
+                return jsonify(_notifications.get_pending(name, clear=True))
+            else:  # DELETE
+                p, name = _get_printer(request.args)
+                if p is None:
+                    return _err("no printer")
+                _notifications.clear(name)
+                return jsonify({"status": "ok"})
+        except Exception as e:
+            log.error("alerts: error: %s", e, exc_info=True)
+            return _err(str(e))
 
     @app.errorhandler(500)
     def handle_500(e):

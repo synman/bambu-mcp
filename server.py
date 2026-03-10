@@ -33,6 +33,7 @@ from resources.knowledge import (
     get_behavioral_rules_print_state,
     get_behavioral_rules_methodology,
     get_behavioral_rules_mcp_patterns,
+    get_behavioral_rules_alerts,
     get_protocol,
     get_protocol_concepts,
     get_protocol_mqtt,
@@ -77,6 +78,7 @@ import tools.discovery as discovery_tools
 import tools.commands as command_tools
 import tools.knowledge_search as knowledge_tools
 import tools.camera as camera_tools
+import tools.notifications as notification_tools
 
 _log_level = logging.DEBUG if os.environ.get("BAMBU_MCP_DEBUG") else logging.INFO
 _log_file = Path(__file__).parent / "bambu-mcp.log"
@@ -127,6 +129,7 @@ _TOOL_MODULES = [
     command_tools,
     knowledge_tools,
     camera_tools,
+    notification_tools,
 ]
 
 import inspect as _inspect
@@ -159,6 +162,7 @@ _RESOURCES = [
     ("bambu://knowledge/behavioral-rules/print-state",  get_behavioral_rules_print_state,  "Printer state interpretation, gcode_state FAILED, HMS active/historical, stage codes"),
     ("bambu://knowledge/behavioral-rules/methodology",  get_behavioral_rules_methodology,  "KISS, quality-first, root cause fix, telemetry parity, verification, cross-model rules"),
     ("bambu://knowledge/behavioral-rules/mcp-patterns", get_behavioral_rules_mcp_patterns, "MCP array parameter pattern, multi-level call hierarchy, compressed response protocol"),
+    ("bambu://knowledge/behavioral-rules/alerts",       get_behavioral_rules_alerts,       "Push alert types, semantics, severity levels, and recommended agent actions"),
     ("bambu://knowledge/protocol",      get_protocol,               "Bambu Lab MQTT/HMS/3MF/SSDP protocol documentation"),
     ("bambu://knowledge/protocol/concepts",  get_protocol_concepts,  "Bambu Lab protocol glossary and terminology"),
     ("bambu://knowledge/protocol/mqtt",      get_protocol_mqtt,      "MQTT topics, message types, home_flag bitfield, xcam fields"),
@@ -246,6 +250,15 @@ def _startup() -> None:
             log.warning("job_monitor startup error (monitor disabled): %s", exc)
 
         log.info(f"Started sessions for {len(printer_names)} printer(s): {printer_names}")
+
+        # Wire notification manager — captures event loop for out-of-band resource push.
+        try:
+            from notifications import notifications as _notifications
+            import asyncio
+            loop = asyncio.get_event_loop()
+            _notifications.wire_mcp_server(mcp, loop)
+        except Exception as exc:
+            log.warning("notifications wiring error (push disabled): %s", exc)
 
     except Exception as exc:
         log.warning(f"Startup error (sessions not started): {exc}")

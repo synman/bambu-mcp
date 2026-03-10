@@ -78,11 +78,13 @@ the following named components (polls `/status` every 2 s):
 - **Progress bar**: thin 3-px bar, color tracks print state
 - **Rows** (label + value): Stage, Layers (current / total), Elapsed, Remaining
 - **Temps section**: nozzle temp(s) (°C / target), bed temp, chamber temp
-- **Fans section**: part cooling %, aux %, exhaust %
+- **Fans section**: part cooling %, aux %, exhaust %, heatbreak % (zero-value fans are hidden)
 - **Filament swatch**: colored dot + filament type label for the active AMS spool
 - **AMS humidity index**: numeric humidity reading from the active AMS unit
 - **Wi-Fi signal bars**: unicode block-character bar graph, color-tiered by signal strength
 - **HMS error links**: clickable error entries; clicking opens the Bambu error page in a popup
+- **Chamber door/lid warning** (`#door-warn`): orange banner reading "⚠ DOOR OPEN", "⚠ LID OPEN",
+  or "⚠ DOOR + LID OPEN" when `is_chamber_door_open` or `is_chamber_lid_open` is true (H2D only)
 
 **Top-right FPS counter** (separate from HUD panel):
 - Numeric FPS readout + 5-column animated bar graph (green ≥80 % cap / amber ≥40 % / red)
@@ -90,6 +92,26 @@ the following named components (polls `/status` every 2 s):
 **Bottom image panels** (appear only when a print job is active):
 - **Thumbnail panel** (bottom-left): isometric 3D render of the current job's plate
 - **Layout panel** (bottom-right): annotated top-down plate layout image with bounding boxes
+
+**Right-side JOB HEALTH panel** (`#health-panel`, position:fixed top-right; appears when a print
+is active — auto-expands on RUNNING/PAUSE/FAILED/FINISH, collapses on IDLE; polls `/job_state`
+every 8 s):
+- **Verdict badge** (`#hp-verdict`): CLEAN / WARNING / CRITICAL / STANDBY — color-coded from
+  composite score (`success_probability × decision_confidence`)
+- **Score section** (`#hp-sec-score`): `/health_panel_img` PNG (120 px arc gauge), composite
+  score %, confidence % — hidden when no health_panel_img is available
+- **Metrics section** (`#hp-sec-metrics`): Hot px %, Strand score, Diff score, Layer/total,
+  Progress % — sourced from `/job_state` response fields
+- **Trends section** (`#hp-sec-trends`): 4 rolling sparkline canvases — Success % (30-sample,
+  green solid), Confidence % (dashed blue), Nozzle °C (mini), Bed °C (mini); plus a status
+  text row showing gcode_state + layer + AMS humidity %
+- **AI Detection section** (`#hp-sec-anomaly`): `/annotated` PNG when available (anomaly
+  detection overlay); legend swatches — Air Zone (yellow border), Plate Zone (green border),
+  Heat Map (orange-red gradient); clicking expands the health panel to full width via
+  `hpAnomalyToggle`
+- **Failure Drivers section** (`#hp-sec-radar`): `/factors_radar` PNG — 8-factor spider chart
+  (material, platform, progress, anomaly, thermal, humidity, stability, settings); collapsible
+  via `hudToggle`
 
 Use this vocabulary when describing what the user sees or when explaining stream features.
 

@@ -75,7 +75,7 @@ Located at: bambu-printer-manager/src/bpm/bambuconfig.py
 | mqtt_username | "bblp" | MQTT auth username |
 | watchdog_timeout | 30 | Seconds before connection flagged stale |
 | capabilities | PrinterCapabilities() | Auto-discovered from telemetry |
-| bpm_cache_path | ~/.bpm | Cache directory for metadata |
+| bpm_cache_path | ~/.bpm | Cache directory for metadata. Change via `set_new_bpm_cache_path(path)` — see note below. |
 | printer_model | PrinterModel.UNKNOWN | Auto-set from serial in __post_init__ |
 | firmware_version | "" | Main firmware version string |
 | ams_firmware_version | "" | AMS controller firmware version |
@@ -110,6 +110,26 @@ auto_recovery        = bool(home_flag & (1 << 4))    # bit 4
 See `protocol/mqtt` knowledge sub-topic for the full home_flag bit table.
 
 __post_init__: sets printer_model via getPrinterModelBySerial(serial_number).
+
+### set_new_bpm_cache_path(path: Path)
+
+Changes the bpm metadata cache directory at runtime. The user may invoke this to relocate the cache (e.g. to a different volume or mount point).
+
+**Signature:** `config.set_new_bpm_cache_path(path: Path) -> None`
+
+**What it does:**
+- Assigns the new `Path` to `config.bpm_cache_path`
+- Creates the directory tree immediately (`mkdir(parents=True, exist_ok=True)`)
+- Does NOT migrate or copy existing cache contents — prior cache data is orphaned in place
+
+**Cache contents affected:**
+- `{bpm_cache_path}/elapsed/` — job elapsed time state (persists job start times across restarts)
+- `{bpm_cache_path}/{printer_serial}/` — downloaded gcode and 3mf file cache
+- `{bpm_cache_path}/{printer_serial}/metadata/` — 3MF project metadata JSON files
+
+**⚠️ Restart required:** Changing the cache path takes effect for new operations immediately, but all active printer sessions have already opened handles and resolved paths against the old cache location. **The MCP server (and BPM sessions) must be restarted after calling this method** to ensure all sessions cleanly use the new path. Calling it without restarting is unsafe — partial writes to the old path and new path may coexist. As a safety precaution, always restart the MCP server after any cache path change.
+
+**Getter:** Read the current path via `config.bpm_cache_path` (instance attribute, not a property method).
 
 ---
 
@@ -154,18 +174,24 @@ Key fields:
 | active_ams_id | int | Computed from active_tray_id |
 | active_tray_id | int | extruder.active_tray_id or ams.tray_now |
 | active_tray_state | TrayState | Computed from extruder state/status |
+| active_tray_state_name | str | TrayState enum `.name` string companion to active_tray_state (e.g. "LOADED", "UNLOADED"). |
 | active_tool | ActiveTool | extruder.state bits 4-7 |
 | is_external_spool_active | bool | active_tray_id in [254, 255] |
 | active_nozzle_temp | float | extruder.temp (actual) |
 | active_nozzle_temp_target | int | extruder.temp (target) |
 | active_nozzle | NozzleCharacteristics | from extruder nozzle block |
+| ams_status_raw | int | Raw unparsed AMS status integer from telemetry. Companion to ams_status_text. Note: get_ams_status() returns this as key `ams_status_raw`; get_printer_state() uses the same key. |
+| ams_status_text | str | Human-readable AMS status string from parseAMSStatus(). Note: get_ams_status() returns this as key `ams_status`; in get_printer_state() the key is `ams_status_text`. |
+| ams_connected_count | int | Number of connected AMS units. |
 | ams_units | list[AMSUnitState] | ams.ams[] + info.module[] |
 | extruders | list[ExtruderState] | device.extruder.info[] |
 | spools | list[BambuSpool] | ams tray[] + vt_tray + vir_slot |
 | print_error | int | print.print_error |
 | hms_errors | list[dict] | print.hms |
+| wifi_signal_strength | str | Raw Wi-Fi signal string from telemetry (e.g. "-65dBm"). Also returned by get_wifi_signal(). |
 | climate | BambuClimate | Multiple telemetry sources |
 | stat | str (hex) | print.stat — raw bitfield used to derive is_chamber_door_open (bit 23) and is_chamber_lid_open (bit 24). Sibling of fun (also hex, documented in BambuConfig). |
+| fun | str (hex) | Raw home_flag bitfield as hex string. Source for all BambuConfig PrintOption booleans (auto_recovery, sound_enable, etc.). Key bit positions documented in the PrintOption enum table in enums_filament.py. Present in get_printer_state() output. |
 | target_tray_id | int | Tray ID the active extruder is loading toward (target, not yet active). -1 if none. |
 | ams_exist_bits | int | ams.ams_exist_bits — decoded bitmask of which AMS slots have trays present. |
 
@@ -178,8 +204,10 @@ BambuClimate key fields:
 | chamber_temp | device.ctc (H2D) or print.chamber_temper |
 | chamber_temp_target | device.ctc.info.temp (packed 32-bit) |
 | part_cooling_fan_speed_percent | print.cooling_fan_speed OR zone_part_fan |
+| part_cooling_fan_speed_target_percent | Commanded/requested part cooling fan speed (0–100). Companion to part_cooling_fan_speed_percent which is the actual/reported speed. |
 | aux_fan_speed_percent | print.big_fan1_speed OR zone_aux |
 | exhaust_fan_speed_percent | print.big_fan2_speed OR zone_exhaust |
+| heatbreak_fan_speed_percent | Heatbreak/hotend cooling fan speed as percentage (0–100). Also returned by get_fan_speeds() as `heatbreak`. |
 | is_chamber_door_open | stat bit 23 (if has_chamber_door_sensor) |
 | is_chamber_lid_open | stat bit 24 (if has_chamber_door_sensor) — chamber lid open state; sibling of is_chamber_door_open (stat bit 23) |
 | airduct_mode | device.airduct.modeCur — raw int: 0=COOL_MODE, 1=HEAT_MODE, other=NOT_SUPPORTED. air_conditioning_mode (enum) is preferred; this is the underlying raw int. |
@@ -197,10 +225,17 @@ ExtruderState key fields (per-extruder; from `extruders` list in BambuState):
 
 | Field | Type | Description |
 |---|---|---|
-| extruder_id | int | 0=right/primary, 1=left (H2D only) |
-| diameter_mm | float | Nozzle diameter in mm |
-| nozzle_type | NozzleType | Nozzle material (HARDENED_STEEL, BRASS, etc.) |
-| flow_type | NozzleFlowType | Flow characteristic (STANDARD, HIGH_FLOW, TPU_HIGH_FLOW) |
+| id | int | Physical extruder ID. 0=right/primary, 1=left (H2D only). Use `extruders[n].id` not `extruders[n].extruder_id` when reading `get_printer_state()` output. |
+| temp | float | Per-extruder nozzle temperature (°C). Mirrors BambuState active_nozzle_temp on single-extruder printers; per-extruder on H2D. |
+| temp_target | int | Per-extruder nozzle temperature target (°C). |
+| info_bits | int | Raw info bitmask; source for the `state` field (ExtruderInfoState enum). |
+| state | ExtruderInfoState | Filament status enum. NO_NOZZLE/EMPTY/BUFFER_LOADED/LOADED/NOT_AVAILABLE. Serialized as `.name` string. See enums_ams.py. |
+| status | ExtruderStatus | Operational state enum. IDLE/HEATING/ACTIVE/SUCCESS/NOT_AVAILABLE. Serialized as `.name` string. See enums_ams.py. |
+| **Nozzle sub-object** | | Nested at `extruders[n].nozzle.*` in `get_printer_state()` output; flat in `get_nozzle_info()` custom dict. |
+| nozzle.material | NozzleType | Nozzle material/type enum (HARDENED_STEEL, BRASS, etc.). Serialized as `.name` string. Note: field is `material`, not `nozzle_type`. |
+| nozzle.flow | NozzleFlowType | Flow characteristic enum (STANDARD, HIGH_FLOW, TPU_HIGH_FLOW). Serialized as `.name` string. Note: field is `flow`, not `flow_type`. |
+| nozzle.diameter_mm | float | Nozzle diameter in mm. |
+| nozzle.telemetry_type_raw | str | Raw nozzle type string as received from telemetry (e.g. "stainless_steel"). Preserved before normalization to NozzleType enum. |
 | active_tray_id | int | Currently loaded spool slot (0–3, 254=external) |
 | tray_state | TrayState | LOADED/UNLOADED/LOADING/UNLOADING |
 | target_tray_id | int | Target tray the extruder is loading toward. Sibling of active_tray_id. -1 if none. |

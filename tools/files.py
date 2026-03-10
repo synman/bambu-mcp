@@ -104,6 +104,90 @@ def get_file_info(name: str, file_path: str) -> dict:
         return {"error": f"Error getting file info: {e}"}
 
 
+def get_3mf_entry_by_name(name: str, target_name: str) -> dict:
+    """
+    Search the SD card file tree for an entry matching the given filename.
+
+    Performs a depth-first search of the cached SD card 3MF file tree
+    (from get_sdcard_3mf_files()) looking for a node whose 'name' field
+    matches target_name exactly. Useful when you know the filename but not
+    the full SD card path.
+
+    target_name is the filename only (not a full path). Examples:
+      "my_project.gcode.3mf", "part.3mf"
+    Matching is case-sensitive and exact — no wildcards or partial matches.
+
+    Returns the matching node dict with keys: id (full SD card path), name,
+    size (bytes), timestamp (epoch float), and children (if a directory).
+    Returns {"error": "not found"} when no match is found.
+
+    To search by full SD card path instead of filename, use get_3mf_entry_by_id().
+    To get the full directory tree, use list_sdcard_files().
+    """
+    log.debug("get_3mf_entry_by_name: called for name=%s target_name=%s", name, target_name)
+    printer = session_manager.get_printer(name)
+    if printer is None:
+        log.warning("get_3mf_entry_by_name: printer not connected: %s", name)
+        return _no_printer(name)
+    try:
+        from bpm.bambuproject import get_3mf_entry_by_name as _bpm_search
+        tree = printer.get_sdcard_3mf_files()
+        if tree is None:
+            log.debug("get_3mf_entry_by_name: → error: no sd card contents for %s", name)
+            return {"error": "Failed to retrieve SD card contents"}
+        result = _bpm_search(tree, target_name)
+        if result is None:
+            log.debug("get_3mf_entry_by_name: → not found: %s", target_name)
+            return {"error": f"Not found: {target_name}"}
+        log.debug("get_3mf_entry_by_name: → found %s at %s", target_name, result.get("id"))
+        return {"entry": result}
+    except Exception as e:
+        log.error("get_3mf_entry_by_name: error for %s: %s", name, e, exc_info=True)
+        return {"error": f"Error searching SD card: {e}"}
+
+
+def get_3mf_entry_by_id(name: str, target_id: str) -> dict:
+    """
+    Search the SD card file tree for an entry matching the given full path.
+
+    Performs a depth-first search of the cached SD card 3MF file tree
+    (from get_sdcard_3mf_files()) looking for a node whose 'id' field
+    matches target_id exactly. The 'id' field is the full SD card path.
+
+    target_id is the full SD card path as returned by list_sdcard_files().
+    Examples: "/cache/my_project.gcode.3mf", "/model/part.3mf"
+    Directory entries have a trailing slash: "/cache/"
+    Matching is case-sensitive and exact.
+
+    Returns the matching node dict with keys: id (full SD card path), name,
+    size (bytes), timestamp (epoch float), and children (if a directory).
+    Returns {"error": "not found"} when no match is found.
+
+    To search by filename instead of full path, use get_3mf_entry_by_name().
+    To get the full directory tree, use list_sdcard_files().
+    """
+    log.debug("get_3mf_entry_by_id: called for name=%s target_id=%s", name, target_id)
+    printer = session_manager.get_printer(name)
+    if printer is None:
+        log.warning("get_3mf_entry_by_id: printer not connected: %s", name)
+        return _no_printer(name)
+    try:
+        from bpm.bambuproject import get_3mf_entry_by_id as _bpm_search
+        tree = printer.get_sdcard_3mf_files()
+        if tree is None:
+            log.debug("get_3mf_entry_by_id: → error: no sd card contents for %s", name)
+            return {"error": "Failed to retrieve SD card contents"}
+        result = _bpm_search(tree, target_id)
+        if result is None:
+            log.debug("get_3mf_entry_by_id: → not found: %s", target_id)
+            return {"error": f"Not found: {target_id}"}
+        log.debug("get_3mf_entry_by_id: → found %s", target_id)
+        return {"entry": result}
+    except Exception as e:
+        log.error("get_3mf_entry_by_id: error for %s: %s", name, e, exc_info=True)
+        return {"error": f"Error searching SD card: {e}"}
+
+
 def get_project_info(name: str, file_path: str, plate_num: int = 1, include_images: bool = False) -> dict:
     """
     Return 3MF metadata and thumbnail info for a project file on the SD card.

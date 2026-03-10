@@ -127,14 +127,19 @@ Populated from `ams.ams[]` combined with `info.module[]`. Accessible via `BambuS
 
 | Field | Type | Description |
 |---|---|---|
-| unit_id | int | 0-based user-facing index (0=first AMS, 1=second). NOT the same as chip_id. |
+| ams_id | int | Raw chip hardware ID. On AMS 2 Pro: 0 for first unit; on AMS HT: 128. The 0-based positional unit_id concept in tool docstrings refers to this value's position in the ams_units list. |
+| chip_id | str | Hardware serial string. Same value as ams_id encoded as a string; present as a separate field. Redundant with ams_id. |
 | model | AMSModel | AMS hardware model (AMS_2_PRO, AMS_HT, AMS_LITE, etc.) |
 | humidity_index | int | 1=WET (alert) to 5=DRY (good). Higher = drier. 0=unavailable. Only 1–2 indicate a moisture problem. |
-| temp | float | Current AMS temperature (°C) |
+| humidity_raw | int | Raw humidity integer from telemetry, before mapping to the humidity_index 1–5 scale. |
+| ams_info | int | Raw integer bitmask from which heater_state, dry_fan1_status, dry_fan2_status, and dry_sub_status are decoded. Bit positions: heater_state=bits 4–7, dry_fan1_status=bits 18–19, dry_fan2_status=bits 20–21, dry_sub_status=bits 22–25. |
+| temp_actual | float | Current AMS temperature (°C) |
 | temp_target | int | Dryer target temperature (°C); 0 when not drying |
-| heater_state | AMSHeatingState | Dryer heater state enum. OFF=0, CHECKING=1 (transient — verifying conditions), DRYING=2 (active), COOLING=3, STOPPING=4, ERROR=5. CHECKING is a brief transition state; wait for DRYING to confirm active heating. |
+| heater_state | AMSHeatingState | Dryer heater state enum. OFF=0, CHECKING=1 (transient — verifying conditions), DRYING=2 (active), COOLING=3, STOPPING=4, ERROR=5. CHECKING is a brief transition state; wait for DRYING to confirm active heating. "Is drying" is conveyed by heater_state != OFF (no separate is_drying field exists). |
 | dry_sub_status | AMSDrySubStatus | Sub-status during active drying: OFF=0, HEATING=1, DEHUMIDIFY=2 |
-| is_drying | bool | True when dryer is running |
-| tray_exist | list[bool] | Slot presence flags for all 4 slots (index 0–3) |
-| assigned_to_extruder | ActiveTool enum | Which extruder this AMS unit feeds. H2D: AMS 2 Pro (unit_id 0) → RIGHT extruder (0), AMS HT (unit_id 1) → LEFT extruder (1). Set from ams_info parsing when has_dual_extruder. Critical for H2D AMS routing decisions. Single-extruder printers: always RIGHT_EXTRUDER (0). |
+| dry_fan1_status | AMSDryFanStatus | Primary drying fan state. OFF=0, ON=1. Decoded from bits 18–19 of ams_info. |
+| dry_fan2_status | AMSDryFanStatus | Secondary drying fan state. OFF=0, ON=1. Decoded from bits 20–21 of ams_info. |
+| dry_time | int | Dryer remaining time in minutes. 0 when not active. |
+| tray_exists | list[bool] | Slot presence flags for all 4 slots (index 0–3) |
+| assigned_to_extruder | ActiveTool enum | Which extruder this AMS unit feeds. H2D: AMS 2 Pro (ams_id=0, first in list) → RIGHT extruder (0), AMS HT (ams_id=128, second in list) → LEFT extruder (1). Set from ams_info parsing when has_dual_extruder. Critical for H2D AMS routing decisions. Single-extruder printers: always RIGHT_EXTRUDER (0). |
 """

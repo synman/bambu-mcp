@@ -367,6 +367,99 @@ A bpm item covered by an MCP tool but missing an HTTP route (or vice versa) is a
 
 "Seems deliberate" or "probably MCP-only by design" are not valid resolutions. Only an explicit exclusions table entry closes a G-type gap.
 
+**Implicit serialization gaps are not documentation gaps (Type H gaps):**
+A dataclass field that is returned by a tool via `_serialize()` (or equivalent recursive serialization) but is absent from the tool's docstring AND the corresponding knowledge table is a **Type H gap**. These fields are technically accessible but agents cannot reliably interpret them — undocumented enum values, missing semantics, and unknown scale/units mean the field is functionally invisible despite being present in the response payload.
+
+Type H gaps must be resolved by:
+- Adding the field to the tool's docstring with full semantics (scale, enum values, edge cases), AND
+- Adding the field to the appropriate `knowledge/api_reference_*.py` table row
+
+Type H gaps may NOT be resolved by exclusion table entries — if the field is in the serialized output, it must be documented. If it should not be documented (truly internal), remove it from the serialized output instead.
+
+**Audit agents must check for Type H gaps** by comparing every field of every serialized dataclass against the tool docstring and knowledge table. Finding a field in `_serialize()` output that has no docstring mention and no knowledge table row is a Type H gap regardless of whether the field seems obvious.
+
+**UI element traceability gaps (Type I gaps):**
+A stream view UI element (health panel section, HUD row, endpoint like `/annotated`, `/factors_radar`, `/status`, `/job_state`, image panel, badge, sparkline, etc.) that has no corresponding entry in a knowledge module or tool docstring is a **Type I gap**. An agent reading only MCP documentation would have no way to know the element exists, what data it shows, or how to interpret it.
+
+Type I gaps must be resolved by:
+- Adding a description of the UI element and its data source to `knowledge/behavioral_rules_camera.py` or an appropriate knowledge module, OR
+- Documenting it in the relevant tool's docstring (e.g. `start_stream()` / `view_stream()` docstring already lists HUD components — add missing items there)
+
+Type I gaps are **Medium severity**: the stream view works without documentation, but agents cannot guide users through what they're seeing or interpret health/status data correctly.
+
+**Baseline pre-flight includes a UI Traceability check (mandatory):**
+The gap analysis report (`/tmp/bpm-mcp-gap-report.html`) must include a **UI Traceability** section listing all stream view UI elements and their knowledge/docstring coverage status. Any Type I gap found during baseline pre-flight must be either resolved or added to the intentional exclusions table before baseline capture.
+
+**UI Traceability Reference (authoritative — use to verify coverage without re-reading mjpeg_server.py):**
+
+Stream server is `camera/mjpeg_server.py`. Per-stream HTTP endpoints (port separate from REST API):
+
+| Endpoint | Method | Content-Type | Description |
+|---|---|---|---|
+| `/` | GET | text/html | Full overlay page with HUD, health panel, bottom panels |
+| `/status` | GET | application/json | Telemetry dict; polled every 2s by HUD JS |
+| `/thumbnail` | GET | image/png | Current job isometric render; 404 if no job |
+| `/layout` | GET | image/png | Current job plate layout; 404 if no job |
+| `/annotated` | GET | image/png | Anomaly-detection overlay from background monitor; 204 if no data |
+| `/factors_radar` | GET | image/png | Failure drivers spider chart (8 factors); 204 if no data |
+| `/health_panel_img` | GET | image/png | Arc gauge health panel PIL image; 204 if no data |
+| `/snapshot` | GET | image/jpeg | Single live camera frame |
+| `/job_state` | GET | application/json | Full background monitor result dict (see `api_reference_camera.py`) |
+| `/open` | GET | text/html | Portal page used by `view_stream()` to open a named browser tab |
+
+`GET /status` response schema (authoritative — from `_build_status()` in `tools/camera.py`):
+```
+gcode_state, print_percentage, current_layer, total_layers, elapsed_minutes, remaining_minutes,
+stage_name, subtask_name, nozzles (list of {id, temp, target}), bed_temp, bed_temp_target,
+chamber_temp, chamber_temp_target, part_cooling_pct, aux_pct, exhaust_pct, heatbreak_pct,
+is_chamber_door_open, is_chamber_lid_open, active_filament ({type, color, remaining_pct}),
+ams_humidity_index, speed_level, wifi_signal, active_error_count, hms_errors (list),
+fps, fps_cap  ← fps/fps_cap added by _serve_status(), not _build_status()
+```
+
+Complete UI element inventory with DOM IDs and data sources (baseline state after v1.0.2):
+
+**Top-right FPS counter** (`#fps-display`): `fps` + `fps_cap` from `/status`; animated 5-column bar graph; color-tiered.
+
+**Top-left HUD panel** (`#hud-panel`): polls `/status` every 2s.
+- Badge row: `#badge` (gcode_state, color-coded) + `#speed-badge` (speed_level label, only when active)
+- Subtask line: `#subtask` (subtask_name, truncated)
+- Progress bar: `#progress-fill` (print_percentage)
+- Print rows: Stage (stage_name), Layers (current_layer/total_layers), Elapsed, Remaining
+- Temps: Nozzle(s) (nozzles[].temp / target), Bed (bed_temp/bed_temp_target), Chamber (chamber_temp/chamber_temp_target)
+- Fans: Part cooling, Aux, Exhaust, Heatbreak — rendered from part_cooling_pct, aux_pct, exhaust_pct, heatbreak_pct; hidden when 0
+- Filament swatch (`#filament-row`): colored dot + type label from active_filament
+- AMS humidity (`#humidity-row`): ams_humidity_index; shown only when elevated
+- Wi-Fi signal bars (`#wifi`): wifi_signal (dBm string); unicode block chars, color-tiered
+- HMS error links (`#errors`): hms_errors list; clickable, open Bambu error page in popup
+- **Chamber door/lid warning** (`#door-warn`): is_chamber_door_open / is_chamber_lid_open; orange banner "⚠ DOOR OPEN" / "⚠ LID OPEN" / "⚠ DOOR + LID OPEN"; H2D only
+
+**Bottom image panels** (appear only when a print job is active):
+- Thumbnail panel (`#thumb-wrap`, bottom-left): `/thumbnail` PNG; isometric 3D render
+- Layout panel (`#layout-wrap`, bottom-right): `/layout` PNG; annotated plate layout
+
+**Right-side JOB HEALTH panel** (`#health-panel`, position:fixed top:118px right:14px width:180px):
+Polls `/job_state` every 8s (separate polling loop from `/status`). Auto-expands when gcode_state is RUNNING/PAUSE/FAILED/FINISH; collapses to verdict badge only when IDLE.
+- `#hp-verdict`: verdict badge — CLEAN / WARNING / CRITICAL / STANDBY; color-coded (green/amber/red/gray)
+- `#hp-sec-score`: score section — `/health_panel_img` PNG (120px arc gauge) + composite score % (success_probability × decision_confidence) + confidence %
+- `#hp-sec-metrics`: metrics — Hot px %, Strand score, Diff score, Layer/total, Progress %
+- `#hp-sec-trends`: 4 rolling sparkline canvases — Success % (30-sample, green), Confidence % (dashed blue), Nozzle °C (mini), Bed °C (mini); plus a status text row showing gcode_state + layer + AMS humidity %
+- `#hp-anomaly-section` (AI Detection): `/annotated` PNG + legend swatches (Air Zone yellow-border, Plate Zone green-border, Heat Map orange-red gradient); toggled via `hpAnomalyToggle` which expands health panel to `calc(100vw - 340px)` via `.hp-wide` class
+- `#hp-radar-section` (Failure Drivers): `/factors_radar` PNG (8-factor spider chart); toggled via `hudToggle` (narrow panel, collapses within 180px)
+
+**Key element IDs for Type I audit verification:**
+`#hud-panel`, `#fps-display`, `#badge`, `#speed-badge`, `#subtask`, `#progress-fill`, `#door-warn`,
+`#filament-row`, `#humidity-row`, `#wifi`, `#errors`,
+`#health-panel`, `#hp-verdict`, `#hp-sec-score`, `#hp-sec-metrics`, `#hp-sec-trends`,
+`#hp-anomaly-section`, `#hp-radar-section`,
+`#thumb-wrap`, `#layout-wrap`
+
+**Authoritative coverage locations:**
+- HUD panel elements → `knowledge/behavioral_rules_camera.py` + `start_stream()` docstring in `tools/camera.py`
+- JOB HEALTH panel → `knowledge/behavioral_rules_camera.py` (new section added v1.0.2)
+- Stream endpoints + `/status` schema → `knowledge/api_reference_camera.py` (Stream Server Endpoints section added v1.0.2)
+- Job state result dict → `knowledge/api_reference_camera.py` (JobStateReport + background monitor result dict)
+
 **Knowledge obligation (mandatory for all covered items):**
 Every item reachable via an MCP tool or HTTP route MUST be documented in the appropriate `knowledge/api_reference_*.py` or `knowledge/enums_*.py` module. Coverage without documentation is an incomplete implementation.
 
@@ -443,6 +536,18 @@ The following BPM methods are **intentionally not** exposed as MCP tools or HTTP
 | `ExtruderState.info_bits` | **A** | Raw extruder info bitfield used internally to derive `state` (ExtruderInfoState). No direct agent use case; present in serialized output only. |
 | `ActiveJobInfo.project_info_fetch_attempted` | **A** | Internal diagnostic flag — whether `get_project_info()` has been attempted for this job. Not user-actionable; present in serialized output only. |
 | `BambuSpool.state` (raw RFID) | **C** | Raw RFID state integer. Surfaced in `/api/printer` full JSON; the derived `display_name` and `color` fields provide all user-relevant spool identification. |
+| `BambuPrinter.ftp_connection` | **A** | Internal FTPS context manager used by all SD card file methods. Not a user-facing operation; FTPS sessions are managed within each file method call. |
+| `BambuPrinter.client` | **A** | Internal MQTT client handle used by bpm send/subscribe operations. Not safe or meaningful to expose over HTTP/MCP. |
+| `BambuPrinter.on_update` | **A** | Internal telemetry update callback wired by the mcp session manager. Not a user-facing operation. |
+| `BambuPrinter.recent_update` | **A** | Internal readiness flag; `True` after first telemetry push. No direct agent use case. |
+| `BambuPrinter.internalException` | **A** | Internal error tracker for MQTT communication faults. Not actionable; error state is surfaced via HMS errors and gcode_state. |
+| `BambuPrinter.sdcard_file_exists()` | **A** | Internal file existence check used within file operations. No standalone user use case; file operations handle this internally. |
+| `BambuConfig.set_new_bpm_cache_path()` | **A** | Internal config method for relocating the bpm metadata cache. Set at session init by the mcp server; no runtime agent use case. |
+| `BambuConfig.verbose` | **A** | Internal debug logging flag. Controlled by `BAMBU_MCP_DEBUG` env var at the server level, not per-printer config. No agent use case. |
+| `BambuState.fromJson` | **A** | Internal MQTT payload parser classmethod called by bpm's MQTT message handler. Not user-invokable; state is read via `get_printer_state` and targeted tools. |
+| `NozzleCharacteristics.from_telemetry` | **A** | Internal factory classmethod constructing `NozzleCharacteristics` from raw telemetry. Called by `BambuState.fromJson`; not user-facing. |
+| `NozzleCharacteristics.to_identifier` | **A** | Internal nozzle identifier encoder (e.g. `"HS00-0.4"`). Used for telemetry encoding internally; not user-facing. |
+| `DiscoveredPrinter.fromData` | **A** | Internal SSDP packet parser called by `BambuDiscovery._discovery_thread`. Discovery results are returned by the `discover_printers` MCP tool. |
 
 ### Coverage audit checklist
 
@@ -461,11 +566,20 @@ The following procedure is **required** during baseline pre-flight step 2. A del
 
 **How to run:**
 1. Launch a `task` agent (explore or general-purpose) with this prompt (adapt paths as needed):
-   > "Audit the installed bpm package at `~/bambu-mcp/.venv/lib/python3.12/site-packages/bpm/`. Inspect all public methods, fields, properties, and attributes in `bambuprinter.py`, `bambustate.py`, `bambuconfig.py`, `bambuspool.py`, `bambuproject.py`, `bambutools.py`. For method semantics, consult the official bpm documentation at `https://synman.github.io/bambu-printer-manager/` before evaluating coverage. Cross-check each item against the mcp's MCP tools (`tools/*.py`) and HTTP routes (`api_server.py`). Report all items not covered by at least one access path and not listed in the intentional non-gaps table in `.github/copilot-instructions.md`."
-2. The agent must produce a structured findings report: gap type (A/B/C/D/E/F/G), affected item, and resolution.
+   > "Audit the installed bpm package at `~/bambu-mcp/.venv/lib/python3.12/site-packages/bpm/`. Inspect all public methods, fields, properties, and attributes in `bambuprinter.py`, `bambustate.py`, `bambuconfig.py`, `bambuspool.py`, `bambuproject.py`, `bambutools.py`. For method semantics, consult the official bpm documentation at `https://synman.github.io/bambu-printer-manager/` before evaluating coverage. Cross-check each item against the mcp's MCP tools (`tools/*.py`) and HTTP routes (`api_server.py`). Report all items not covered by at least one access path and not listed in the intentional non-gaps table in `.github/copilot-instructions.md`. **Additionally, perform a Type H audit:** for every MCP tool that calls `_serialize()` on a bpm dataclass, read the actual dataclass field names from the installed bpm source (`bambustate.py`, `bambuspool.py`, `bambuproject.py`, `bambuconfig.py`), then compare every field name against (a) the tool's Python docstring and (b) the corresponding knowledge table in `knowledge/api_reference_*.py`. Report any field that is present in the serialized output but absent from the docstring or knowledge table (MISSING), any field documented under a name that differs from the actual dataclass field name (WRONG NAME), and any field documented in the knowledge table or docstring that does not exist as a real dataclass field (PHANTOM). **Additionally, perform a Type I (UI Traceability) audit:** Using the authoritative UI Traceability Reference table in `.github/copilot-instructions.md` (under "UI element traceability gaps (Type I gaps)"), verify every listed UI element and stream endpoint against its declared authoritative coverage location (`knowledge/behavioral_rules_camera.py` for HUD/health panel elements, `knowledge/api_reference_camera.py` for stream endpoints and `/status` schema). Do NOT re-read `camera/mjpeg_server.py` to enumerate elements — the reference table is the source of truth. Verify coverage exists at the documented location, then report any element or endpoint missing from its expected location as a Type I gap. If the reference table itself appears incomplete (an element in `mjpeg_server.py` not in the table), report it as a new Type I gap requiring a rules update before resolution."
+2. The agent must produce a structured findings report: gap type (A/B/C/D/E/F/G/H/I), affected item, and resolution.
 3. Resolve all High-severity gaps (Types A, C, D, F) before proceeding.
-4. For each Medium/Low item (Types B, E, G): add to the intentional exclusions table or add coverage.
+4. For each Medium/Low item (Types B, E, G, H, I): add to the intentional exclusions table or add coverage.
 5. Output the required findings statement (see global rules). **Baseline capture is blocked until it appears.**
+6. The gap analysis HTML report (`/tmp/bpm-mcp-gap-report.html`) must include a **UI Traceability** section listing all stream view UI elements and their knowledge/docstring coverage status. Generate or regenerate the report after resolving all Type I findings.
+
+**Serialized field name verification (mandatory — applies to all documentation work):**
+When writing or updating a tool docstring or knowledge table that describes fields returned by `_serialize()`, field names MUST be taken from the actual dataclass definition in the installed bpm source. Do NOT:
+- Copy field names from prior documentation (prior docs may already be wrong)
+- Infer field names from semantic concepts (e.g. `unit_id` because the concept is "unit index")
+- Use names from `get_nozzle_info()` custom dict for `get_printer_state()` nested objects — they are different shapes
+
+The only authoritative source for a serialized field name is the dataclass field definition itself (`@dataclass class X: field_name: type = ...`).
 
 **Audit source: installed package only.** Always audit `~/bambu-mcp/.venv/lib/python3.12/site-packages/bpm/`, not the source tree at `~/bambu-printer-manager/`. The installed version is what the mcp actually runs against.
 
@@ -475,7 +589,7 @@ The following procedure is **required** during baseline pre-flight step 2. A del
 
 **A gap-resolution turn is not complete until the audit report is regenerated and baseline readiness is assessed — in the same turn, without waiting for a user prompt.**
 
-After resolving any audit gaps (documenting Type B fields, adding HTTP routes, fixing Type C documentation errors, updating the exclusions table):
+After resolving any audit gaps (documenting Type B fields, adding HTTP routes, fixing Type C documentation errors, updating the exclusions table, documenting Type H implicit serialization fields):
 
 1. **Regenerate the audit report** — write `/tmp/bpm-mcp-gap-report.html` and update the session markdown copy. This is not optional; it is the verification step that confirms the work is actually done.
 2. **Check baseline readiness** — run the pre-baseline pre-flight (all repos clean, no uncommitted changes, all gaps resolved, report shows zero High-severity items).

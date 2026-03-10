@@ -349,11 +349,12 @@ def start_stream(name: str, port: int | None = None) -> dict:
       - Progress bar: thin 3-px bar, color tracks state
       - Rows (label + value pairs): Stage, Layers (current/total), Elapsed, Remaining
       - Temps section: nozzle temp(s) (°C / target), bed temp, chamber temp
-      - Fans section: part cooling %, aux %, exhaust %
+      - Fans section: part cooling %, aux %, exhaust %, heatbreak % (zero-value fans hidden)
       - Filament swatch: colored dot + type label for the active spool
       - AMS humidity index
       - Wi-Fi signal bars (unicode block chars, color-tiered by strength)
       - HMS error links (clickable, open Bambu error page in popup)
+      - Chamber door/lid warning: orange banner when chamber door or lid is open (H2D only)
 
     Top-right FPS counter:
       - Numeric FPS readout + 5-column animated bar graph (green/amber/red by rate)
@@ -361,6 +362,16 @@ def start_stream(name: str, port: int | None = None) -> dict:
     Bottom image panels (appear when a print job is active):
       - Thumbnail panel (bottom-left): isometric 3D render of the current job
       - Layout panel (bottom-right): annotated top-down plate layout image
+
+    Right-side JOB HEALTH panel (appears when a print is active):
+      - Verdict badge: CLEAN / WARNING / CRITICAL / STANDBY (color-coded composite score)
+      - Score section: composite score bar + % + confidence %; driven by /health_panel_img
+      - Metrics section: Hot px %, Strand, Diff, Layer, Progress
+      - Trends section: 4 rolling sparklines (Success %, Confidence %, Nozzle °C, Bed °C)
+      - AI Detection section: annotated anomaly overlay + Air Zone / Plate Zone / Heat Map
+        legend; expands health panel to full width
+      - Failure Drivers section: 8-factor spider chart (factors_radar image)
+      - Polls /job_state every 8 s; auto-expands when RUNNING/PAUSE/FAILED/FINISH
 
     Args:
       name — printer name

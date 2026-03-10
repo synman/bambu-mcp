@@ -155,6 +155,68 @@ Computed by `_stable_verdict(window: deque)` in `job_monitor.py`:
 
 ---
 
+## Stream Server Endpoints
+
+Each MJPEG stream server (started by `start_stream()` / `view_stream()`) runs on its own
+ephemeral port and serves the following HTTP endpoints. The base URL is the `url` field
+returned by `start_stream()` (e.g. `http://localhost:49152`).
+
+| Endpoint | Method | Content-Type | Description |
+|----------|--------|--------------|-------------|
+| `GET /` | GET | text/html | Serves the full MJPEG overlay page (HUD + health panel + image panels) |
+| `GET /status` | GET | application/json | Live telemetry dict polled every 2 s by the HUD; see schema below |
+| `GET /thumbnail` | GET | image/png | Current job isometric 3D render; 404 if no active job or no project data |
+| `GET /layout` | GET | image/png | Current job annotated plate top-down layout; 404 if no active job or no project data |
+| `GET /annotated` | GET | image/png | Anomaly-detection overlay from background monitor; 204 No Content if no data available |
+| `GET /factors_radar` | GET | image/png | Failure Drivers 8-factor spider chart; 204 No Content if no data available |
+| `GET /health_panel_img` | GET | image/png | Arc gauge health panel image (120 px); 204 No Content if no data available |
+| `GET /snapshot` | GET | image/jpeg | Single live camera frame captured on demand |
+| `GET /job_state` | GET | application/json | Full background monitor result dict (same schema as `analyze_active_job()` return value); polled every 8 s by the JOB HEALTH panel |
+| `GET /open` | GET | text/html | Named-tab portal page; used by `view_stream()` to open the stream in a persistent browser tab (`bambu-{name}`) |
+
+### `/status` response schema
+
+```json
+{
+  "gcode_state": "RUNNING",
+  "print_percentage": 42,
+  "current_layer": 120,
+  "total_layers": 280,
+  "elapsed_minutes": 65,
+  "remaining_minutes": 90,
+  "stage_name": "Printing normally",
+  "subtask_name": "my_print.gcode.3mf",
+  "nozzles": [{"id": 0, "temp": 220.1, "target": 220}],
+  "bed_temp": 60.0,
+  "bed_temp_target": 60,
+  "chamber_temp": 38.5,
+  "chamber_temp_target": 45,
+  "part_cooling_pct": 100,
+  "aux_pct": 0,
+  "exhaust_pct": 30,
+  "heatbreak_pct": 75,
+  "is_chamber_door_open": false,
+  "is_chamber_lid_open": false,
+  "active_filament": {"type": "PLA", "color": "#FF0000", "remaining_pct": 72},
+  "ams_humidity_index": 4,
+  "speed_level": 2,
+  "wifi_signal": "-62",
+  "active_error_count": 0,
+  "hms_errors": [],
+  "fps": 18,
+  "fps_cap": 20
+}
+```
+
+Fields of note:
+- `heatbreak_pct` — heatbreak fan speed %; shown in the Fans row alongside part/aux/exhaust (zero-value fans are hidden)
+- `is_chamber_door_open` / `is_chamber_lid_open` — trigger the `#door-warn` orange banner (H2D only)
+- `speed_level` — integer (1=Quiet, 2=Standard, 3=Sport, 4=Ludicrous); drives the speed badge
+- `fps` / `fps_cap` — live frame rate and configured cap; drives the top-right FPS counter
+- `hms_errors` — list of active HMS error objects; rendered as clickable links in the HUD
+
+---
+
 ## Disk Persistence
 
 Several camera/monitor artifacts are persisted to `~/.bambu-mcp/` so they survive MCP server

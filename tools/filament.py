@@ -79,19 +79,29 @@ def get_ams_units(name: str) -> dict:
     the presence/absence of filament in each of the four slots.
 
     Field semantics:
-    - unit_id in the returned data is the 0-based user-facing index (0 = first AMS,
-      1 = second, etc.). This is NOT the same as the internal chip_id used in spool
-      active_ams_id fields (AMS 2 Pro chip_id starts at 0; AMS HT chip_id starts at 128).
-    - Each unit has 4 slots (0–3). Slot presence is indicated by tray_exist flags.
+    - ams_id in the returned data is the raw chip hardware ID (0 for AMS 2 Pro first
+      unit, 128 for AMS HT). The 0-based positional unit_id used by load_filament() and
+      other write tools refers to the position of the unit in the ams_units list, not
+      this raw hardware value.
+    - Each unit has 4 slots (0–3). Slot presence is indicated by tray_exists flags.
     - The AMS model is identified by the `model` field (AMSModel enum name, e.g.
       'AMS_2_PRO', 'AMS_HT'). See the enums knowledge module for all values.
-    - On H2D: AMS 2 Pro (chip_id 0, unit_id 0) feeds the RIGHT extruder (extruder 0);
-      AMS HT (chip_id 128, unit_id 1) feeds the LEFT extruder (extruder 1).
+    - On H2D: AMS 2 Pro (ams_id=0, first in list) feeds the RIGHT extruder (extruder 0);
+      AMS HT (ams_id=128, second in list) feeds the LEFT extruder (extruder 1).
     - humidity_index scale: 1=WET (alert, filament needs drying), 5=DRY (good, no action
       needed). IMPORTANT: higher numbers mean DRIER — the scale is counterintuitive.
       Only humidity_index values of 1 or 2 indicate a moisture problem. A value of 5
       means the filament is completely dry. 0 means the sensor reading is unavailable
       (uninitialized or not supported by this AMS model — do not treat as wet).
+    - heater_state: AMSHeatingState enum name — OFF, CHECKING (transient), DRYING (active),
+      COOLING, STOPPING, ERROR. CHECKING is a brief transition state after issuing a
+      start_ams_dryer() command; DRYING with dry_sub_status=HEATING confirms active heating.
+    - dry_sub_status: AMSDrySubStatus enum name — OFF, HEATING, DEHUMIDIFY. Indicates the
+      current phase within an active drying cycle.
+    - dry_fan1_status: AMSDryFanStatus enum name — OFF or ON. Primary drying fan (bits 18–19
+      of ams_info). Only meaningful while heater_state=DRYING.
+    - dry_fan2_status: AMSDryFanStatus enum name — OFF or ON. Secondary drying fan (bits
+      20–21 of ams_info). Only meaningful while heater_state=DRYING.
     """
     log.debug("get_ams_units: called for name=%s", name)
     state = session_manager.get_state(name)

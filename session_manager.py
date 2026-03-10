@@ -44,6 +44,11 @@ class SessionManager:
     def on_update(self, name: str) -> None:
         """Called by BambuPrinter.on_update — notifies all registered callbacks."""
         logger.debug("on_update: called for name=%s", name)
+        try:
+            from notifications import notifications as _notifications
+            _notifications.check_and_emit(name)
+        except Exception as _e:
+            logger.debug("on_update: notifications error for %s: %s", name, _e)
         for cb in self._update_callbacks:
             try:
                 logger.debug("on_update: calling callback %s for %s", cb, name)
