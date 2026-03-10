@@ -255,6 +255,10 @@ def start_ams_dryer(
     If the AMS unit model does not support drying (e.g. AMS Lite), the command is
     silently ignored by the printer.
     Requires user_permission=True.
+
+    filament_type is derived automatically from the loaded spool in the target AMS unit
+    (spool.type, e.g. "ABS", "PLA"). Falls back to "" if no spool is loaded or type is
+    unavailable — the firmware accepts an empty string and applies default dryer behavior.
     """
     log.debug("start_ams_dryer: called for name=%s unit_id=%s target_temp=%s duration_hours=%s user_permission=%s", name, unit_id, target_temp, duration_hours, user_permission)
     import time

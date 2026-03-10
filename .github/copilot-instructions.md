@@ -71,6 +71,12 @@ The 3-tier escalation policy (`bambu://knowledge/fallback_strategy`) applies to 
 
 Neither developer context nor privileged source access authorizes skipping Tier 1. If `get_knowledge_topic()` answers the question, stop there.
 
+**MCP tool behavior questions (mandatory Tier-1 check):** When the question is about an MCP tool's parameter semantics, resolution logic, or behavior (e.g. "what value will be passed?", "how is unit_id resolved?", "what does auto-derivation produce?"), the required Tier-1 sources are:
+1. The tool's own docstring (visible via `get_knowledge_topic("api_reference/ams")` or the relevant api_reference topic)
+2. Live state data from the relevant MCP state tool (e.g. `get_ams_units()` → unit_id=1 = second AMS → ams_id=128)
+
+These two together are almost always sufficient. Reading `_resolve_ams_id` source when `unit_id` is documented as "0-based index" in knowledge and live state shows the unit mapping is a Tier-1 skip — not a Tier-2 escalation. State this explicitly before touching any source file.
+
 **Tier 1 is exhausted when ALL of the following are true:**
 - Every relevant `get_knowledge_topic()` topic has been called (not just one)
 - The returned content was read in full and does not answer the question
