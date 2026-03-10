@@ -1173,3 +1173,25 @@ M400         ; confirmed at clearance
 **Do not use:** `G1` (controlled-rate feed) is not necessary for calibration moves — `G0` (rapid move) is the correct command. Do not use firmware-specific extensions (e.g., Bambu's `M622`, AMS commands) in calibration sequences — use only the verified command set above.
 
 This section is the Bambu-specific extension of the global "GCode Calibration Motion Safety" rule. The global rule governs structure and safety; this section governs the exact command syntax for Bambu printers.
+
+## Proactive Bed Preheat Suggestion (Mandatory)
+
+When the user asks about a print job's plate or a specific 3MF file (e.g. viewing plate thumbnails, checking filament, asking "what does plate N look like", reviewing a file on the SD card), assess whether preheating is appropriate and, if so, offer it proactively.
+
+**Hard requirements:**
+- **Always ask first** — never issue a preheat command without explicit user permission in the current turn.
+- Determine "good time to preheat" by: printer is idle (`gcode_state` = IDLE/FINISH/FAILED), bed is currently at or near ambient, and a print job appears imminent from context.
+- When offering, use `ask_user` — state the target bed and chamber temperatures and ask permission before acting.
+
+**Temperature source (mandatory — do not hardcode or infer):**
+All target temperatures must be derived from the MCP's own knowledge and tool docstrings:
+1. Call `get_project_info()` for the plate — read `bed_type` and the filament list (type, `nozzle_temp_min`/`nozzle_temp_max`, `drying_temp`).
+2. Consult the `print_file` tool docstring for `bed_type` semantics (`cool_plate`, `eng_plate`, `hot_plate`, `textured_plate`).
+3. Consult `get_knowledge_topic('enums/filament')` for `PlateType` enum values and their standard temperature associations.
+4. Consult `get_spool_info()` for the active spool's `nozzle_temp_min`/`nozzle_temp_max` and `drying_temp` if the filament is already loaded.
+5. Never hardcode bed/chamber temperatures. If knowledge modules do not provide a clear target, state that and ask the user to confirm temps before offering to preheat.
+
+**Execution (after permission):**
+- Use `set_bed_temp(user_permission=True)` and `set_chamber_temp(user_permission=True)`.
+- If the printer is already printing, do not offer (preheat is already active).
+- If the user declines, do not offer again in the same conversation context for the same file.
