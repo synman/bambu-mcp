@@ -465,6 +465,19 @@ The following procedure is **required** during baseline pre-flight step 2. A del
 
 **Official docs are mandatory for semantics.** Before evaluating any method's coverage, check `https://synman.github.io/bambu-printer-manager/` for its documented behavior. Do not rely solely on installed source code to determine method intent — docstrings in the installed package may be incomplete.
 
+### Gap-Resolution Turn Completion Rule (Mandatory)
+
+**A gap-resolution turn is not complete until the audit report is regenerated and baseline readiness is assessed — in the same turn, without waiting for a user prompt.**
+
+After resolving any audit gaps (documenting Type B fields, adding HTTP routes, fixing Type C documentation errors, updating the exclusions table):
+
+1. **Regenerate the audit report** — write `/tmp/bpm-mcp-gap-report.html` and update the session markdown copy. This is not optional; it is the verification step that confirms the work is actually done.
+2. **Check baseline readiness** — run the pre-baseline pre-flight (all repos clean, no uncommitted changes, all gaps resolved, report shows zero High-severity items).
+3. **If baseline-ready:** proceed directly to the `ask_user` baseline confirmation gate in the same turn. Do not stop and wait for the user to say "what's next?".
+4. **If not baseline-ready:** report exactly what is blocking (e.g., "BPM and BPA have staged commits awaiting your manual commit") and stop. Do not silently finish gap work and leave the user wondering about status.
+
+**The cycle this rule breaks:** gap work done → agent stops → user asks for report → report generated → user asks about baseline → pre-flight run → user discovers blockers. All of these steps must collapse into one turn.
+
 ---
 
 ## Camera Feature Tier Parity (Mandatory)
