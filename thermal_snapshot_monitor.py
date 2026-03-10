@@ -36,6 +36,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
 from scipy.ndimage import binary_closing, binary_dilation
+from scipy.ndimage import gaussian_filter, sobel as scipy_sobel
 from scipy.ndimage import label as ndlabel
 from scipy.spatial import ConvexHull as SpatialHull
 from matplotlib.path import Path as MPath
@@ -57,10 +58,10 @@ PRINTER_PROFILES = {
     "A1": {
         "secret_pfx":    "bambu-a1-printer",
         "camera":        "tcp_tls",
-        "plate_left":    0.05,   # TBD — calibrated empirically by vision agent
-        "plate_right":   0.95,   # TBD
-        "plate_top_det": 0.20,   # TBD
-        "plate_top_dsp": 0.12,   # TBD
+        "plate_left":    0.05,
+        "plate_right":   0.82,   # empirically calibrated: physical plate right at ~80% of frame
+        "plate_top_det": 0.20,
+        "plate_top_dsp": 0.12,
     },
 }
 # Set by _parse_args() at startup; all functions read these module-level globals.
@@ -194,6 +195,75 @@ def compute_heat(arr, bsz=25):
     return 0.5*lum_n + 0.5*var_n, lum_n
 
 
+def _sobel_plate_mask(arr, seed_mask):
+    """Expand seed_mask outward to the physical plate-rail geometric edge.
+
+    Luminance detection stops at the hot-zone boundary (inside the plate).
+    The physical plate-rail edge is a gradient peak in the raw camera image.
+    Between the hot-zone edge and the plate-rail edge is a low-gradient valley
+    (the cool plate rim).  This function walks outward looking for the
+    valley-then-rise pattern:
+
+        high (hot-zone edge) → low (cool rim) → high (plate-rail boundary)
+
+    Returns (refined_mask, hit_edge).  refined_mask is the expansion just
+    *before* the plate-rail ring.  Returns (seed_mask, False) on failure.
+    """
+    H, W = arr.shape[:2]
+    gray = np.dot(arr[..., :3], [0.299, 0.587, 0.114]).astype(np.float32) / 255.0
+    blurred = gaussian_filter(gray, sigma=1.5)
+    sx = scipy_sobel(blurred, axis=1)
+    sy = scipy_sobel(blurred, axis=0)
+    grad_mag = np.hypot(sx, sy).astype(np.float32)
+
+    DILATION_STEP = 3   # px per expansion step
+    MAX_STEPS     = 30  # max ~90 px total expansion
+    MAX_COV       = 0.88
+
+    current     = seed_mask.copy()
+    ring_grads  = []
+    ring_masks  = [seed_mask.copy()]
+
+    for _ in range(MAX_STEPS):
+        expanded = binary_dilation(current, iterations=DILATION_STEP)
+        ring = expanded & ~current
+        if not ring.any():
+            break
+        if expanded.sum() / (H * W) > MAX_COV:
+            break
+        ring_grads.append(float(grad_mag[ring].mean()))
+        ring_masks.append(expanded.copy())
+        current = expanded
+
+    if len(ring_grads) < 3:
+        return seed_mask, False
+
+    g_peak = max(ring_grads)
+    if g_peak <= 0:
+        return seed_mask, False
+    g_norm = [g / g_peak for g in ring_grads]
+
+    # Step 1: find first valley — gradient drops to < 25% of peak (past hot-zone edge)
+    valley_i = -1
+    for i, g in enumerate(g_norm):
+        if g < 0.25:
+            valley_i = i
+            break
+
+    if valley_i < 0:
+        return seed_mask, False
+
+    # Step 2: find the rise after the valley — gradient > 25% of peak (plate-rail edge)
+    for i in range(valley_i + 1, len(g_norm)):
+        if g_norm[i] > 0.25:
+            # ring_masks[i+1] includes the edge ring (plate boundary pixels)
+            refined = ring_masks[i + 1] if i + 1 < len(ring_masks) else ring_masks[i]
+            if refined.sum() / (H * W) <= MAX_COV:
+                return refined, True
+
+    return seed_mask, False
+
+
 def detect_plate_thermal(arr, floor_temp, bed_temp):
     H, W = arr.shape[:2]
     heat, lum_n = compute_heat(arr)
@@ -293,6 +363,13 @@ def detect_plate_thermal(arr, floor_temp, bed_temp):
             binary_closing(lum_n >= best_thresh, iterations=2))
 
     plate_mask = best_mask
+
+    # Sobel refinement: expand luminance-detected hot zone outward to the
+    # physical plate-rail geometric edge (temperature-independent hard edge).
+    sobel_mask, hit_edge = _sobel_plate_mask(arr, plate_mask)
+    if hit_edge:
+        plate_mask = sobel_mask
+
     coverage_pct = 100.0 * plate_mask.sum() / (H * W)
 
     ys, xs = np.where(plate_mask)
