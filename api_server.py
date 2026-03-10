@@ -897,7 +897,7 @@ def _build_app():
 
     @app.route("/api/set_chamber_target_temp")
     def set_chamber_target_temp():
-        """Set chamber temperature target. ?temp=<°C>"""
+        """Set chamber temperature target. On H2D, sends MQTT; on A1/P1S, stores target for external chamber management. ?temp=<°C>"""
         log.debug("set_chamber_target_temp: called")
         p, _ = _get_printer(request.args)
         if p is None:

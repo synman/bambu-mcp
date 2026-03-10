@@ -32,8 +32,9 @@ Set the chamber temperature target.
 Query parameters:
 - `temp` (required) — integer °C
 
-On printers with active chamber heating (H2D), sets the target. On printers without
-managed chamber heating (A1, P1S), records the ambient temperature for firmware use.
+On printers with active chamber heating (H2D), sends MQTT to set and activate the target.
+On printers without managed chamber heating (A1, P1S), stores the target value — useful for
+external chamber management solutions that read the stored target and drive their own heating hardware.
 Returns `{"success": true}`.
 
 ---

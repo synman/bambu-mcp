@@ -413,6 +413,11 @@ The following BPM methods are **intentionally not** exposed as MCP tools or HTTP
 | `/api/health_check` (HTTP-only) | Server-level diagnostic; no printer context; no MCP tool needed — agents can call the route directly |
 | `/api/filament_catalog` (HTTP-only) | Material catalog lookup; BPA uses directly via HTTP; no agent use case for wrapping in MCP tool |
 | Targeted read MCP tools (`get_temperatures`, `get_fan_speeds`, `get_climate`, `get_print_progress`, `get_job_info`, `get_hms_errors`, `get_spool_info`, `get_ams_units`, `get_external_spool`, `get_nozzle_info`, `get_capabilities`, `get_printer_info`, `get_wifi_signal`) | By design: all targeted read tools return focused subsets of `/api/printer` full JSON. HTTP consumers get everything at once; MCP tools offer targeted slices. Asymmetry is intentional. |
+| `bed_temp_target_time`, `chamber_temp_target_time`, `tool_temp_target_time`, `fan_speed_target_time` | Internal timing metadata — timestamps tracking when each target was last set. No agent use case; surfaced in `/api/printer` full JSON for completeness. |
+| `start_session()` | Session lifecycle managed by the mcp server process at startup. Not a user-facing operation; calling it outside the server's initialization sequence is unsafe. |
+| `quit()` | Hard-shutdown of the bpm session. Managed by the mcp server process lifecycle. User-facing teardown path is `remove_printer` / `pause_mqtt_session`. |
+| `sdcard_file_exists()` | Low-level FTPS utility helper. No dedicated MCP tool needed — callers can use `list_sdcard_files()` and filter client-side. Workaround is available and sufficient. |
+| `set_chamber_temp()` + `external_chamber` flag | Advanced external sensor injection framework for non-managed chamber solutions. `set_chamber_temp()` injects a current ambient reading into local state; `external_chamber=True` in BambuConfig suppresses MQTT telemetry parsing so injected readings persist. This is a hardware configuration feature requiring matching bpm config setup; no agent use case without that context. `set_chamber_temp_target()` (covered) handles the standard target-setting path for all printer types. |
 
 ### Coverage audit checklist
 
@@ -424,6 +429,22 @@ Before closing any PR that adds/removes BPM methods, fields, or HTTP routes:
 - [ ] Docstrings are present on both the HTTP route handler and the MCP tool function
 - [ ] `_ROUTE_TAGS` and `_ROUTE_EXAMPLES` entries added for any new HTTP routes (per Swagger standard)
 - [ ] Intentional non-coverage is listed in the exclusions table with a reason (deprecated-with-replacement items list the replacement; deprecated-without-replacement items are treated as regular items and need coverage)
+
+### Baseline Coverage Audit Procedure (mandatory)
+
+The following procedure is **required** during baseline pre-flight step 2. A delta spot-check does not satisfy it — see global rules.
+
+**How to run:**
+1. Launch a `task` agent (explore or general-purpose) with this prompt (adapt paths as needed):
+   > "Audit the installed bpm package at `~/bambu-mcp/.venv/lib/python3.12/site-packages/bpm/`. Inspect all public methods, fields, properties, and attributes in `bambuprinter.py`, `bambustate.py`, `bambuconfig.py`, `bambuspool.py`, `bambuproject.py`, `bambutools.py`. For method semantics, consult the official bpm documentation at `https://synman.github.io/bambu-printer-manager/` before evaluating coverage. Cross-check each item against the mcp's MCP tools (`tools/*.py`) and HTTP routes (`api_server.py`). Report all items not covered by at least one access path and not listed in the intentional non-gaps table in `.github/copilot-instructions.md`."
+2. The agent must produce a structured findings report: gap type (A/B/C/D/E/F/G), affected item, and resolution.
+3. Resolve all High-severity gaps (Types A, C, D, F) before proceeding.
+4. For each Medium/Low item (Types B, E, G): add to the intentional exclusions table or add coverage.
+5. Output the required findings statement (see global rules). **Baseline capture is blocked until it appears.**
+
+**Audit source: installed package only.** Always audit `~/bambu-mcp/.venv/lib/python3.12/site-packages/bpm/`, not the source tree at `~/bambu-printer-manager/`. The installed version is what the mcp actually runs against.
+
+**Official docs are mandatory for semantics.** Before evaluating any method's coverage, check `https://synman.github.io/bambu-printer-manager/` for its documented behavior. Do not rely solely on installed source code to determine method intent — docstrings in the installed package may be incomplete.
 
 ---
 

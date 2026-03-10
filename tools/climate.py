@@ -123,12 +123,13 @@ def set_chamber_temp(
     user_permission: bool = False,
 ) -> str:
     """
-    Set the chamber temperature target on printers with managed chamber heating.
+    Set the chamber temperature target on the named printer.
 
     On printers with active chamber heating (e.g. H2D), this sets the chamber
-    temperature target. On printers without managed chamber heating (A1, P1S), this
-    records an externally measured ambient temperature for firmware use — it does not
-    activate any heater. Requires user_permission=True.
+    temperature target and sends an MQTT command to activate it. On printers without
+    managed chamber heating (A1, P1S), this stores the target value — useful for
+    external chamber management solutions that read the stored target and drive their
+    own heating hardware. Requires user_permission=True.
     """
     log.debug("set_chamber_temp: called for name=%s temp=%s user_permission=%s", name, temp, user_permission)
     if not user_permission:
