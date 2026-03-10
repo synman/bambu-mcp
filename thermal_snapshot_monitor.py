@@ -245,25 +245,45 @@ def detect_plate_thermal(arr, floor_temp, bed_temp):
     best_sol    = 0.0
 
     if len(sweep) >= 2:
-        max_drop, cliff_i = 0.0, -1
+        # Pass 1: detect coverage JUMP (plate-edge transition often shows as big coverage
+        # increase, NOT solidity drop, as the background floods in at a specific threshold)
+        JUMP_THRESH = 0.08  # 8% per-step coverage jump = major boundary transition
+        jump_i = -1
         for i in range(1, len(sweep)):
-            drop = sweep[i-1][2] - sweep[i][2]
             pre_cov = sweep[i-1][1] / (H * W)
-            if drop > max_drop and pre_cov >= MIN_COV_CLIFF:
-                max_drop, cliff_i = drop, i
-        if max_drop >= CLIFF_THRESH and cliff_i > 0:
-            best_thresh, _, best_sol, best_mask = sweep[cliff_i - 1]
-            cliff_delta = max_drop
-            # Post-validate: if cliff result is too large, discard and use fallback
+            post_cov = sweep[i][1] / (H * W)
+            cov_jump = post_cov - pre_cov
+            if cov_jump > JUMP_THRESH and pre_cov >= MIN_COV_CLIFF:
+                jump_i = i
+                cliff_delta = cov_jump
+                break  # first jump after MIN_COV_CLIFF = plate-background boundary
+        if jump_i > 0:
+            best_thresh, _, best_sol, best_mask = sweep[jump_i - 1]
+            # Post-validate jump result
             if best_mask.sum() / (H * W) > MAX_COV_VALID:
                 best_mask = None
+
+        # Pass 2: fallback — largest solidity drop after MIN_COV_CLIFF
+        if best_mask is None:
+            max_drop, cliff_i = 0.0, -1
+            for i in range(1, len(sweep)):
+                drop = sweep[i-1][2] - sweep[i][2]
+                pre_cov = sweep[i-1][1] / (H * W)
+                if drop > max_drop and pre_cov >= MIN_COV_CLIFF:
+                    max_drop, cliff_i = drop, i
+            if max_drop >= CLIFF_THRESH and cliff_i > 0:
+                best_thresh, _, best_sol, best_mask = sweep[cliff_i - 1]
+                cliff_delta = max_drop
+                if best_mask.sum() / (H * W) > MAX_COV_VALID:
+                    best_mask = None
+
+        # Pass 3: highest-coverage valid solidity within range
         if best_mask is None:
             valid = [(t, px, sol, m) for t, px, sol, m in sweep
                      if sol >= 0.82 and px / (H * W) <= MAX_COV_VALID]
             if valid:
                 best_thresh, _, best_sol, best_mask = max(valid, key=lambda x: x[1])
             elif sweep:
-                # All options exceed MAX_COV_VALID; pick lowest-coverage high-solidity option
                 by_sol = sorted(sweep, key=lambda x: (-x[2], x[1]))
                 best_thresh, _, best_sol, best_mask = by_sol[0]
 
