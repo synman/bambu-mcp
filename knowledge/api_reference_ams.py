@@ -32,7 +32,7 @@ Updates corresponding BambuConfig attribute.
 #### refresh_spool_rfid(slot_id: int, ams_id: int = 0) -> None
 Requests RFID re-read for specified AMS slot. Publishes AMS_GET_RFID.
 
-#### turn_on_ams_dryer(target_temp: int, duration: int, target_humidity: int = 0, cooling_temp: int = 45, rotate_tray: bool = False, ams_id: int = 0) -> None
+#### turn_on_ams_dryer(target_temp: int, duration: int, target_humidity: int = 0, cooling_temp: int = 45, rotate_tray: bool = False, ams_id: int = 0, filament_type: str = "") -> None
 Turns on AMS dryer with specified parameters. Publishes AMS_FILAMENT_DRYING.
 Updates `ams_unit.temp_target = target_temp`. Raises if ams_id not found.
 

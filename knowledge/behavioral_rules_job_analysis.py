@@ -66,8 +66,46 @@ Retrieves the latest result from the **background job monitor daemon**, which au
 - Accumulates a 5-sample confidence window; `stable_verdict` is reliable after 3 cycles
 - Skips analysis when the stage is not 255 (filament change, pause, heating, etc.)
 
+### Print Status Display Tiers — Progressive Disclosure Model
+
+Use this model to select the right tool and depth for any print status query.
+
+**Tier 1 — Status check**
+- **Trigger**: Numeric/programmatic queries ("percentage", "ETA", "time remaining", "what layer",
+  "is it done", "is it still running") OR `has_camera=False`
+- **Tool**: `get_print_progress(name)`
+- **Nudge to next tier** *(only when `has_camera=True` and print is active)*:
+  "Want a full health check with live camera view?"
+
+**Tier 2 — Health check** *(default for human-facing queries when camera is present)*
+- **Trigger**: Any conversational print status request when `has_camera=True` and print is active
+  ("how is it going", "how's the print", "check on it", "any issues", "is it ok", "progress update")
+- **Tool**: `analyze_active_job(name, categories=["X","H"])` → then `open_job_state(name)` to display
+- **Nudge to next tier**: "Want a closer look with the live camera feed and diff?"
+
+**Tier 3 — Deep look**
+- **Trigger**: Explicit depth signal or dissatisfaction with tier 2
+  ("deeper", "more detail", "show me", "boring", "is that all", "worried", "closer look", "anything wrong")
+- **Tool**: `analyze_active_job(name, categories=["X","H","C"])` → then `open_job_state(name)`
+- **Nudge to next tier**: "Want to see what the anomaly detector is actually looking at internally?"
+
+**Tier 4 — Debug / diagnostic**
+- **Trigger**: Explicit request to understand detector internals
+  ("how does detection work", "what does the AI see", "scoring inputs", "debug", "diagnostic",
+  "false positive", "why did it flag")
+- **Tool**: `analyze_active_job(name, categories=["X","H","C","D","P"])` → then `open_job_state(name)`
+- **Nudge to external**: "For deeper print diagnostics, the Bambu Lab community forums and the
+  bpm/bpa documentation at synman.github.io/bambu-printer-manager are the next stop."
+
+**Orphan asset gating**: `air_zone_png`, `mask_png`, and `heat_png` (Category D) are
+AI-internal scoring artifacts — intermediate inputs used to derive `anomaly_score`,
+`strand_score`, and `hot_pct`. They have no human-facing display path via `open_job_state()`.
+Only request Category D at Tier 4 on explicit user ask. Never include in Tier 1–3 responses.
+
+---
+
 ### When to call it
-- User asks "check the print", "is anything wrong?", "spaghetti?", "job health"
+- Tier 2+ trigger words above, or user asks "check the print", "is anything wrong?", "spaghetti?", "job health"
 - Proactively when `get_hms_errors()` returns active errors during a print
 - Do NOT call it when gcode_state is IDLE, FINISH, or FAILED — returns `{"error": "no_active_job"}`
 

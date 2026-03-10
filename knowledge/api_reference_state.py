@@ -131,10 +131,10 @@ Auto-discovered from telemetry on connection.
 | has_filament_tangle_detect_support | **always False in current bpm** (not decoded from telemetry; fun bit 19 is the protocol source but bpm bambustate.py does not read it) | filament_tangle_detect PrintOption is supported. |
 | has_nozzle_blob_detect_support | **always False in current bpm** (not decoded from telemetry; fun bit 25 is the protocol source but bpm bambustate.py does not read it) | Legacy nozzle_blob_detect PrintOption is supported. |
 | has_air_print_detect_support | **always False in current bpm** (not decoded from telemetry; fun bit 29 is the protocol source but bpm bambustate.py does not read it) | Legacy air_print_detect PrintOption is supported. |
-| has_spaghetti_detector_support | fun bit 42 OR xcam.spaghetti_detector | xcam spaghetti_detector is supported. |
-| has_purgechutepileup_detector_support | fun bit 43 OR xcam.pileup_detector | xcam purgechutepileup_detector is supported. |
-| has_nozzleclumping_detector_support | fun bit 44 OR xcam.clump_detector | xcam nozzleclumping_detector is supported (preferred over nozzle_blob_detect). |
-| has_airprinting_detector_support | fun bit 45 OR xcam.airprint_detector | xcam airprinting_detector is supported (preferred over air_print_detect). |
+| has_spaghetti_detector_support | fun bit 42 | xcam spaghetti_detector is supported. |
+| has_purgechutepileup_detector_support | fun bit 43 | xcam purgechutepileup_detector is supported. |
+| has_nozzleclumping_detector_support | fun bit 44 | xcam nozzleclumping_detector is supported (preferred over nozzle_blob_detect). |
+| has_airprinting_detector_support | fun bit 45 | xcam airprinting_detector is supported (preferred over air_print_detect). |
 | has_buildplate_marker_detector_support | **always False in current bpm** (not decoded from telemetry; xcam.buildplate_marker_detector is the protocol source but bpm bambustate.py does not read it) | xcam buildplate_marker_detector is supported. |
 
 ---
