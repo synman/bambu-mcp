@@ -1,7 +1,7 @@
 """
 bambu-mcp-api — HTTP REST API server for the bambu-mcp MCP service.
 
-Exposes 51 routes mirroring the bambu-printer-app container API so existing clients
+Exposes 66 routes mirroring the bambu-printer-app container API so existing clients
 work unchanged. Backed directly by session_manager / BambuPrinter — no dependency
 on the bambu-printer-app container.
 
@@ -23,7 +23,7 @@ Lifecycle:
   get_url()    — returns "http://localhost:{port}".
   get_port()   — returns the currently bound port integer (0 if not running).
 
-Route categories (51 routes total):
+Route categories (66 routes total):
   Printer state  (6)  — full state, progress, temperatures, spools, nozzle, AMS
   Print control  (8)  — print 3mf, pause, resume, stop, speed, skip objects, options
   AMS/filament   (7)  — load, unload, set filament, dryer start/stop, RFID calibrate
@@ -128,7 +128,7 @@ _ROUTE_ENUM_VALUES: dict[tuple[str, str], list] = {
 }
 
 
-_PRINTER_DESC = "Printer name. Omit to use the default printer."
+_PRINTER_DESC = "Printer name. Omit to use the default printer. Required. Use GET /api/default_printer to resolve the current default."
 
 _ROUTE_PARAM_DESCRIPTIONS: dict[tuple[str, str], str] = {
     # ── Shared ─────────────────────────────────────────────────────────────────
@@ -292,6 +292,7 @@ def _extract_query_params(view_func: Callable) -> list[dict]:
 _ROUTE_TAGS: dict[str, str] = {
     # System
     "health_check": "System",
+    "default_printer": "System",
     "get_printer_info": "System",
     "trigger_printer_refresh": "System",
     "toggle_session": "System",
@@ -363,6 +364,10 @@ _ROUTE_EXAMPLES: dict[str, dict] = {
     "health_check": {
         "response": {"status": "success", "printer": {"gcode_state": "RUNNING", "print_percentage": 42, "nozzle_temp": 220, "bed_temp": 35}},
         "params": {"printer": "H2D"},
+    },
+    "default_printer": {
+        "params": {},
+        "response": {"status": "success", "printer": "H2D", "source": "env_var", "connected_printers": ["H2D", "A1"]},
     },
     "get_printer_info": {
         "response": {"gcode_state": "RUNNING", "print_percentage": 42, "nozzle_temp": 220, "nozzle_temp_target": 220, "bed_temp": 35, "bed_temp_target": 35, "chamber_temp": 21, "speed_level": "standard"},
@@ -689,6 +694,26 @@ def build_openapi_document(flask_app) -> dict:
         param_examples = ex.get("params", {})
         resp_example = ex.get("response")
 
+        # Inject the `printer` parameter for any route that calls _get_printer().
+        # The param is consumed inside _get_printer() so _extract_query_params
+        # never finds it in the view function source.
+        try:
+            vf_source = inspect.getsource(vf)
+        except OSError:
+            vf_source = ""
+        if "_get_printer(" in vf_source and not any(p["name"] == "printer" for p in params):
+            printer_param: dict = {
+                "name": "printer",
+                "in": "query",
+                "required": True,
+                "schema": {"type": "string"},
+                "description": _PRINTER_DESC,
+            }
+            pex = ex.get("params", {}).get("printer")
+            if pex is not None:
+                printer_param["schema"]["example"] = pex
+            params = [printer_param] + params
+
         # Enrich each extracted parameter schema with a realistic example value
         # and enum list (renders as <select> in Swagger UI)
         for p in params:
@@ -895,6 +920,46 @@ def _build_app():
         log.debug("health_check: → ok")
         return jsonify(result)
 
+    @app.route("/api/default_printer")
+    def default_printer():
+        """Return the printer that would be targeted by a request with no explicit printer parameter.
+
+        Resolves the default printer using the same three-tier logic as all printer-specific routes:
+        1. `printer` query parameter (explicit — always wins)
+        2. `BAMBU_API_PRINTER` environment variable
+        3. First entry in the connected printers list (non-deterministic — use explicit targeting)
+
+        Use this route to discover which printer to pass as the `printer` parameter on write routes.
+        The `printer` parameter is required on all printer-specific routes; this route provides the
+        discovery mechanism.
+
+        Response fields:
+        - `printer`: resolved printer name, or null if no printers are connected
+        - `source`: resolution path — "explicit", "env_var", "first_connected", or "none"
+        - `connected_printers`: all currently connected printer names
+        """
+        log.debug("default_printer: called")
+        from session_manager import session_manager
+        args = _rargs()
+        explicit = args.get("printer", "")
+        connected = session_manager.list_connected()
+
+        if explicit:
+            source = "explicit"
+            name = explicit
+        elif DEFAULT_PRINTER:
+            source = "env_var"
+            name = DEFAULT_PRINTER
+        elif connected:
+            source = "first_connected"
+            name = connected[0]
+        else:
+            source = "none"
+            name = None
+
+        log.debug("default_printer: → name=%s source=%s", name, source)
+        return _ok(printer=name, source=source, connected_printers=connected)
+
     # ── tool / thermal ─────────────────────────────────────────────────────────
 
     @app.route("/api/toggle_active_tool", methods=["PATCH"])
@@ -1089,7 +1154,7 @@ def _build_app():
 
     @app.route("/api/unload_filament", methods=["POST"])
     def unload_filament():
-        """Unload the currently loaded filament back to AMS.
+        """⚠️ Unload the currently loaded filament back to AMS.
 
         ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
         """
@@ -1108,7 +1173,7 @@ def _build_app():
 
     @app.route("/api/load_filament", methods=["POST"])
     def load_filament():
-        """Load filament from AMS slot. ?slot=<0-3>
+        """⚠️ Load filament from AMS slot. ?slot=<0-3>
 
         ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
         """
@@ -1128,7 +1193,7 @@ def _build_app():
 
     @app.route("/api/refresh_spool_rfid", methods=["POST"])
     def refresh_spool_rfid():
-        """Trigger RFID re-scan on an AMS slot. ?slot_id=<0-3>&ams_id=<0-n>
+        """⚠️ Trigger RFID re-scan on an AMS slot. ?slot_id=<0-3>&ams_id=<0-n>
 
         ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
         """
@@ -1178,7 +1243,7 @@ def _build_app():
 
     @app.route("/api/resume_printing", methods=["POST"])
     def resume_printing():
-        """Resume a paused print job.
+        """⚠️ Resume a paused print job.
 
         ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
         """
@@ -1197,7 +1262,7 @@ def _build_app():
 
     @app.route("/api/pause_printing", methods=["POST"])
     def pause_printing():
-        """Pause the current print job.
+        """⚠️ Pause the current print job.
 
         ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
         """
@@ -1216,7 +1281,7 @@ def _build_app():
 
     @app.route("/api/stop_printing", methods=["POST"])
     def stop_printing():
-        """Stop (cancel) the current print job.
+        """⚠️ Stop (cancel) the current print job.
 
         ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
         """
@@ -1235,7 +1300,7 @@ def _build_app():
 
     @app.route("/api/clear_print_error", methods=["POST"])
     def clear_print_error():
-        """Clear an active print_error on the printer. ?print_error=<int>&subtask_id=<str>
+        """⚠️ Clear an active print_error on the printer. ?print_error=<int>&subtask_id=<str>
 
         ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
 
@@ -1264,7 +1329,7 @@ def _build_app():
 
     @app.route("/api/print_3mf", methods=["POST"])
     def print_3mf():
-        """Start printing a .3mf file from SD card. ?filename=&platenum=&plate=AUTO|COOL_PLATE|ENG_PLATE|HOT_PLATE|TEXTURED_PLATE&use_ams=true|false&ams_mapping=&bl=true|false&flow=true|false&tl=true|false
+        """⚠️ Start printing a .3mf file from SD card. ?filename=&platenum=&plate=AUTO|COOL_PLATE|ENG_PLATE|HOT_PLATE|TEXTURED_PLATE&use_ams=true|false&ams_mapping=&bl=true|false&flow=true|false&tl=true|false
 
         ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
         """
@@ -1293,7 +1358,7 @@ def _build_app():
 
     @app.route("/api/skip_objects", methods=["POST"])
     def skip_objects():
-        """Skip one or more objects. ?objects=<id1>,<id2>,...
+        """⚠️ Skip one or more objects. ?objects=<id1>,<id2>,...
 
         ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
         """
@@ -1315,7 +1380,7 @@ def _build_app():
 
     @app.route("/api/refresh_sdcard_3mf_files", methods=["POST"])
     def refresh_sdcard_3mf_files():
-        """Trigger refresh of .3mf file listing from SD card.
+        """⚠️ Trigger refresh of .3mf file listing from SD card.
 
         ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
         """
@@ -1350,7 +1415,7 @@ def _build_app():
 
     @app.route("/api/refresh_sdcard_contents", methods=["POST"])
     def refresh_sdcard_contents():
-        """Trigger full SD card contents refresh.
+        """⚠️ Trigger full SD card contents refresh.
 
         ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
         """
@@ -1431,7 +1496,7 @@ def _build_app():
 
     @app.route("/api/delete_sdcard_file", methods=["DELETE"])
     def delete_sdcard_file():
-        """Delete a file or folder from SD card. ?file=<path> (trailing / for folder)
+        """⚠️ Delete a file or folder from SD card. ?file=<path> (trailing / for folder)
 
         ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
         """
@@ -1454,7 +1519,7 @@ def _build_app():
 
     @app.route("/api/make_sdcard_directory", methods=["POST"])
     def make_sdcard_directory():
-        """Create a directory on SD card. ?dir=<path>
+        """⚠️ Create a directory on SD card. ?dir=<path>
 
         ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
         """
@@ -1512,7 +1577,7 @@ def _build_app():
 
     @app.route("/api/upload_file_to_printer", methods=["POST"])
     def upload_file_to_printer():
-        """Upload a local file to the printer SD card. ?src=<filename_in_uploads>&dest=<remote_path>
+        """⚠️ Upload a local file to the printer SD card. ?src=<filename_in_uploads>&dest=<remote_path>
 
         ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
         """
@@ -1773,7 +1838,7 @@ def _build_app():
 
     @app.route("/api/send_gcode", methods=["POST"])
     def send_gcode():
-        """Send raw G-code commands. ?gcode=<commands> (use | as newline separator)
+        """⚠️ Send raw G-code commands. ?gcode=<commands> (use | as newline separator)
 
         ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
         """
@@ -1793,7 +1858,7 @@ def _build_app():
 
     @app.route("/api/send_mqtt_command", methods=["POST"])
     def send_mqtt_command():
-        """Send a raw MQTT command JSON to the printer's request topic. ?command_json=<json>
+        """⚠️ Send a raw MQTT command JSON to the printer's request topic. ?command_json=<json>
 
         ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
         ⚠️ LAST-RESORT TOOL. Bypasses all safety checks. Incorrect commands can damage
@@ -1821,7 +1886,7 @@ def _build_app():
 
     @app.route("/api/send_ams_control_command", methods=["POST"])
     def send_ams_control_command():
-        """Send AMS control command. ?cmd=PAUSE|RESUME|RESET
+        """⚠️ Send AMS control command. ?cmd=PAUSE|RESUME|RESET
 
         ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
         """
@@ -1864,7 +1929,7 @@ def _build_app():
 
     @app.route("/api/select_extrusion_calibration", methods=["POST"])
     def select_extrusion_calibration():
-        """Select an extrusion calibration profile for a filament slot. ?tray_id=<int>&cali_idx=<int>
+        """⚠️ Select an extrusion calibration profile for a filament slot. ?tray_id=<int>&cali_idx=<int>
 
         ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
 
@@ -1888,7 +1953,7 @@ def _build_app():
 
     @app.route("/api/turn_on_ams_dryer", methods=["POST"])
     def turn_on_ams_dryer():
-        """Start the AMS filament dryer. ?ams_id=<int>&target_temp=<int>&duration_hours=<int>
+        """⚠️ Start the AMS filament dryer. ?ams_id=<int>&target_temp=<int>&duration_hours=<int>
 
         ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
 
@@ -1914,7 +1979,7 @@ def _build_app():
 
     @app.route("/api/turn_off_ams_dryer", methods=["POST"])
     def turn_off_ams_dryer():
-        """Stop the AMS filament dryer. ?ams_id=<int>
+        """⚠️ Stop the AMS filament dryer. ?ams_id=<int>
 
         ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
 
@@ -1961,7 +2026,7 @@ def _build_app():
 
     @app.route("/api/refresh_nozzles", methods=["POST"])
     def refresh_nozzles():
-        """Trigger nozzle hardware re-read.
+        """⚠️ Trigger nozzle hardware re-read.
 
         ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
         """
@@ -2048,7 +2113,7 @@ def _build_app():
 
     @app.route("/api/trigger_printer_refresh", methods=["POST"])
     def trigger_printer_refresh():
-        """Force printer to re-broadcast its full state.
+        """⚠️ Force printer to re-broadcast its full state.
 
         ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
         """
@@ -2106,7 +2171,7 @@ def _build_app():
 
     @app.route("/api/truncate_log", methods=["DELETE"])
     def truncate_log():
-        """Truncate the bambu-mcp server log.
+        """⚠️ Truncate the bambu-mcp server log.
 
         ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
         """
@@ -2170,7 +2235,7 @@ def _build_app():
 
     @app.route("/api/set_spool_k_factor", methods=["POST"])
     def set_spool_k_factor():
-        """Set extrusion calibration k-factor for a spool. (stub — returns success)
+        """⚠️ Set extrusion calibration k-factor for a spool. (stub — returns success)
 
         ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
         ⚠️ STUB / FIRMWARE WARNING: This route is a no-op that always returns

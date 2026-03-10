@@ -169,8 +169,8 @@ severity levels, payload fields, and recommended agent actions per alert type.
 → Call: `get_knowledge_topic('behavioral_rules/alerts')`
 
 **`behavioral_rules/session`** — Session management: printer name verification after MCP
-reload (always call get_configured_printers() first), post-reload checklist (printers +
-stream tab refresh), and HTTP API write guard (GET=safe, POST/PATCH/DELETE=require user confirmation).
+reload (always call get_configured_printers() first), Post-Reload Checklist (printers +
+stream tab refresh), and HTTP API Write Guard (GET=safe, POST/PATCH/DELETE=require user confirmation).
 → Call: `get_knowledge_topic('behavioral_rules/session')`
 
 ---
@@ -184,4 +184,7 @@ default pool 49152–49251) with 51 routes covering all printer operations. Call
 
 → Call: `get_knowledge_topic('http_api')` for base URL, auth, and route category index.
 → Then call a route sub-topic (e.g. `get_knowledge_topic('http_api/print')`) for details.
+
+HTTP API write routes are marked ⚠️ and require POST/DELETE method. See
+`behavioral_rules/session` for the HTTP API Write Guard documentation.
 """
