@@ -259,6 +259,11 @@ def start_ams_dryer(
     filament_type is derived automatically from the loaded spool in the target AMS unit
     (spool.type, e.g. "ABS", "PLA"). Falls back to "" if no spool is loaded or type is
     unavailable — the firmware accepts an empty string and applies default dryer behavior.
+
+    Heater state transition: after the command is sent, heater_state briefly shows CHECKING
+    (transition state — firmware verifying conditions). Active drying is confirmed by
+    heater_state=DRYING with dry_sub_status=HEATING. This tool polls up to 10 seconds
+    waiting for DRYING before returning.
     """
     log.debug("start_ams_dryer: called for name=%s unit_id=%s target_temp=%s duration_hours=%s user_permission=%s", name, unit_id, target_temp, duration_hours, user_permission)
     import time
@@ -290,19 +295,30 @@ def start_ams_dryer(
             filament_type=filament_type,
         )
         log.debug("start_ams_dryer: command sent to %s", name)
-        time.sleep(2)
-        state = session_manager.get_state(name)
-        if state and state.ams_units:
-            unit = next((u for u in state.ams_units if u.ams_id == ams_id), None)
-            if unit and unit.heater_state != 0:  # 0 = AMSHeatingState.OFF
-                return (
-                    f"AMS dryer started on unit {unit_id} (ams_id={ams_id}): "
-                    f"{target_temp}°C for {duration_hours}h on '{name}'. "
-                    f"heater_state={unit.heater_state.name}"
-                )
+        # Poll up to 10s for heater_state=DRYING (2); CHECKING (1) is a transient state.
+        _DRYING = 2
+        _ERROR = 5
+        deadline = time.time() + 10
+        unit = None
+        while time.time() < deadline:
+            time.sleep(1)
+            state = session_manager.get_state(name)
+            if state and state.ams_units:
+                unit = next((u for u in state.ams_units if u.ams_id == ams_id), None)
+                if unit:
+                    hs = int(unit.heater_state)
+                    if hs == _DRYING:
+                        return (
+                            f"AMS dryer started on unit {unit_id} (ams_id={ams_id}): "
+                            f"{target_temp}°C for {duration_hours}h on '{name}'. "
+                            f"heater_state={unit.heater_state.name}"
+                        )
+                    if hs == _ERROR or hs == 0:  # ERROR or back to OFF = rejected
+                        break
         return (
             f"Error: AMS dryer command sent to unit {unit_id} (ams_id={ams_id}) on '{name}' "
-            f"but heater_state did not change — printer rejected the command. "
+            f"but heater_state did not reach DRYING within 10s "
+            f"(final state: {unit.heater_state.name if unit else 'unknown'}). "
             f"Check get_ams_units for current state."
         )
     except Exception as e:

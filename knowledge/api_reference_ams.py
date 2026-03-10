@@ -132,7 +132,8 @@ Populated from `ams.ams[]` combined with `info.module[]`. Accessible via `BambuS
 | humidity_index | int | 1=WET (alert) to 5=DRY (good). Higher = drier. 0=unavailable. Only 1–2 indicate a moisture problem. |
 | temp | float | Current AMS temperature (°C) |
 | temp_target | int | Dryer target temperature (°C); 0 when not drying |
-| heater_state | bool | True when the dryer heater is active |
+| heater_state | AMSHeatingState | Dryer heater state enum. OFF=0, CHECKING=1 (transient — verifying conditions), DRYING=2 (active), COOLING=3, STOPPING=4, ERROR=5. CHECKING is a brief transition state; wait for DRYING to confirm active heating. |
+| dry_sub_status | AMSDrySubStatus | Sub-status during active drying: OFF=0, HEATING=1, DEHUMIDIFY=2 |
 | is_drying | bool | True when dryer is running |
 | tray_exist | list[bool] | Slot presence flags for all 4 slots (index 0–3) |
 | assigned_to_extruder | ActiveTool enum | Which extruder this AMS unit feeds. H2D: AMS 2 Pro (unit_id 0) → RIGHT extruder (0), AMS HT (unit_id 1) → LEFT extruder (1). Set from ams_info parsing when has_dual_extruder. Critical for H2D AMS routing decisions. Single-extruder printers: always RIGHT_EXTRUDER (0). |
