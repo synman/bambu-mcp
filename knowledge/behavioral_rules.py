@@ -163,6 +163,16 @@ hierarchy (project files, telemetry, SD card), image quality tiers, compressed r
 protocol and MAX_MCP_OUTPUT_TOKENS configuration.
 → Call: `get_knowledge_topic('behavioral_rules/mcp_patterns')`
 
+**`behavioral_rules/alerts`** — Push alert types emitted on high-visibility printer state
+transitions (job start/finish/fail, HMS errors, health verdict changes). Alert schema,
+severity levels, payload fields, and recommended agent actions per alert type.
+→ Call: `get_knowledge_topic('behavioral_rules/alerts')`
+
+**`behavioral_rules/session`** — Session management: printer name verification after MCP
+reload (always call get_configured_printers() first), post-reload checklist (printers +
+stream tab refresh), and session continuity rules.
+→ Call: `get_knowledge_topic('behavioral_rules/session')`
+
 ---
 
 ## HTTP REST API
