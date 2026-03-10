@@ -2,18 +2,6 @@
 http_api_system.py — System and session management routes for the bambu-mcp HTTP REST API.
 
 Sub-topic of http_api. Access via get_knowledge_topic('http_api/system').
-### PATCH /api/rename_printer
-
-⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
-
-Rename the printer device on the printer's own firmware.
-
-Query parameters:
-- `new_name` (required) — new display name for the printer (shown on touchscreen and in Bambu Studio)
-
-Changes the name stored on the printer itself, not the local MCP identifier.
-Returns `{"success": true}`.
-
 """
 
 from __future__ import annotations
@@ -69,6 +57,20 @@ Equivalent MCP tool: `get_server_info()`
 ---
 
 ## Session Management
+
+### PATCH /api/rename_printer
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
+
+Rename the printer device on the printer's own firmware.
+
+Query parameters:
+- `new_name` (required) — new display name for the printer (shown on touchscreen and in Bambu Studio)
+
+Changes the name stored on the printer itself, not the local MCP identifier.
+Returns `{"success": true}`.
+
+Equivalent MCP tool: `rename_printer()`
 
 ### PATCH /api/toggle_session
 
