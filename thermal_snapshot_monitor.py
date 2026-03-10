@@ -225,9 +225,10 @@ def detect_plate_thermal(arr, floor_temp, bed_temp):
 
     MIN_PX        = int(0.05 * H * W)
     CLIFF_THRESH  = 0.05
-    MIN_COV_CLIFF = 0.25
-    N_STEPS       = 60
-    thresholds    = np.linspace(lum_anchor, lum_floor + 0.05, N_STEPS)
+    MIN_COV_CLIFF = 0.45   # raised: skip early inner-gradient cliff (was 0.25)
+    MAX_COV_VALID = 0.88   # reject boundaries covering >88% of crop (too large)
+    N_STEPS       = 80     # finer sweep resolution (was 60)
+    thresholds    = np.linspace(lum_anchor, lum_floor + 0.02, N_STEPS)  # sweep lower (was +0.05)
     sweep = []
 
     for t in thresholds:
@@ -253,10 +254,18 @@ def detect_plate_thermal(arr, floor_temp, bed_temp):
         if max_drop >= CLIFF_THRESH and cliff_i > 0:
             best_thresh, _, best_sol, best_mask = sweep[cliff_i - 1]
             cliff_delta = max_drop
-        else:
-            valid = [(t, px, sol, m) for t, px, sol, m in sweep if sol >= 0.82]
+            # Post-validate: if cliff result is too large, discard and use fallback
+            if best_mask.sum() / (H * W) > MAX_COV_VALID:
+                best_mask = None
+        if best_mask is None:
+            valid = [(t, px, sol, m) for t, px, sol, m in sweep
+                     if sol >= 0.82 and px / (H * W) <= MAX_COV_VALID]
             if valid:
                 best_thresh, _, best_sol, best_mask = max(valid, key=lambda x: x[1])
+            elif sweep:
+                # All options exceed MAX_COV_VALID; pick lowest-coverage high-solidity option
+                by_sol = sorted(sweep, key=lambda x: (-x[2], x[1]))
+                best_thresh, _, best_sol, best_mask = by_sol[0]
 
     if best_mask is None:
         best_thresh = (lum_anchor + lum_floor) / 2.0
