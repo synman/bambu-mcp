@@ -73,11 +73,11 @@ DEFAULT_PRINTER = os.environ.get("BAMBU_API_PRINTER", "")
 
 def _infer_param_type(source: str, name: str) -> str:
     log.debug("_infer_param_type: name=%s", name)
-    if re.search(rf"int\(\s*request\.args\.get\(\s*['\"]{ re.escape(name)}['\"]", source):
+    if re.search(rf"int\(\s*(?:request\.args|_rargs\(\))\.get\(\s*['\"]{ re.escape(name)}['\"]", source):
         return "integer"
-    if re.search(rf"float\(\s*request\.args\.get\(\s*['\"]{ re.escape(name)}['\"]", source):
+    if re.search(rf"float\(\s*(?:request\.args|_rargs\(\))\.get\(\s*['\"]{ re.escape(name)}['\"]", source):
         return "number"
-    if re.search(rf"request\.args\.get\(\s*['\"]{ re.escape(name)}['\"].*\)\s*==\s*['\"]true['\"]", source):
+    if re.search(rf"(?:request\.args|_rargs\(\))\.get\(\s*['\"]{ re.escape(name)}['\"].*\)\s*==\s*['\"]true['\"]", source):
         return "boolean"
     return "string"
 
@@ -270,7 +270,7 @@ def _extract_query_params(view_func: Callable) -> list[dict]:
     except OSError:
         return []
     matches = re.findall(
-        r"request\.args\.get\(\s*['\"]([^'\"]+)['\"](?:\s*,\s*([^\)]+))?\)",
+        r"(?:request\.args|_rargs\(\))\.get\(\s*['\"]([^'\"]+)['\"](?:\s*,\s*([^\)]+))?\)",
         source,
     )
     seen: set[str] = set()
@@ -724,7 +724,34 @@ def build_openapi_document(flask_app) -> dict:
                 "tags": [tag],
                 "responses": {"200": {"description": "Success", "content": resp_content}},
             }
-            if params:
+            if params and method in ("GET", "DELETE"):
+                op["parameters"] = params
+            elif params and method in ("POST", "PATCH"):
+                # Build OpenAPI requestBody from the extracted params
+                properties: dict = {}
+                required_props: list[str] = []
+                for p in params:
+                    schema = dict(p.get("schema", {}))
+                    prop: dict = {"type": schema.get("type", "string")}
+                    if "enum" in schema:
+                        prop["enum"] = schema["enum"]
+                    if "example" in schema:
+                        prop["example"] = schema["example"]
+                    if p.get("description"):
+                        prop["description"] = p["description"]
+                    properties[p["name"]] = prop
+                    if p.get("required"):
+                        required_props.append(p["name"])
+                body_schema: dict = {"type": "object", "properties": properties}
+                if required_props:
+                    body_schema["required"] = required_props
+                op["requestBody"] = {
+                    "content": {
+                        "application/x-www-form-urlencoded": {"schema": body_schema},
+                        "application/json": {"schema": body_schema},
+                    }
+                }
+            elif params:
                 op["parameters"] = params
             ops[method.lower()] = op
 
@@ -797,6 +824,18 @@ def _build_app():
     def _err(msg, code=HTTPStatus.INTERNAL_SERVER_ERROR):
         return jsonify({"status": "error", "reason": msg}), code
 
+    def _rargs():
+        """Merge query-string params, form body, and JSON body into one dict.
+
+        Works for GET, POST, PATCH, and DELETE.
+        Note: For DELETE and PATCH, params typically come via query string or JSON body;
+        Flask does not populate request.form for DELETE/PATCH with application/json.
+        """
+        merged = dict(request.values)  # request.args + request.form
+        if request.is_json:
+            merged.update(request.get_json(silent=True) or {})
+        return merged
+
     # ── state ──────────────────────────────────────────────────────────────────
 
     @app.route("/api/openapi.json")
@@ -833,7 +872,7 @@ def _build_app():
     def get_printer_info():
         """Return full printer state as JSON."""
         log.debug("get_printer_info: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             log.warning("get_printer_info: no printer")
             return _err("no printer connected", HTTPStatus.NOT_MODIFIED)
@@ -848,7 +887,7 @@ def _build_app():
     def health_check():
         """Return health status and full printer state."""
         log.debug("health_check: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None or not p.recent_update:
             log.warning("health_check: not ready")
             return _err("no data", HTTPStatus.INTERNAL_SERVER_ERROR)
@@ -858,11 +897,14 @@ def _build_app():
 
     # ── tool / thermal ─────────────────────────────────────────────────────────
 
-    @app.route("/api/toggle_active_tool")
+    @app.route("/api/toggle_active_tool", methods=["PATCH"])
     def toggle_active_tool():
-        """Swap active extruder between 0 (right) and 1 (left)."""
+        """Swap active extruder between 0 (right) and 1 (left).
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("toggle_active_tool: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
@@ -875,15 +917,18 @@ def _build_app():
             log.error("toggle_active_tool: error: %s", e, exc_info=True)
             return _err(str(e))
 
-    @app.route("/api/set_tool_target_temp")
+    @app.route("/api/set_tool_target_temp", methods=["PATCH"])
     def set_tool_target_temp():
-        """Set nozzle temperature for the active tool. ?temp=<°C>"""
+        """Set nozzle temperature for the active tool. ?temp=<°C>
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("set_tool_target_temp: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
-            target = int(request.args.get("temp", 0))
+            target = int(_rargs().get("temp", 0))
             ext = p.printer_state.active_tool.value
             log.debug("set_tool_target_temp: target=%s ext=%s", target, ext)
             p.set_nozzle_temp_target(target, ext)
@@ -893,15 +938,18 @@ def _build_app():
             log.error("set_tool_target_temp: error: %s", e, exc_info=True)
             return _err(str(e))
 
-    @app.route("/api/set_bed_target_temp")
+    @app.route("/api/set_bed_target_temp", methods=["PATCH"])
     def set_bed_target_temp():
-        """Set heated bed temperature. ?temp=<°C>"""
+        """Set heated bed temperature. ?temp=<°C>
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("set_bed_target_temp: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
-            target = int(request.args.get("temp", 0))
+            target = int(_rargs().get("temp", 0))
             log.debug("set_bed_target_temp: target=%s", target)
             p.set_bed_temp_target(target)
             log.debug("set_bed_target_temp: → ok")
@@ -910,15 +958,18 @@ def _build_app():
             log.error("set_bed_target_temp: error: %s", e, exc_info=True)
             return _err(str(e))
 
-    @app.route("/api/set_chamber_target_temp")
+    @app.route("/api/set_chamber_target_temp", methods=["PATCH"])
     def set_chamber_target_temp():
-        """Set chamber temperature target. On H2D, sends MQTT; on A1/P1S, stores target for external chamber management. ?temp=<°C>"""
+        """Set chamber temperature target. On H2D, sends MQTT; on A1/P1S, stores target for external chamber management. ?temp=<°C>
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("set_chamber_target_temp: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
-            target = int(request.args.get("temp", 0))
+            target = int(_rargs().get("temp", 0))
             log.debug("set_chamber_target_temp: target=%s", target)
             p.set_chamber_temp_target(target)
             log.debug("set_chamber_target_temp: → ok")
@@ -929,15 +980,18 @@ def _build_app():
 
     # ── fans ───────────────────────────────────────────────────────────────────
 
-    @app.route("/api/set_aux_fan_speed_target")
+    @app.route("/api/set_aux_fan_speed_target", methods=["PATCH"])
     def set_aux_fan_speed_target():
-        """Set aux (recirculation) fan speed. ?percent=<0-100>"""
+        """Set aux (recirculation) fan speed. ?percent=<0-100>
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("set_aux_fan_speed_target: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
-            pct = int(request.args.get("percent", 0))
+            pct = int(_rargs().get("percent", 0))
             log.debug("set_aux_fan_speed_target: pct=%s", pct)
             p.set_aux_fan_speed_target_percent(pct)
             log.debug("set_aux_fan_speed_target: → ok")
@@ -946,15 +1000,18 @@ def _build_app():
             log.error("set_aux_fan_speed_target: error: %s", e, exc_info=True)
             return _err(str(e))
 
-    @app.route("/api/set_exhaust_fan_speed_target")
+    @app.route("/api/set_exhaust_fan_speed_target", methods=["PATCH"])
     def set_exhaust_fan_speed_target():
-        """Set exhaust fan speed. ?percent=<0-100>"""
+        """Set exhaust fan speed. ?percent=<0-100>
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("set_exhaust_fan_speed_target: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
-            pct = int(request.args.get("percent", 0))
+            pct = int(_rargs().get("percent", 0))
             log.debug("set_exhaust_fan_speed_target: pct=%s", pct)
             p.set_exhaust_fan_speed_target_percent(pct)
             log.debug("set_exhaust_fan_speed_target: → ok")
@@ -963,15 +1020,18 @@ def _build_app():
             log.error("set_exhaust_fan_speed_target: error: %s", e, exc_info=True)
             return _err(str(e))
 
-    @app.route("/api/set_fan_speed_target")
+    @app.route("/api/set_fan_speed_target", methods=["PATCH"])
     def set_fan_speed_target():
-        """Set part-cooling fan speed. ?percent=<0-100>"""
+        """Set part-cooling fan speed. ?percent=<0-100>
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("set_fan_speed_target: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
-            pct = int(request.args.get("percent", 0))
+            pct = int(_rargs().get("percent", 0))
             log.debug("set_fan_speed_target: pct=%s", pct)
             p.set_part_cooling_fan_speed_target_percent(pct)
             log.debug("set_fan_speed_target: → ok")
@@ -982,15 +1042,18 @@ def _build_app():
 
     # ── light / speed ──────────────────────────────────────────────────────────
 
-    @app.route("/api/set_light_state")
+    @app.route("/api/set_light_state", methods=["PATCH"])
     def set_light_state():
-        """Set chamber light. ?state=on|off"""
+        """Set chamber light. ?state=on|off
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("set_light_state: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
-            state = request.args.get("state") == "on"
+            state = _rargs().get("state") == "on"
             log.debug("set_light_state: state=%s", state)
             p.light_state = state
             log.debug("set_light_state: → ok")
@@ -999,16 +1062,19 @@ def _build_app():
             log.error("set_light_state: error: %s", e, exc_info=True)
             return _err(str(e))
 
-    @app.route("/api/set_speed_level")
+    @app.route("/api/set_speed_level", methods=["PATCH"])
     def set_speed_level():
-        """Set print speed level. ?level=quiet|standard|sport|ludicrous"""
+        """Set print speed level. ?level=quiet|standard|sport|ludicrous
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("set_speed_level: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
             from bpm.bambutools import SpeedLevel
-            level = request.args.get("level", "standard")
+            level = _rargs().get("level", "standard")
             log.debug("set_speed_level: level=%s", level)
             p.speed_level = SpeedLevel[level.upper()]
             log.debug("set_speed_level: → ok")
@@ -1021,11 +1087,14 @@ def _build_app():
 
     # ── filament ───────────────────────────────────────────────────────────────
 
-    @app.route("/api/unload_filament")
+    @app.route("/api/unload_filament", methods=["POST"])
     def unload_filament():
-        """Unload the currently loaded filament back to AMS."""
+        """Unload the currently loaded filament back to AMS.
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("unload_filament: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
@@ -1037,15 +1106,18 @@ def _build_app():
             log.error("unload_filament: error: %s", e, exc_info=True)
             return _err(str(e))
 
-    @app.route("/api/load_filament")
+    @app.route("/api/load_filament", methods=["POST"])
     def load_filament():
-        """Load filament from AMS slot. ?slot=<0-3>"""
+        """Load filament from AMS slot. ?slot=<0-3>
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("load_filament: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
-            slot = int(request.args.get("slot", 0))
+            slot = int(_rargs().get("slot", 0))
             log.debug("load_filament: slot=%s", slot)
             p.load_filament(slot)
             log.debug("load_filament: → ok")
@@ -1054,16 +1126,19 @@ def _build_app():
             log.error("load_filament: error: %s", e, exc_info=True)
             return _err(str(e))
 
-    @app.route("/api/refresh_spool_rfid")
+    @app.route("/api/refresh_spool_rfid", methods=["POST"])
     def refresh_spool_rfid():
-        """Trigger RFID re-scan on an AMS slot. ?slot_id=<0-3>&ams_id=<0-n>"""
+        """Trigger RFID re-scan on an AMS slot. ?slot_id=<0-3>&ams_id=<0-n>
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("refresh_spool_rfid: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
-            slot_id = int(request.args.get("slot_id", 0))
-            ams_id = int(request.args.get("ams_id", 0))
+            slot_id = int(_rargs().get("slot_id", 0))
+            ams_id = int(_rargs().get("ams_id", 0))
             log.debug("refresh_spool_rfid: slot_id=%s ams_id=%s", slot_id, ams_id)
             p.refresh_spool_rfid(slot_id, ams_id=ams_id)
             log.debug("refresh_spool_rfid: → ok")
@@ -1072,21 +1147,24 @@ def _build_app():
             log.error("refresh_spool_rfid: error: %s", e, exc_info=True)
             return _err(str(e))
 
-    @app.route("/api/set_spool_details")
+    @app.route("/api/set_spool_details", methods=["PATCH"])
     def set_spool_details():
-        """Update filament metadata for an AMS slot. ?tray_id=<int>&tray_info_idx=<str>&..."""
+        """Update filament metadata for an AMS slot. ?tray_id=<int>&tray_info_idx=<str>&...
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("set_spool_details: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
-            tray_id = int(request.args.get("tray_id", 0))
-            tray_info_idx = request.args.get("tray_info_idx", "")
-            tray_id_name = request.args.get("tray_id_name", "")
-            tray_type = request.args.get("tray_type", "")
-            tray_color = request.args.get("tray_color", "")
-            nozzle_temp_min = int(request.args.get("nozzle_temp_min", 0)) if "nozzle_temp_min" in request.args else -1
-            nozzle_temp_max = int(request.args.get("nozzle_temp_max", 0)) if "nozzle_temp_max" in request.args else -1
+            tray_id = int(_rargs().get("tray_id", 0))
+            tray_info_idx = _rargs().get("tray_info_idx", "")
+            tray_id_name = _rargs().get("tray_id_name", "")
+            tray_type = _rargs().get("tray_type", "")
+            tray_color = _rargs().get("tray_color", "")
+            nozzle_temp_min = int(_rargs().get("nozzle_temp_min", 0)) if "nozzle_temp_min" in _rargs() else -1
+            nozzle_temp_max = int(_rargs().get("nozzle_temp_max", 0)) if "nozzle_temp_max" in _rargs() else -1
             log.debug("set_spool_details: tray_id=%s tray_info_idx=%s", tray_id, tray_info_idx)
             p.set_spool_details(tray_id, tray_info_idx, tray_id_name, tray_type, tray_color, nozzle_temp_min, nozzle_temp_max)
             log.debug("set_spool_details: → ok (sleeping 2s)")
@@ -1098,11 +1176,14 @@ def _build_app():
 
     # ── print control ──────────────────────────────────────────────────────────
 
-    @app.route("/api/resume_printing")
+    @app.route("/api/resume_printing", methods=["POST"])
     def resume_printing():
-        """Resume a paused print job."""
+        """Resume a paused print job.
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("resume_printing: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
@@ -1114,11 +1195,14 @@ def _build_app():
             log.error("resume_printing: error: %s", e, exc_info=True)
             return _err(str(e))
 
-    @app.route("/api/pause_printing")
+    @app.route("/api/pause_printing", methods=["POST"])
     def pause_printing():
-        """Pause the current print job."""
+        """Pause the current print job.
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("pause_printing: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
@@ -1130,11 +1214,14 @@ def _build_app():
             log.error("pause_printing: error: %s", e, exc_info=True)
             return _err(str(e))
 
-    @app.route("/api/stop_printing")
+    @app.route("/api/stop_printing", methods=["POST"])
     def stop_printing():
-        """Stop (cancel) the current print job."""
+        """Stop (cancel) the current print job.
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("stop_printing: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
@@ -1146,9 +1233,11 @@ def _build_app():
             log.error("stop_printing: error: %s", e, exc_info=True)
             return _err(str(e))
 
-    @app.route("/api/clear_print_error")
+    @app.route("/api/clear_print_error", methods=["POST"])
     def clear_print_error():
         """Clear an active print_error on the printer. ?print_error=<int>&subtask_id=<str>
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
 
         Sends two commands matching the protocol BambuStudio uses when dismissing an
         error dialog: clean_print_error (clears the error value) and a uiop signal
@@ -1158,12 +1247,12 @@ def _build_app():
         ?print_error=0 clears any active error without specifying a code.
         """
         log.debug("clear_print_error: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
-            print_error = int(request.args.get("print_error", 0))
-            subtask_id = request.args.get("subtask_id", "")
+            print_error = int(_rargs().get("print_error", 0))
+            subtask_id = _rargs().get("subtask_id", "")
             log.debug("clear_print_error: print_error=%s subtask_id=%s", print_error, subtask_id)
             p.clean_print_error(subtask_id=subtask_id, print_error=print_error)
             p.clean_print_error_uiop(print_error=print_error)
@@ -1173,24 +1262,27 @@ def _build_app():
             log.error("clear_print_error: error: %s", e, exc_info=True)
             return _err(str(e))
 
-    @app.route("/api/print_3mf")
+    @app.route("/api/print_3mf", methods=["POST"])
     def print_3mf():
-        """Start printing a .3mf file from SD card. ?filename=&platenum=&plate=AUTO|COOL_PLATE|ENG_PLATE|HOT_PLATE|TEXTURED_PLATE&use_ams=true|false&ams_mapping=&bl=true|false&flow=true|false&tl=true|false"""
+        """Start printing a .3mf file from SD card. ?filename=&platenum=&plate=AUTO|COOL_PLATE|ENG_PLATE|HOT_PLATE|TEXTURED_PLATE&use_ams=true|false&ams_mapping=&bl=true|false&flow=true|false&tl=true|false
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("print_3mf: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
             from bpm.bambutools import PlateType
-            filename = request.args.get("filename", "")
-            platenum = int(request.args.get("platenum", 0))
-            plate_str = request.args.get("plate", "AUTO").upper()
+            filename = _rargs().get("filename", "")
+            platenum = int(_rargs().get("platenum", 0))
+            plate_str = _rargs().get("plate", "AUTO").upper()
             platetype = PlateType[plate_str]
-            use_ams = request.args.get("use_ams") == "true"
-            ams_mapping = request.args.get("ams_mapping")
-            bl = request.args.get("bl") == "true"
-            flow = request.args.get("flow") == "true"
-            tl = request.args.get("tl") == "true"
+            use_ams = _rargs().get("use_ams") == "true"
+            ams_mapping = _rargs().get("ams_mapping")
+            bl = _rargs().get("bl") == "true"
+            flow = _rargs().get("flow") == "true"
+            tl = _rargs().get("tl") == "true"
             log.debug("print_3mf: filename=%s platenum=%s plate=%s use_ams=%s", filename, platenum, platetype, use_ams)
             p.print_3mf_file(filename, platenum, platetype, use_ams, ams_mapping=ams_mapping, bedlevel=bl, flow=flow, timelapse=tl)
             log.debug("print_3mf: → ok")
@@ -1199,15 +1291,18 @@ def _build_app():
             log.error("print_3mf: error: %s", e, exc_info=True)
             return _err(str(e))
 
-    @app.route("/api/skip_objects")
+    @app.route("/api/skip_objects", methods=["POST"])
     def skip_objects():
-        """Skip one or more objects. ?objects=<id1>,<id2>,..."""
+        """Skip one or more objects. ?objects=<id1>,<id2>,...
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("skip_objects: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
-            objects = request.args.get("objects", "").split(",")
+            objects = _rargs().get("objects", "").split(",")
             log.debug("skip_objects: objects=%s", objects)
             p.skip_objects(objects)
             log.debug("skip_objects: → ok")
@@ -1218,11 +1313,14 @@ def _build_app():
 
     # ── SD card ────────────────────────────────────────────────────────────────
 
-    @app.route("/api/refresh_sdcard_3mf_files")
+    @app.route("/api/refresh_sdcard_3mf_files", methods=["POST"])
     def refresh_sdcard_3mf_files():
-        """Trigger refresh of .3mf file listing from SD card."""
+        """Trigger refresh of .3mf file listing from SD card.
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("refresh_sdcard_3mf_files: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
@@ -1238,7 +1336,7 @@ def _build_app():
     def get_sdcard_3mf_files():
         """Return list of .3mf files on SD card."""
         log.debug("get_sdcard_3mf_files: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
@@ -1250,11 +1348,14 @@ def _build_app():
             log.error("get_sdcard_3mf_files: error: %s", e, exc_info=True)
             return _err(str(e))
 
-    @app.route("/api/refresh_sdcard_contents")
+    @app.route("/api/refresh_sdcard_contents", methods=["POST"])
     def refresh_sdcard_contents():
-        """Trigger full SD card contents refresh."""
+        """Trigger full SD card contents refresh.
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("refresh_sdcard_contents: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
@@ -1270,7 +1371,7 @@ def _build_app():
     def get_sdcard_contents():
         """Return full SD card directory listing."""
         log.debug("get_sdcard_contents: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
@@ -1286,11 +1387,11 @@ def _build_app():
     def find_3mf_by_name():
         """Search SD card 3MF file tree by filename. ?name=<filename>"""
         log.debug("find_3mf_by_name: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
-            target_name = request.args.get("name", "")
+            target_name = _rargs().get("name", "")
             log.debug("find_3mf_by_name: target_name=%s", target_name)
             if not target_name:
                 return _err("name parameter required")
@@ -1309,11 +1410,11 @@ def _build_app():
     def find_3mf_by_id():
         """Search SD card 3MF file tree by full path ID. ?id=<path>"""
         log.debug("find_3mf_by_id: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
-            target_id = request.args.get("id", "")
+            target_id = _rargs().get("id", "")
             log.debug("find_3mf_by_id: target_id=%s", target_id)
             if not target_id:
                 return _err("id parameter required")
@@ -1328,15 +1429,18 @@ def _build_app():
             log.error("find_3mf_by_id: error: %s", e, exc_info=True)
             return _err(str(e))
 
-    @app.route("/api/delete_sdcard_file")
+    @app.route("/api/delete_sdcard_file", methods=["DELETE"])
     def delete_sdcard_file():
-        """Delete a file or folder from SD card. ?file=<path> (trailing / for folder)"""
+        """Delete a file or folder from SD card. ?file=<path> (trailing / for folder)
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("delete_sdcard_file: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
-            path = request.args.get("file", "")
+            path = _rargs().get("file", "")
             log.debug("delete_sdcard_file: path=%s", path)
             if path.endswith("/"):
                 result = p.delete_sdcard_folder(path)
@@ -1348,15 +1452,18 @@ def _build_app():
             log.error("delete_sdcard_file: error: %s", e, exc_info=True)
             return _err(str(e))
 
-    @app.route("/api/make_sdcard_directory")
+    @app.route("/api/make_sdcard_directory", methods=["POST"])
     def make_sdcard_directory():
-        """Create a directory on SD card. ?dir=<path>"""
+        """Create a directory on SD card. ?dir=<path>
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("make_sdcard_directory: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
-            d = request.args.get("dir", "")
+            d = _rargs().get("dir", "")
             log.debug("make_sdcard_directory: dir=%s", d)
             result = p.make_sdcard_directory(d)
             log.debug("make_sdcard_directory: → ok")
@@ -1365,16 +1472,19 @@ def _build_app():
             log.error("make_sdcard_directory: error: %s", e, exc_info=True)
             return _err(str(e))
 
-    @app.route("/api/rename_sdcard_file")
+    @app.route("/api/rename_sdcard_file", methods=["PATCH"])
     def rename_sdcard_file():
-        """Rename or move an SD card file. ?src=<path>&dest=<path>"""
+        """Rename or move an SD card file. ?src=<path>&dest=<path>
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("rename_sdcard_file: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
-            src = request.args.get("src", "")
-            dest = request.args.get("dest", "")
+            src = _rargs().get("src", "")
+            dest = _rargs().get("dest", "")
             log.debug("rename_sdcard_file: src=%s dest=%s", src, dest)
             result = p.rename_sdcard_file(src, dest)
             log.debug("rename_sdcard_file: → ok")
@@ -1400,16 +1510,19 @@ def _build_app():
             log.error("upload_file_to_host: error: %s", e, exc_info=True)
             return _err(str(e))
 
-    @app.route("/api/upload_file_to_printer", methods=["GET", "POST"])
+    @app.route("/api/upload_file_to_printer", methods=["POST"])
     def upload_file_to_printer():
-        """Upload a local file to the printer SD card. ?src=<filename_in_uploads>&dest=<remote_path>"""
+        """Upload a local file to the printer SD card. ?src=<filename_in_uploads>&dest=<remote_path>
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("upload_file_to_printer: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
-            src = request.args.get("src", "")
-            dest = request.args.get("dest", "")
+            src = _rargs().get("src", "")
+            dest = _rargs().get("dest", "")
             local = os.path.join(_UPLOADS, src)
             log.debug("upload_file_to_printer: src=%s dest=%s", local, dest)
             result = p.upload_sdcard_file(local, dest)
@@ -1423,11 +1536,11 @@ def _build_app():
     def download_file_from_printer():
         """Download a file from the printer SD card and return it. ?src=<remote_path>"""
         log.debug("download_file_from_printer: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
-            src = request.args.get("src", "")
+            src = _rargs().get("src", "")
             filename = src[src.rindex("/") + 1:]
             local = os.path.join(_UPLOADS, filename)
             log.debug("download_file_from_printer: src=%s local=%s", src, local)
@@ -1440,15 +1553,18 @@ def _build_app():
 
     # ── detectors ─────────────────────────────────────────────────────────────
 
-    @app.route("/api/set_buildplate_marker_detector")
+    @app.route("/api/set_buildplate_marker_detector", methods=["PATCH"])
     def set_buildplate_marker_detector():
-        """Enable/disable buildplate ArUco marker detector. ?enabled=true|false"""
+        """Enable/disable buildplate ArUco marker detector. ?enabled=true|false
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("set_buildplate_marker_detector: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
-            enabled = request.args.get("enabled") == "true"
+            enabled = _rargs().get("enabled") == "true"
             log.debug("set_buildplate_marker_detector: enabled=%s", enabled)
             p.set_buildplate_marker_detector(enabled)
             log.debug("set_buildplate_marker_detector: → ok")
@@ -1457,15 +1573,18 @@ def _build_app():
             log.error("set_buildplate_marker_detector: error: %s", e, exc_info=True)
             return _err(str(e))
 
-    @app.route("/api/set_first_layer_inspection")
+    @app.route("/api/set_first_layer_inspection", methods=["PATCH"])
     def set_first_layer_inspection():
-        """Enable/disable first-layer LiDAR/camera inspection. ?enabled=true|false"""
+        """Enable/disable first-layer LiDAR/camera inspection. ?enabled=true|false
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("set_first_layer_inspection: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
-            enabled = request.args.get("enabled") == "true"
+            enabled = _rargs().get("enabled") == "true"
             log.debug("set_first_layer_inspection: enabled=%s", enabled)
             cmd = {
                 "xcam": {
@@ -1484,16 +1603,19 @@ def _build_app():
             log.error("set_first_layer_inspection: error: %s", e, exc_info=True)
             return _err(str(e))
 
-    @app.route("/api/set_spaghetti_detector")
+    @app.route("/api/set_spaghetti_detector", methods=["PATCH"])
     def set_spaghetti_detector():
-        """Enable/disable spaghetti detector. ?enabled=true|false&sensitivity=low|medium|high"""
+        """Enable/disable spaghetti detector. ?enabled=true|false&sensitivity=low|medium|high
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("set_spaghetti_detector: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
-            enabled = request.args.get("enabled") == "true"
-            sensitivity = request.args.get("sensitivity", "medium")
+            enabled = _rargs().get("enabled") == "true"
+            sensitivity = _rargs().get("sensitivity", "medium")
             log.debug("set_spaghetti_detector: enabled=%s sensitivity=%s", enabled, sensitivity)
             p.set_spaghetti_detector(enabled, sensitivity)
             log.debug("set_spaghetti_detector: → ok")
@@ -1502,16 +1624,19 @@ def _build_app():
             log.error("set_spaghetti_detector: error: %s", e, exc_info=True)
             return _err(str(e))
 
-    @app.route("/api/set_purgechutepileup_detector")
+    @app.route("/api/set_purgechutepileup_detector", methods=["PATCH"])
     def set_purgechutepileup_detector():
-        """Enable/disable purge chute pile-up detector. ?enabled=true|false&sensitivity=low|medium|high"""
+        """Enable/disable purge chute pile-up detector. ?enabled=true|false&sensitivity=low|medium|high
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("set_purgechutepileup_detector: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
-            enabled = request.args.get("enabled") == "true"
-            sensitivity = request.args.get("sensitivity", "medium")
+            enabled = _rargs().get("enabled") == "true"
+            sensitivity = _rargs().get("sensitivity", "medium")
             log.debug("set_purgechutepileup_detector: enabled=%s sensitivity=%s", enabled, sensitivity)
             p.set_purgechutepileup_detector(enabled, sensitivity)
             log.debug("set_purgechutepileup_detector: → ok")
@@ -1520,16 +1645,19 @@ def _build_app():
             log.error("set_purgechutepileup_detector: error: %s", e, exc_info=True)
             return _err(str(e))
 
-    @app.route("/api/set_nozzleclumping_detector")
+    @app.route("/api/set_nozzleclumping_detector", methods=["PATCH"])
     def set_nozzleclumping_detector():
-        """Enable/disable nozzle clumping detector. ?enabled=true|false&sensitivity=low|medium|high"""
+        """Enable/disable nozzle clumping detector. ?enabled=true|false&sensitivity=low|medium|high
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("set_nozzleclumping_detector: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
-            enabled = request.args.get("enabled") == "true"
-            sensitivity = request.args.get("sensitivity", "medium")
+            enabled = _rargs().get("enabled") == "true"
+            sensitivity = _rargs().get("sensitivity", "medium")
             log.debug("set_nozzleclumping_detector: enabled=%s sensitivity=%s", enabled, sensitivity)
             p.set_nozzleclumping_detector(enabled, sensitivity)
             log.debug("set_nozzleclumping_detector: → ok")
@@ -1538,16 +1666,19 @@ def _build_app():
             log.error("set_nozzleclumping_detector: error: %s", e, exc_info=True)
             return _err(str(e))
 
-    @app.route("/api/set_airprinting_detector")
+    @app.route("/api/set_airprinting_detector", methods=["PATCH"])
     def set_airprinting_detector():
-        """Enable/disable air-printing detector. ?enabled=true|false&sensitivity=low|medium|high"""
+        """Enable/disable air-printing detector. ?enabled=true|false&sensitivity=low|medium|high
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("set_airprinting_detector: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
-            enabled = request.args.get("enabled") == "true"
-            sensitivity = request.args.get("sensitivity", "medium")
+            enabled = _rargs().get("enabled") == "true"
+            sensitivity = _rargs().get("sensitivity", "medium")
             log.debug("set_airprinting_detector: enabled=%s sensitivity=%s", enabled, sensitivity)
             p.set_airprinting_detector(enabled, sensitivity)
             log.debug("set_airprinting_detector: → ok")
@@ -1567,7 +1698,7 @@ def _build_app():
         Each entry includes 'supported' (bool) indicating hardware support.
         """
         log.debug("get_detector_settings: called")
-        p, name = _get_printer(request.args)
+        p, name = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
@@ -1618,17 +1749,20 @@ def _build_app():
 
     # ── print options / gcode / AMS ───────────────────────────────────────────
 
-    @app.route("/api/set_print_option")
+    @app.route("/api/set_print_option", methods=["PATCH"])
     def set_print_option():
-        """Set a print option flag. ?option=AUTO_RECOVERY|SOUND_ENABLE|...&enabled=true|false"""
+        """Set a print option flag. ?option=AUTO_RECOVERY|SOUND_ENABLE|...&enabled=true|false
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("set_print_option: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
             from bpm.bambutools import PrintOption
-            option = PrintOption[request.args.get("option", "").upper()]
-            enabled = request.args.get("enabled") == "true"
+            option = PrintOption[_rargs().get("option", "").upper()]
+            enabled = _rargs().get("enabled") == "true"
             log.debug("set_print_option: option=%s enabled=%s", option, enabled)
             p.set_print_option(option, enabled)
             log.debug("set_print_option: → ok")
@@ -1637,15 +1771,18 @@ def _build_app():
             log.error("set_print_option: error: %s", e, exc_info=True)
             return _err(str(e))
 
-    @app.route("/api/send_gcode")
+    @app.route("/api/send_gcode", methods=["POST"])
     def send_gcode():
-        """Send raw G-code commands. ?gcode=<commands> (use | as newline separator)"""
+        """Send raw G-code commands. ?gcode=<commands> (use | as newline separator)
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("send_gcode: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
-            gcode = request.args.get("gcode", "").replace("|", "\n")
+            gcode = _rargs().get("gcode", "").replace("|", "\n")
             log.debug("send_gcode: gcode=%s", repr(gcode[:80]))
             p.send_gcode(gcode)
             log.debug("send_gcode: → ok")
@@ -1654,21 +1791,22 @@ def _build_app():
             log.error("send_gcode: error: %s", e, exc_info=True)
             return _err(str(e))
 
-    @app.route("/api/send_mqtt_command")
+    @app.route("/api/send_mqtt_command", methods=["POST"])
     def send_mqtt_command():
         """Send a raw MQTT command JSON to the printer's request topic. ?command_json=<json>
 
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
         ⚠️ LAST-RESORT TOOL. Bypasses all safety checks. Incorrect commands can damage
         prints, trigger hardware faults, or put the printer into an unrecoverable state.
         command_json must be a valid JSON string matching the Bambu Lab MQTT command schema.
         """
         log.debug("send_mqtt_command: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
             import json as _json
-            command_json = request.args.get("command_json", "")
+            command_json = _rargs().get("command_json", "")
             _json.loads(command_json)  # validate JSON before sending
             log.debug("send_mqtt_command: command=%s", command_json[:80])
             p.send_anything(command_json)
@@ -1681,16 +1819,19 @@ def _build_app():
             log.error("send_mqtt_command: error: %s", e, exc_info=True)
             return _err(str(e))
 
-    @app.route("/api/send_ams_control_command")
+    @app.route("/api/send_ams_control_command", methods=["POST"])
     def send_ams_control_command():
-        """Send AMS control command. ?cmd=PAUSE|RESUME|RESET"""
+        """Send AMS control command. ?cmd=PAUSE|RESUME|RESET
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("send_ams_control_command: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
             from bpm.bambutools import AMSControlCommand
-            cmd = AMSControlCommand[request.args.get("cmd", "").upper()]
+            cmd = AMSControlCommand[_rargs().get("cmd", "").upper()]
             log.debug("send_ams_control_command: cmd=%s", cmd)
             p.send_ams_control_command(cmd)
             log.debug("send_ams_control_command: → ok")
@@ -1699,17 +1840,20 @@ def _build_app():
             log.error("send_ams_control_command: error: %s", e, exc_info=True)
             return _err(str(e))
 
-    @app.route("/api/set_ams_user_setting")
+    @app.route("/api/set_ams_user_setting", methods=["PATCH"])
     def set_ams_user_setting():
-        """Set AMS user setting. ?setting=CALIBRATE_REMAIN_FLAG|STARTUP_READ_OPTION|TRAY_READ_OPTION&enabled=true|false"""
+        """Set AMS user setting. ?setting=CALIBRATE_REMAIN_FLAG|STARTUP_READ_OPTION|TRAY_READ_OPTION&enabled=true|false
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("set_ams_user_setting: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
             from bpm.bambutools import AMSUserSetting
-            setting = AMSUserSetting[request.args.get("setting", "").upper()]
-            enabled = request.args.get("enabled") == "true"
+            setting = AMSUserSetting[_rargs().get("setting", "").upper()]
+            enabled = _rargs().get("enabled") == "true"
             log.debug("set_ams_user_setting: setting=%s enabled=%s", setting, enabled)
             p.set_ams_user_setting(setting, enabled)
             log.debug("set_ams_user_setting: → ok")
@@ -1718,20 +1862,22 @@ def _build_app():
             log.error("set_ams_user_setting: error: %s", e, exc_info=True)
             return _err(str(e))
 
-    @app.route("/api/select_extrusion_calibration")
+    @app.route("/api/select_extrusion_calibration", methods=["POST"])
     def select_extrusion_calibration():
         """Select an extrusion calibration profile for a filament slot. ?tray_id=<int>&cali_idx=<int>
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
 
         tray_id encoding: ams_unit_index × 4 + slot (0–3). External spool = 254.
         cali_idx = -1 to auto-select the best matching profile for the loaded filament.
         """
         log.debug("select_extrusion_calibration: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
-            tray_id = int(request.args.get("tray_id", 0))
-            cali_idx = int(request.args.get("cali_idx", -1))
+            tray_id = int(_rargs().get("tray_id", 0))
+            cali_idx = int(_rargs().get("cali_idx", -1))
             log.debug("select_extrusion_calibration: tray_id=%s cali_idx=%s", tray_id, cali_idx)
             p.select_extrusion_calibration_profile(tray_id, cali_idx)
             log.debug("select_extrusion_calibration: → ok")
@@ -1740,22 +1886,24 @@ def _build_app():
             log.error("select_extrusion_calibration: error: %s", e, exc_info=True)
             return _err(str(e))
 
-    @app.route("/api/turn_on_ams_dryer")
+    @app.route("/api/turn_on_ams_dryer", methods=["POST"])
     def turn_on_ams_dryer():
         """Start the AMS filament dryer. ?ams_id=<int>&target_temp=<int>&duration_hours=<int>
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
 
         ams_id is the internal chip_id (not the user-facing unit_id): AMS 2 Pro starts at 0,
         AMS HT starts at 128. target_temp defaults to 55°C; duration_hours defaults to 4.
         Only supported on AMS 2 Pro and AMS HT models.
         """
         log.debug("turn_on_ams_dryer: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
-            ams_id = int(request.args.get("ams_id", 0))
-            target_temp = int(request.args.get("target_temp", 55))
-            duration_hours = int(request.args.get("duration_hours", 4))
+            ams_id = int(_rargs().get("ams_id", 0))
+            target_temp = int(_rargs().get("target_temp", 55))
+            duration_hours = int(_rargs().get("duration_hours", 4))
             log.debug("turn_on_ams_dryer: ams_id=%s target_temp=%s duration_hours=%s", ams_id, target_temp, duration_hours)
             p.turn_on_ams_dryer(target_temp=target_temp, duration=duration_hours, ams_id=ams_id)
             log.debug("turn_on_ams_dryer: → ok")
@@ -1764,18 +1912,20 @@ def _build_app():
             log.error("turn_on_ams_dryer: error: %s", e, exc_info=True)
             return _err(str(e))
 
-    @app.route("/api/turn_off_ams_dryer")
+    @app.route("/api/turn_off_ams_dryer", methods=["POST"])
     def turn_off_ams_dryer():
         """Stop the AMS filament dryer. ?ams_id=<int>
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
 
         ams_id is the internal chip_id: AMS 2 Pro starts at 0, AMS HT starts at 128.
         """
         log.debug("turn_off_ams_dryer: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
-            ams_id = int(request.args.get("ams_id", 0))
+            ams_id = int(_rargs().get("ams_id", 0))
             log.debug("turn_off_ams_dryer: ams_id=%s", ams_id)
             p.turn_off_ams_dryer(ams_id=ams_id)
             log.debug("turn_off_ams_dryer: → ok")
@@ -1786,17 +1936,20 @@ def _build_app():
 
     # ── nozzle ─────────────────────────────────────────────────────────────────
 
-    @app.route("/api/set_nozzle_details")
+    @app.route("/api/set_nozzle_details", methods=["PATCH"])
     def set_nozzle_details():
-        """Set nozzle diameter and type. ?nozzle_diameter=0.2|0.4|0.6|0.8&nozzle_type=BRASS|HARDENED_STEEL|..."""
+        """Set nozzle diameter and type. ?nozzle_diameter=0.2|0.4|0.6|0.8&nozzle_type=BRASS|HARDENED_STEEL|...
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("set_nozzle_details: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
             from bpm.bambutools import NozzleDiameter, NozzleType
-            nozzle_diameter = NozzleDiameter(float(request.args.get("nozzle_diameter", 0.4)))
-            nozzle_type = NozzleType[request.args.get("nozzle_type", "BRASS")]
+            nozzle_diameter = NozzleDiameter(float(_rargs().get("nozzle_diameter", 0.4)))
+            nozzle_type = NozzleType[_rargs().get("nozzle_type", "BRASS")]
             log.debug("set_nozzle_details: diameter=%s type=%s", nozzle_diameter, nozzle_type)
             p.set_nozzle_details(nozzle_diameter, nozzle_type)
             log.debug("set_nozzle_details: → ok (sleeping 1s)")
@@ -1806,11 +1959,14 @@ def _build_app():
             log.error("set_nozzle_details: error: %s", e, exc_info=True)
             return _err(str(e))
 
-    @app.route("/api/refresh_nozzles")
+    @app.route("/api/refresh_nozzles", methods=["POST"])
     def refresh_nozzles():
-        """Trigger nozzle hardware re-read."""
+        """Trigger nozzle hardware re-read.
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("refresh_nozzles: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
@@ -1828,13 +1984,13 @@ def _build_app():
     def get_3mf_props_for_file():
         """Return 3MF project properties for a file on SD card. ?file=<path>&plate=<int>"""
         log.debug("get_3mf_props_for_file: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
             from bpm.bambuproject import get_project_info as _gpi
-            file = request.args.get("file", "")
-            plate = int(request.args.get("plate", 0))
+            file = _rargs().get("file", "")
+            plate = int(_rargs().get("plate", 0))
             log.debug("get_3mf_props_for_file: file=%s plate=%s", file, plate)
             props = _gpi(file, p, plate_num=plate, use_cached_list=True)
             if not props:
@@ -1850,7 +2006,7 @@ def _build_app():
     def get_current_3mf_props():
         """Return 3MF project properties for the currently active print job."""
         log.debug("get_current_3mf_props: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
@@ -1868,15 +2024,18 @@ def _build_app():
 
     # ── session / system ───────────────────────────────────────────────────────
 
-    @app.route("/api/rename_printer")
+    @app.route("/api/rename_printer", methods=["PATCH"])
     def rename_printer():
-        """Rename the printer on its own firmware. ?new_name=<name>"""
+        """Rename the printer on its own firmware. ?new_name=<name>
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("rename_printer: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
-            new_name = request.args.get("new_name", "").strip()
+            new_name = _rargs().get("new_name", "").strip()
             if not new_name:
                 return _err("new_name is required")
             log.debug("rename_printer: new_name=%s", new_name)
@@ -1887,11 +2046,14 @@ def _build_app():
             log.error("rename_printer: error: %s", e, exc_info=True)
             return _err(str(e))
 
-    @app.route("/api/trigger_printer_refresh")
+    @app.route("/api/trigger_printer_refresh", methods=["POST"])
     def trigger_printer_refresh():
-        """Force printer to re-broadcast its full state."""
+        """Force printer to re-broadcast its full state.
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("trigger_printer_refresh: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
@@ -1903,11 +2065,14 @@ def _build_app():
             log.error("trigger_printer_refresh: error: %s", e, exc_info=True)
             return _err(str(e))
 
-    @app.route("/api/toggle_session")
+    @app.route("/api/toggle_session", methods=["PATCH"])
     def toggle_session():
-        """Pause or resume the MQTT session for the printer."""
+        """Pause or resume the MQTT session for the printer.
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("toggle_session: called")
-        p, _ = _get_printer(request.args)
+        p, _ = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
@@ -1939,9 +2104,12 @@ def _build_app():
             log.error("dump_log: error: %s", e, exc_info=True)
             return _err(str(e))
 
-    @app.route("/api/truncate_log")
+    @app.route("/api/truncate_log", methods=["DELETE"])
     def truncate_log():
-        """Truncate the bambu-mcp server log."""
+        """Truncate the bambu-mcp server log.
+
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        """
         log.debug("truncate_log: called")
         try:
             log_path = os.path.join(os.path.dirname(__file__), "bambu-mcp.log")
@@ -2000,10 +2168,11 @@ def _build_app():
 
     # ── set k-factor (stubbed — not yet in session_manager) ──────────────────
 
-    @app.route("/api/set_spool_k_factor")
+    @app.route("/api/set_spool_k_factor", methods=["POST"])
     def set_spool_k_factor():
         """Set extrusion calibration k-factor for a spool. (stub — returns success)
 
+        ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
         ⚠️ STUB / FIRMWARE WARNING: This route is a no-op that always returns
         `{"status": "success"}` without sending any command to the printer.
         The underlying BPM method `set_spool_k_factor()` carries a docstring
@@ -2067,10 +2236,10 @@ def _build_app():
         log.debug("analyze_active_job: called")
         import importlib
         try:
-            printer_name = request.args.get("printer", "")
-            store_ref    = request.args.get("store_reference", "false").lower() == "true"
-            quality      = request.args.get("quality", "auto")
-            cats_raw     = request.args.get("categories", "")
+            printer_name = _rargs().get("printer", "")
+            store_ref    = _rargs().get("store_reference", "false").lower() == "true"
+            quality      = _rargs().get("quality", "auto")
+            cats_raw     = _rargs().get("categories", "")
             categories   = [c.strip() for c in cats_raw.split(",") if c.strip()] or None
             cam = importlib.import_module("tools.camera")
             result = cam.analyze_active_job(
@@ -2103,15 +2272,15 @@ def _build_app():
         from notifications import notifications as _notifications
         try:
             if request.method == "GET":
-                all_printers = request.args.get("all", "false").lower() == "true"
+                all_printers = _rargs().get("all", "false").lower() == "true"
                 if all_printers:
                     return jsonify(_notifications.get_all_pending(clear=True))
-                p, name = _get_printer(request.args)
+                p, name = _get_printer(_rargs())
                 if p is None:
                     return _err("no printer")
                 return jsonify(_notifications.get_pending(name, clear=True))
             else:  # DELETE
-                p, name = _get_printer(request.args)
+                p, name = _get_printer(_rargs())
                 if p is None:
                     return _err("no printer")
                 _notifications.clear(name)

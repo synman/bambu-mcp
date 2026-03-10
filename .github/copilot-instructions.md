@@ -303,6 +303,8 @@ When adding a new route, the commit must include:
 - [ ] Entry in `_ROUTE_TAGS` (correct category)
 - [ ] Corresponding `knowledge/http_api_*.py` update (or new sub-topic file if the category doesn't exist)
 - [ ] If new sub-topic file: add to `_KNOWN_TOPICS` + `_KNOWLEDGE_MAP` in `resources/knowledge.py` and `tools/knowledge_search.py`
+- [ ] Route handler uses `_rargs().get(...)` not `request.args.get(...)` for all parameter reads
+- [ ] HTTP method matches REST semantics: GET (read), PATCH (partial update), POST (action/command), DELETE (resource destruction)
 
 ### Reconciliation gate
 
@@ -465,7 +467,7 @@ Polls `/job_state` every 8s (separate polling loop from `/status`). Auto-expands
 - Stream endpoints + `/status` schema → `knowledge/api_reference_camera.py` (Stream Server Endpoints section added v1.0.2)
 - Job state result dict → `knowledge/api_reference_camera.py` (JobStateReport + background monitor result dict)
 - Push alert types + semantics → `knowledge/behavioral_rules_alerts.py` (sub-topic `behavioral_rules/alerts`); access via `get_knowledge_topic('behavioral_rules/alerts')`
-- Session management (printer name verification, post-reload checklist) → `knowledge/behavioral_rules_session.py` (sub-topic `behavioral_rules/session`); access via `get_knowledge_topic('behavioral_rules/session')`
+- Session management (printer name verification, post-reload checklist, and HTTP API write guard (GET=safe, POST/PATCH/DELETE=require user confirmation)) → `knowledge/behavioral_rules_session.py` (sub-topic `behavioral_rules/session`); access via `get_knowledge_topic('behavioral_rules/session')`
 
 **Knowledge obligation (mandatory for all covered items):**
 Every item reachable via an MCP tool or HTTP route MUST be documented in the appropriate `knowledge/api_reference_*.py` or `knowledge/enums_*.py` module. Coverage without documentation is an incomplete implementation.
@@ -819,32 +821,11 @@ print('braces: opens', js.count('{'), 'closes', js.count('}'), 'diff', js.count(
 
 ### Tier 2 — REST API Smoke (run after changes to `api_server.py` or `server.py`)
 
-Discover the API port first, then run smoke checks:
 ```bash
-# Port discovery
-PORT=$(python -c "
-import json, subprocess
-r = subprocess.run(['python', '-c',
-  'from bambu_mcp.api_server import get_api_port; print(get_api_port())'],
-  capture_output=True, text=True, cwd='$HOME/bambu-mcp')
-print(r.stdout.strip())
-" 2>/dev/null || echo "49152")
-
-# Health gate — must pass before any other route check
-curl -sf http://localhost:${PORT}/api/health_check | python3 -c "
-import sys, json; d=json.load(sys.stdin); print('health_check:', 'OK' if d.get('status')=='ok' else 'FAIL', d)
-"
-
-# Printer state — must return JSON with expected top-level keys
-curl -sf "http://localhost:${PORT}/api/printer" | python3 -c "
-import sys, json; d=json.load(sys.stdin)
-required = {'printers','connected'}
-missing = required - set(d.keys())
-print('printer route:', 'OK' if not missing else 'MISSING: '+str(missing))
-"
+cd ~/bambu-mcp && .venv/bin/python smoke_test.py --printer <name>
 ```
 
-**Pass criteria:** `health_check` returns `status: ok`; `/api/printer` returns JSON with expected keys; no 500 responses.
+**Pass criteria:** All checks pass including OpenAPI method verification. No 4xx/5xx responses on read routes.
 
 ---
 

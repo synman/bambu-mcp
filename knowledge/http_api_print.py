@@ -10,11 +10,14 @@ HTTP_API_PRINT_TEXT: str = """
 # HTTP API — Print Control Routes
 
 Base URL: `http://localhost:{api_port}` — call `get_server_info()` or `GET /api/server_info`
-All routes: GET. All accept `?printer=<name>` to select the target printer.
+Read routes: GET. Write routes: PATCH (partial resource updates), POST (actions/commands), DELETE (resource destruction) — all accept params as query string, form body, or JSON body.
+All routes accept `?printer=<name>` (or `printer` in POST body) to select the target printer.
 
 ---
 
-## GET /api/print_3mf
+## POST /api/print_3mf
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Start printing a .3mf file from SD card.
 
@@ -32,7 +35,9 @@ Query parameters:
 
 ---
 
-## GET /api/pause_printing
+## POST /api/pause_printing
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Pause the current print job.
 
@@ -41,7 +46,9 @@ Returns `{"success": true}`.
 
 ---
 
-## GET /api/resume_printing
+## POST /api/resume_printing
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Resume a paused print job.
 
@@ -49,7 +56,9 @@ No effect if the printer is not paused. Returns `{"success": true}`.
 
 ---
 
-## GET /api/stop_printing
+## POST /api/stop_printing
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Stop (cancel) the current print job.
 
@@ -58,7 +67,9 @@ Returns `{"success": true}`.
 
 ---
 
-## GET /api/set_speed_level
+## PATCH /api/set_speed_level
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Set the print speed profile.
 
@@ -70,7 +81,9 @@ Ludicrous = maximum speed. Returns `{"success": true}`.
 
 ---
 
-## GET /api/skip_objects
+## POST /api/skip_objects
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Skip one or more objects during the current print job.
 
@@ -83,7 +96,9 @@ Returns `{"success": true}`.
 
 ---
 
-## GET /api/send_gcode
+## POST /api/send_gcode
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Send raw G-code commands to the printer.
 
@@ -96,7 +111,9 @@ Returns `{"success": true}`.
 
 ---
 
-## GET /api/send_mqtt_command
+## POST /api/send_mqtt_command
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Send a raw MQTT command JSON string directly to the printer's request topic.
 
@@ -110,7 +127,9 @@ Returns `{"success": true}`.
 
 ---
 
-## GET /api/set_print_option
+## PATCH /api/set_print_option
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Set a print option flag.
 
@@ -123,7 +142,9 @@ Returns `{"success": true}`.
 
 ---
 
-## GET /api/clear_print_error
+## POST /api/clear_print_error
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Clear an active print_error on the printer.
 

@@ -170,7 +170,7 @@ severity levels, payload fields, and recommended agent actions per alert type.
 
 **`behavioral_rules/session`** — Session management: printer name verification after MCP
 reload (always call get_configured_printers() first), post-reload checklist (printers +
-stream tab refresh), and session continuity rules.
+stream tab refresh), and HTTP API write guard (GET=safe, POST/PATCH/DELETE=require user confirmation).
 → Call: `get_knowledge_topic('behavioral_rules/session')`
 
 ---

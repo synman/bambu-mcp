@@ -1,5 +1,5 @@
 """
-behavioral_rules_session.py — Session start, MCP reload, and printer name rules.
+behavioral_rules_session.py — Session start, MCP reload, printer name, and HTTP API write guard rules.
 
 Sub-topic of behavioral_rules. Access via get_knowledge_topic('behavioral_rules/session').
 """
@@ -47,4 +47,30 @@ tool reconnect), execute ALL of the following steps in order before proceeding:
 
 These steps are gates — do not skip any of them regardless of how simple the
 user's follow-up request appears.
+
+## HTTP API Write Guard (Mandatory)
+
+HTTP API write routes (POST, PATCH, DELETE) require the same explicit user
+confirmation gate as MCP tools with `user_permission=True`. Never call a write
+route on behalf of the user without first presenting a summary and receiving
+explicit go-ahead in the current conversation turn.
+
+**Write vs. read identification:**
+- GET routes are read-only — safe to call without confirmation.
+- POST routes are action/command operations — always require user confirmation.
+- PATCH routes are partial resource updates — always require user confirmation.
+- DELETE routes are resource-destruction operations — always require user confirmation.
+- The OpenAPI spec (`GET /api/openapi.json`) and the Swagger UI (`GET /api/docs`) reflect
+  the correct method for every route. When in doubt, check the spec.
+
+**Write guard applies equally whether you are:**
+- Calling the HTTP API directly (e.g. via `send_gcode` wrapper, curl, httpx)
+- Constructing a URL and calling it via bash or a script
+
+**Destructive operations (irreversible — extra caution required):**
+- `POST /api/stop_printing` — cancels the print; cannot be resumed
+- `DELETE /api/delete_sdcard_file` — permanently deletes the file
+- `POST /api/print_3mf` — starts a physical print; follow the full print_file confirmation flow
+- `POST /api/send_gcode` — bypasses all safety checks; present the exact gcode to the user
+- `POST /api/send_mqtt_command` — last-resort raw command; present full JSON to the user
 """

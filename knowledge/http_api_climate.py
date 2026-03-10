@@ -10,11 +10,14 @@ HTTP_API_CLIMATE_TEXT: str = """
 # HTTP API — Climate & Lighting Routes
 
 Base URL: `http://localhost:{api_port}` — call `get_server_info()` or `GET /api/server_info`
-All routes: GET. All accept `?printer=<name>` to select the target printer.
+Read routes: GET. Write routes: PATCH (partial resource updates), POST (actions/commands), DELETE (resource destruction) — all accept params as query string, form body, or JSON body.
+All routes accept `?printer=<name>` (or `printer` in POST body) to select the target printer.
 
 ---
 
-## GET /api/set_bed_target_temp
+## PATCH /api/set_bed_target_temp
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Set the heated bed temperature.
 
@@ -25,7 +28,9 @@ Returns `{"success": true}`.
 
 ---
 
-## GET /api/set_chamber_target_temp
+## PATCH /api/set_chamber_target_temp
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Set the chamber temperature target.
 
@@ -39,7 +44,9 @@ Returns `{"success": true}`.
 
 ---
 
-## GET /api/set_tool_target_temp
+## PATCH /api/set_tool_target_temp
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Set the nozzle temperature for the active tool.
 
@@ -52,7 +59,9 @@ Returns `{"success": true}`.
 
 ---
 
-## GET /api/set_fan_speed_target
+## PATCH /api/set_fan_speed_target
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Set the part-cooling fan speed.
 
@@ -64,7 +73,9 @@ and PETG; often set to 0 for ABS to prevent warping. Returns `{"success": true}`
 
 ---
 
-## GET /api/set_aux_fan_speed_target
+## PATCH /api/set_aux_fan_speed_target
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Set the auxiliary (recirculation) fan speed.
 
@@ -76,7 +87,9 @@ Returns `{"success": true}`.
 
 ---
 
-## GET /api/set_exhaust_fan_speed_target
+## PATCH /api/set_exhaust_fan_speed_target
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Set the exhaust fan speed.
 
@@ -88,7 +101,9 @@ printing ABS, ASA, or other engineering filaments. Returns `{"success": true}`.
 
 ---
 
-## GET /api/set_light_state
+## PATCH /api/set_light_state
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Set the chamber light.
 

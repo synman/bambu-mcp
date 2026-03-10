@@ -10,7 +10,8 @@ HTTP_API_FILES_TEXT: str = """
 # HTTP API — File Management Routes
 
 Base URL: `http://localhost:{api_port}` — call `get_server_info()` or `GET /api/server_info`
-All routes: GET (except upload routes which also accept POST). All accept `?printer=<name>`.
+Read routes: GET. Write routes: PATCH (partial resource updates), POST (actions/commands), DELETE (resource destruction) — all accept params as query string, form body, or JSON body.
+All routes accept `?printer=<name>` (or `printer` in POST body) to select the target printer.
 
 ---
 
@@ -23,7 +24,9 @@ Return the full SD card directory listing.
 Returns a nested dict representing the SD card file tree. May be large for cards with many
 files. Use subdirectory-scoped queries when possible.
 
-### GET /api/refresh_sdcard_contents
+### POST /api/refresh_sdcard_contents
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Trigger a full SD card contents refresh from the printer.
 
@@ -35,7 +38,9 @@ Return a list of .3mf files on the SD card.
 
 Filtered listing — only `.3mf` project files are returned.
 
-### GET /api/refresh_sdcard_3mf_files
+### POST /api/refresh_sdcard_3mf_files
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Trigger a refresh of the .3mf file listing from the SD card.
 
@@ -66,7 +71,9 @@ Uses the job filename from live telemetry. Returns the same shape as
 
 ## File Operations
 
-### GET /api/delete_sdcard_file
+### DELETE /api/delete_sdcard_file
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Delete a file or folder from the SD card.
 
@@ -76,7 +83,9 @@ Query parameters:
 
 ⚠️ Irreversible. Returns `{"success": true}`.
 
-### GET /api/make_sdcard_directory
+### POST /api/make_sdcard_directory
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Create a directory on the SD card.
 
@@ -85,7 +94,9 @@ Query parameters:
 
 Returns the updated SD card listing.
 
-### GET /api/rename_sdcard_file
+### PATCH /api/rename_sdcard_file
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Rename or move an SD card file.
 
@@ -105,7 +116,9 @@ Query parameters:
 Returns the file as a binary response with appropriate Content-Disposition header.
 Can also be POST with the path in the request body.
 
-### GET,POST /api/upload_file_to_printer
+### POST /api/upload_file_to_printer
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Upload a local file to the printer SD card.
 

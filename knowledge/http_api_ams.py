@@ -10,11 +10,14 @@ HTTP_API_AMS_TEXT: str = """
 # HTTP API — AMS & Filament Routes
 
 Base URL: `http://localhost:{api_port}` — call `get_server_info()` or `GET /api/server_info`
-All routes: GET. All accept `?printer=<name>` to select the target printer.
+Read routes: GET. Write routes: PATCH (partial resource updates), POST (actions/commands), DELETE (resource destruction) — all accept params as query string, form body, or JSON body.
+All routes accept `?printer=<name>` (or `printer` in POST body) to select the target printer.
 
 ---
 
-## GET /api/load_filament
+## POST /api/load_filament
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Load filament from an AMS slot into the extruder.
 
@@ -27,7 +30,9 @@ Returns `{"success": true}`.
 
 ---
 
-## GET /api/unload_filament
+## POST /api/unload_filament
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Unload the currently loaded filament back to AMS.
 
@@ -35,7 +40,9 @@ Returns `{"success": true}`.
 
 ---
 
-## GET /api/refresh_spool_rfid
+## POST /api/refresh_spool_rfid
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Trigger an RFID re-scan on an AMS slot to update remaining filament data.
 
@@ -47,7 +54,9 @@ Only works for RFID-equipped Bambu Lab spools. Returns `{"success": true}`.
 
 ---
 
-## GET /api/set_spool_details
+## PATCH /api/set_spool_details
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Update filament metadata for an AMS slot.
 
@@ -73,7 +82,9 @@ Returns `{"success": false, "error": "not implemented"}`.
 
 ---
 
-## GET /api/set_ams_user_setting
+## PATCH /api/set_ams_user_setting
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Set an AMS user preference.
 
@@ -87,7 +98,9 @@ Returns `{"success": true}`.
 
 ---
 
-## GET /api/send_ams_control_command
+## POST /api/send_ams_control_command
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Send an AMS control command.
 
@@ -98,7 +111,9 @@ Returns `{"success": true}`.
 
 ---
 
-## GET /api/select_extrusion_calibration
+## POST /api/select_extrusion_calibration
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Select an extrusion calibration profile for a filament slot.
 
@@ -111,7 +126,9 @@ Returns `{"success": true}`.
 
 ---
 
-## GET /api/turn_on_ams_dryer
+## POST /api/turn_on_ams_dryer
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Start the AMS filament dryer on a unit.
 
@@ -125,7 +142,9 @@ Returns `{"success": true}`.
 
 ---
 
-## GET /api/turn_off_ams_dryer
+## POST /api/turn_off_ams_dryer
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Stop the AMS filament dryer on a unit.
 

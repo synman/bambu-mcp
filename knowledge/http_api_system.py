@@ -2,6 +2,18 @@
 http_api_system.py — System and session management routes for the bambu-mcp HTTP REST API.
 
 Sub-topic of http_api. Access via get_knowledge_topic('http_api/system').
+### PATCH /api/rename_printer
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
+
+Rename the printer device on the printer's own firmware.
+
+Query parameters:
+- `new_name` (required) — new display name for the printer (shown on touchscreen and in Bambu Studio)
+
+Changes the name stored on the printer itself, not the local MCP identifier.
+Returns `{"success": true}`.
+
 """
 
 from __future__ import annotations
@@ -11,7 +23,8 @@ HTTP_API_SYSTEM_TEXT: str = """
 
 Base URL: `http://localhost:{api_port}` — call `get_server_info()` or `GET /api/server_info`
 to discover the actual port at runtime (pool default: 49152–49251).
-All routes: GET. All accept `?printer=<name>` to select the target printer.
+Read routes: GET. Write routes: PATCH (partial resource updates), POST (actions/commands), DELETE (resource destruction) — all accept params as query string, form body, or JSON body.
+All routes accept `?printer=<name>` (or `printer` in POST body) to select the target printer.
 
 ---
 
@@ -57,7 +70,9 @@ Equivalent MCP tool: `get_server_info()`
 
 ## Session Management
 
-### GET /api/toggle_session
+### PATCH /api/toggle_session
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Pause or resume the MQTT session for the named printer.
 
@@ -68,7 +83,9 @@ Returns `{"session_active": true|false}` reflecting the new state.
 
 Equivalent to the MCP `pause_mqtt_session` / `resume_mqtt_session` tools.
 
-### GET /api/trigger_printer_refresh
+### POST /api/trigger_printer_refresh
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Force the printer to re-broadcast its full state.
 
@@ -88,7 +105,9 @@ Returns the full contents of the server log as plain text. Includes MQTT connect
 events, command sends, HMS error callbacks, and camera connection activity.
 Useful for diagnosing connection issues or unexpected printer behavior.
 
-### GET /api/truncate_log
+### DELETE /api/truncate_log
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Truncate the bambu-mcp server log.
 

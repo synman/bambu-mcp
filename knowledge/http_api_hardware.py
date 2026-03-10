@@ -10,13 +10,16 @@ HTTP_API_HARDWARE_TEXT: str = """
 # HTTP API — Hardware & AI Detector Routes
 
 Base URL: `http://localhost:{api_port}` — call `get_server_info()` or `GET /api/server_info`
-All routes: GET. All accept `?printer=<name>` to select the target printer.
+Read routes: GET. Write routes: PATCH (partial resource updates), POST (actions/commands), DELETE (resource destruction) — all accept params as query string, form body, or JSON body.
+All routes accept `?printer=<name>` (or `printer` in POST body) to select the target printer.
 
 ---
 
 ## Nozzle Configuration
 
-### GET /api/set_nozzle_details
+### PATCH /api/set_nozzle_details
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Inform the printer of the installed nozzle diameter and material type.
 
@@ -27,14 +30,18 @@ Query parameters:
 
 Updates the printer's nozzle profile. Returns `{"success": true}`.
 
-### GET /api/refresh_nozzles
+### POST /api/refresh_nozzles
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Trigger nozzle hardware re-read.
 
 Sends a REFRESH_NOZZLE command to the printer, which re-reads the installed nozzle
 hardware. Use after physically swapping a nozzle on an H2D. Returns `{"success": true}`.
 
-### GET /api/toggle_active_tool
+### PATCH /api/toggle_active_tool
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Swap the active extruder between 0 (right) and 1 (left).
 
@@ -51,35 +58,58 @@ All detector routes accept:
 
 All return `{"success": true}`.
 
-### GET /api/set_airprinting_detector
+### PATCH /api/set_airprinting_detector
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Enable/disable the air-printing detector.
 
 Detects when the nozzle extrudes into open air (indicates a clog or grinding condition).
 When triggered, the printer halts the print.
 
-### GET /api/set_buildplate_marker_detector
+### PATCH /api/set_buildplate_marker_detector
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Enable/disable the buildplate ArUco marker detector.
 
 Verifies the build plate type matches the sliced print settings before starting.
 If the plate is incompatible, the printer pauses. Does not accept a sensitivity parameter.
 
-### GET /api/set_nozzleclumping_detector
+### PATCH /api/set_first_layer_inspection
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
+
+Enable/disable first-layer inspection (LiDAR/camera scan after layer 1).
+
+Query parameters:
+- `enabled` (required) — `true` | `false`
+
+Only available on printers with LiDAR (`has_lidar` capability = True). On printers without
+LiDAR (A1, P1 series) the command is accepted but has no effect. No sensitivity parameter.
+Returns `{"success": true}`.
+
+### PATCH /api/set_nozzleclumping_detector
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Enable/disable the nozzle clumping/blob detector.
 
 Detects filament accumulating as a blob or clump around the nozzle tip. When triggered,
 the printer halts the print to prevent toolhead damage.
 
-### GET /api/set_purgechutepileup_detector
+### PATCH /api/set_purgechutepileup_detector
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Enable/disable the purge chute pile-up detector.
 
 Detects when purged filament waste accumulates in the purge chute to a level that could
 block the toolhead. When triggered, the printer halts.
 
-### GET /api/set_spaghetti_detector
+### PATCH /api/set_spaghetti_detector
+
+⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
 Enable/disable the spaghetti/failed-print detector.
 
