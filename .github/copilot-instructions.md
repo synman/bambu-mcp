@@ -713,6 +713,12 @@ bambu-mcp uses a two-level knowledge hierarchy:
 - Any new MCP tool must have its primary guidance in `behavioral_rules_camera.py` (or the relevant sub-module) AND its return schema in `api_reference_dataclasses.py`.
 - Stage codes, threshold values, and enum tables appear in exactly one module — not duplicated.
 - No knowledge module may exceed 200 lines. Split by sub-topic if it does.
+  **Split rule (mandatory):** When splitting, content MUST be moved intact to the new
+  sub-topic file. Condensing, shortening, or summarizing content to fit within the limit
+  is never acceptable — it degrades agent knowledge. The only valid response to a size
+  violation is reorganization (split into a new sub-topic), never information loss.
+  After any split, update the parent module's sub-topic index so the new file is
+  discoverable.
 - After any new feature is committed, `get_knowledge_topic('behavioral_rules/camera')` must include the new tool name and guidance.
 - Docstring size estimates, stable_verdict semantics, confidence window interpretation — these belong in the knowledge layer, not repeated in tool docstrings.
 
