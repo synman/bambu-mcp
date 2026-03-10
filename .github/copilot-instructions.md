@@ -593,6 +593,12 @@ The following BPM methods are **intentionally not** exposed as MCP tools or HTTP
 | `BambuPrinter.active_job_info` property | **A** | Internal job accessor returning the live `ActiveJobInfo`. Results surfaced via `get_job_info()`, `get_print_progress()`, `get_current_job_project_info()`. No standalone tool needed. |
 | `BambuPrinter.nozzle_diameter` (deprecated) | **A** | `@deprecated` — replacement is `printer_state.active_nozzle.diameter_mm`, which is covered by `get_nozzle_info()`. Excluded per deprecated-with-replacement rule. |
 | `BambuPrinter.nozzle_type` (deprecated) | **A** | `@deprecated` — replacement is `printer_state.active_nozzle.material`, which is covered by `get_nozzle_info()`. Excluded per deprecated-with-replacement rule. |
+| `BambuPrinter.cached_sd_card_contents` | **C** | Cached SD card tree property accessed internally by `list_sdcard_files` MCP tool and HTTP `GET /api/get_sdcard_contents`. Data is fully surfaced through those paths; no standalone getter needed. |
+| `BambuPrinter.cached_sd_card_3mf_files` | **C** | Cached `.3mf` file list property accessed internally by SD card MCP tools and HTTP `GET /api/get_sdcard_3mf_files`. Data surfaced through those paths; no standalone getter needed. |
+| `BambuPrinter.service_state` property | **C** | Connection state enum surfaced in `get_printer_connection_status` MCP tool response and `GET /api/toggle_session` state field. No dedicated getter needed. |
+| `BambuPrinter.skipped_objects` (deprecated, no replacement) | **C** | `@deprecated` with no named replacement. The underlying `_skipped_objects` list is accessed directly and returned by `get_printer_state` as the `skipped_objects` field. Data is surfaced; deprecated property accessor is not the agent path. |
+| `BambuPrinter.config` property | **A** | Internal configuration object accessor (returns `BambuConfig`). Configuration data is surfaced in `/api/printer` full JSON (via `toJson()`); not a standalone user-facing operation. |
+| `bambutools.cache_write` / `cache_read` / `cache_delete` / `make_cache_key` | **A** | Internal bpm cache I/O utilities used by bpm's elapsed-time estimation and metadata subsystems. Not called from the MCP layer. No user-facing operation. |
 
 ### Coverage audit checklist
 
