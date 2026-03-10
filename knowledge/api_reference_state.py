@@ -125,17 +125,17 @@ Auto-discovered from telemetry on connection.
 | has_dual_extruder | extruder.info array length > 1 | Printer has two independent extruders (H2D only). |
 | has_chamber_temp | device.ctc block present | Printer has a chamber temperature sensor. |
 | has_chamber_door_sensor | fun bit 12 | Printer has a chamber door/lid open sensor. |
-| has_auto_recovery_support | Always True | auto_recovery PrintOption is supported. No home_flag support bit exists; all printers support step-loss detection. Value at home_flag bit 4. |
-| has_auto_switch_filament_support | True if has_ams | auto_switch_filament PrintOption is supported. No home_flag support bit exists; requires AMS (AMS-hosted spools only). Value at home_flag bit 10. |
-| has_sound_enable_support | home_flag bit 18 | sound_enable PrintOption is supported. |
-| has_filament_tangle_detect_support | home_flag bit 19 | filament_tangle_detect PrintOption is supported. |
-| has_nozzle_blob_detect_support | home_flag bit 25 | Legacy nozzle_blob_detect PrintOption is supported. |
-| has_air_print_detect_support | home_flag bit 29 | Legacy air_print_detect PrintOption is supported. |
+| has_auto_recovery_support | **always False in current bpm** (not decoded from telemetry; feature is universally supported by firmware, but bpm does not set this flag from any telemetry source) | auto_recovery PrintOption is supported. No home_flag support bit exists; all printers support step-loss detection. Value at home_flag bit 4. |
+| has_auto_switch_filament_support | **always False in current bpm** (not decoded from telemetry; feature requires AMS, but bpm does not derive this flag from AMS detection) | auto_switch_filament PrintOption is supported. No home_flag support bit exists; requires AMS (AMS-hosted spools only). Value at home_flag bit 10. |
+| has_sound_enable_support | **always False in current bpm** (not decoded from telemetry; fun bit 18 is the protocol source but bpm bambustate.py does not read it) | sound_enable PrintOption is supported. |
+| has_filament_tangle_detect_support | **always False in current bpm** (not decoded from telemetry; fun bit 19 is the protocol source but bpm bambustate.py does not read it) | filament_tangle_detect PrintOption is supported. |
+| has_nozzle_blob_detect_support | **always False in current bpm** (not decoded from telemetry; fun bit 25 is the protocol source but bpm bambustate.py does not read it) | Legacy nozzle_blob_detect PrintOption is supported. |
+| has_air_print_detect_support | **always False in current bpm** (not decoded from telemetry; fun bit 29 is the protocol source but bpm bambustate.py does not read it) | Legacy air_print_detect PrintOption is supported. |
 | has_spaghetti_detector_support | fun bit 42 OR xcam.spaghetti_detector | xcam spaghetti_detector is supported. |
 | has_purgechutepileup_detector_support | fun bit 43 OR xcam.pileup_detector | xcam purgechutepileup_detector is supported. |
 | has_nozzleclumping_detector_support | fun bit 44 OR xcam.clump_detector | xcam nozzleclumping_detector is supported (preferred over nozzle_blob_detect). |
 | has_airprinting_detector_support | fun bit 45 OR xcam.airprint_detector | xcam airprinting_detector is supported (preferred over air_print_detect). |
-| has_buildplate_marker_detector_support | xcam.buildplate_marker_detector present | xcam buildplate_marker_detector is supported. |
+| has_buildplate_marker_detector_support | **always False in current bpm** (not decoded from telemetry; xcam.buildplate_marker_detector is the protocol source but bpm bambustate.py does not read it) | xcam buildplate_marker_detector is supported. |
 
 ---
 
