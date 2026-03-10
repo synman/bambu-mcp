@@ -58,10 +58,25 @@ PRINTER_PROFILES = {
     "A1": {
         "secret_pfx":    "bambu-a1-printer",
         "camera":        "tcp_tls",
-        "plate_left":    0.05,
-        "plate_right":   0.82,   # empirically calibrated: physical plate right at ~80% of frame
-        "plate_top_det": 0.20,
-        "plate_top_dsp": 0.12,
+        # Bed travel geometry (empirically derived, 2026-03-10):
+        #   The A1 is a bed-slinger: physical Y axis maps to frame X axis.
+        #   Camera is gantry-mounted, looking down+forward at the bed.
+        #   Y=0   (home/front) → plate on RIGHT side of frame: x=0.42–0.83W, y=0.44–0.98H
+        #   Y=256 (max/back)   → plate on LEFT  side of frame: x=0.01–0.42W, y=0.52–0.98H
+        #   Full travel envelope: x=0.01–0.84W, y=0.44–0.98H
+        #   Verified by R-B warm-tone sampling across both Y=0 and Y=256 reference frames.
+        "plate_left":    0.01,   # leftmost plate position (Y=max)
+        "plate_right":   0.84,   # rightmost plate position (Y=0)
+        "plate_top_det": 0.44,   # top of plate at Y=0 (highest visible point)
+        "plate_top_dsp": 0.36,   # display crop top (adds headroom above plate)
+        # Per-position constants for vision-based plate locator:
+        "plate_y0_left":   0.42,   # plate left  edge when bed is at Y=0 (home)
+        "plate_y0_right":  0.83,   # plate right edge when bed is at Y=0
+        "plate_y0_top":    0.44,   # plate top   edge when bed is at Y=0
+        "plate_ymax_left":  0.01,  # plate left  edge when bed is at Y=256
+        "plate_ymax_right": 0.42,  # plate right edge when bed is at Y=256
+        "plate_ymax_top":   0.52,  # plate top   edge when bed is at Y=256
+        "plate_bottom":    0.98,   # plate bottom edge (consistent across Y positions)
     },
 }
 # Set by _parse_args() at startup; all functions read these module-level globals.
