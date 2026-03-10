@@ -11,3 +11,5 @@ config/claude_desktop.json
 config/copilot_mcp.json
 bambu-mcp.log
 .veil_state
+.vscode/
+server.log
