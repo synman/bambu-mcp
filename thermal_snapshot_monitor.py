@@ -1,13 +1,17 @@
 """
 thermal_snapshot_monitor.py — Issue #10 thermal data collection script.
 
-Runs the heatmap POC once per minute from print job start through cool-down.
-Saves PNG + JSON sidecar per frame for model refinement.
+Supports H2D (RTSPS) and A1 (TCP/TLS) printers.
+Two operating modes:
+  job mode (default):   waits for a print to start, monitors through cool-down
+  standalone mode:      sets bed temp, runs for --hot-duration seconds, then cools down
 
 Usage:
-    cd ~/bambu-mcp && nohup .venv/bin/python thermal_snapshot_monitor.py > ~/thermal_captures/monitor_stdout.log 2>&1 &
-
-Start BEFORE the print job so baseline temps are captured at true ambient.
+    cd ~/bambu-mcp
+    # job mode (H2D, default):
+    nohup .venv/bin/python thermal_snapshot_monitor.py > ~/thermal_captures/monitor_stdout.log 2>&1 &
+    # standalone bench mode (A1, 100°C, 20 min hot phase):
+    nohup .venv/bin/python thermal_snapshot_monitor.py --printer A1 --standalone --bed-temp 100 --hot-duration 1200 > ~/thermal_captures/a1_standalone.log 2>&1 &
 """
 
 import io
@@ -22,6 +26,7 @@ import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 
+import argparse
 import av
 import matplotlib
 matplotlib.use('Agg')
@@ -40,8 +45,28 @@ warnings.filterwarnings('ignore')
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-PRINTER_NAME        = "H2D"
-PRINTER_SECRET_PFX  = "bambu-h2d-printer"
+PRINTER_PROFILES = {
+    "H2D": {
+        "secret_pfx":    "bambu-h2d-printer",
+        "camera":        "rtsps",
+        "plate_left":    0.06,
+        "plate_right":   0.78,
+        "plate_top_det": 0.36,   # detection crop top
+        "plate_top_dsp": 0.28,   # display crop top (adds headroom for path overlay)
+    },
+    "A1": {
+        "secret_pfx":    "bambu-a1-printer",
+        "camera":        "tcp_tls",
+        "plate_left":    0.05,   # TBD — calibrated empirically by vision agent
+        "plate_right":   0.95,   # TBD
+        "plate_top_det": 0.20,   # TBD
+        "plate_top_dsp": 0.12,   # TBD
+    },
+}
+# Set by _parse_args() at startup; all functions read these module-level globals.
+PROFILE: dict      = PRINTER_PROFILES["H2D"]
+PRINTER_NAME: str  = "H2D"
+
 FLOOR_TEMP_DEFAULT  = 25       # fallback ambient °C
 CAPTURE_INTERVAL_S  = 60       # seconds between captures
 POLL_INTERVAL_S     = 10       # seconds between job-start polls
@@ -70,6 +95,12 @@ def _rtsps_frame(ip: str, access_code: str, timeout_s: int = 15) -> Image.Image:
     return frame.to_image()
 
 
+def _tcp_frame(ip: str, access_code: str) -> Image.Image:
+    from camera.tcp_stream import capture_frame
+    jpeg = capture_frame(ip, access_code)
+    return Image.open(io.BytesIO(jpeg))
+
+
 def _get_printer_state(auth: str) -> dict:
     for port in MCP_PORTS:
         try:
@@ -96,7 +127,10 @@ def fetch_snapshot(ip: str, access_code: str, auth: str) -> tuple:
     progress     = job_info.get("print_percentage")
     subtask      = job_info.get("subtask_name", "unknown")
 
-    img = _rtsps_frame(ip, access_code)
+    if PROFILE["camera"] == "rtsps":
+        img = _rtsps_frame(ip, access_code)
+    else:
+        img = _tcp_frame(ip, access_code)
     return (img,
             float(bed_temp) if bed_temp is not None else None,
             float(chamber_temp) if chamber_temp is not None else None,
@@ -361,15 +395,36 @@ def render_and_save(raw_img: Image.Image, p: dict, out_path: Path,
 
 def crop_plate(img: Image.Image) -> Image.Image:
     W, H = img.size
-    return img.crop((int(0.06*W), int(0.36*H), int(0.78*W), H))
+    return img.crop((int(PROFILE["plate_left"]*W), int(PROFILE["plate_top_det"]*H),
+                     int(PROFILE["plate_right"]*W), H))
 
 def crop_plate_display(img: Image.Image) -> Image.Image:
     W, H = img.size
-    return img.crop((int(0.06*W), int(0.28*H), int(0.78*W), H))
+    return img.crop((int(PROFILE["plate_left"]*W), int(PROFILE["plate_top_dsp"]*H),
+                     int(PROFILE["plate_right"]*W), H))
 
 def path_dy_for(img: Image.Image) -> int:
     _, H = img.size
-    return int(0.36 * H) - int(0.28 * H)
+    return int(PROFILE["plate_top_det"] * H) - int(PROFILE["plate_top_dsp"] * H)
+
+
+# ---------------------------------------------------------------------------
+# Bed temperature control
+# ---------------------------------------------------------------------------
+def _set_bed_temp(temp: int, auth: str) -> None:
+    data = json.dumps({"printer": PRINTER_NAME, "temp": temp}).encode()
+    for port in MCP_PORTS:
+        try:
+            req = urllib.request.Request(
+                f"http://localhost:{port}/api/set_bed_target_temp",
+                data=data, method="PATCH",
+                headers={"Authorization": f"Basic {auth}",
+                         "Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=5)
+            return
+        except Exception:
+            continue
+    raise RuntimeError("_set_bed_temp: could not reach MCP API on any port")
 
 
 # ---------------------------------------------------------------------------
@@ -388,7 +443,7 @@ def post_github_comment(body: str) -> None:
 # ---------------------------------------------------------------------------
 # Monitor loop
 # ---------------------------------------------------------------------------
-def run_monitor() -> None:
+def run_monitor(args) -> None:
     OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
 
     logging.basicConfig(
@@ -399,9 +454,10 @@ def run_monitor() -> None:
         ])
     log = logging.getLogger("thermal_monitor")
 
-    log.info("Starting thermal snapshot monitor")
-    ip          = _secret(f"{PRINTER_SECRET_PFX}_ip")
-    access_code = _secret(f"{PRINTER_SECRET_PFX}_access_code")
+    log.info(f"Starting thermal snapshot monitor — printer={PRINTER_NAME} "
+             f"standalone={args.standalone}")
+    ip          = _secret(f"{PROFILE['secret_pfx']}_ip")
+    access_code = _secret(f"{PROFILE['secret_pfx']}_access_code")
     auth        = _secret("bpm_api_auth")
 
     # --- Baseline (ambient) temps ---
@@ -421,19 +477,36 @@ def run_monitor() -> None:
         baseline_chamber = raw_chamber or float(FLOOR_TEMP_DEFAULT)
         log.info(f"Baseline: bed={baseline_bed}°C  chamber={baseline_chamber}°C")
 
-    # --- Wait for job start ---
-    log.info(f"Waiting for print job to start (polling every {POLL_INTERVAL_S}s)...")
-    subtask_name = "unknown"
-    while True:
-        state = _get_printer_state(auth)
-        gcode_state = (state.get("_printer_state") or {}).get("gcode_state", "UNKNOWN")
-        job = state.get("_active_job_info") or {}
-        subtask_name = job.get("subtask_name", "unknown") or "unknown"
-        if gcode_state in ("RUNNING", "PREPARE"):
-            log.info(f"Job started: '{subtask_name}' (gcode_state={gcode_state})")
-            break
-        log.info(f"  gcode_state={gcode_state} — waiting...")
-        time.sleep(POLL_INTERVAL_S)
+    # --- Wait for job start (or standalone preheat) ---
+    if args.standalone:
+        log.info(f"Standalone mode — setting bed to {args.bed_temp}°C...")
+        _set_bed_temp(args.bed_temp, auth)
+        log.info(f"  Waiting for bed to reach {args.bed_temp}°C (±5°C, max 15 min)...")
+        for _ in range(90):
+            state   = _get_printer_state(auth)
+            climate = (state.get("_printer_state") or {}).get("climate") or {}
+            bt      = float(climate.get("bed_temp") or 0)
+            if bt >= args.bed_temp - 5:
+                log.info(f"  Bed reached {bt:.0f}°C — starting captures.")
+                break
+            log.info(f"  Bed at {bt:.0f}°C (target {args.bed_temp}°C)...")
+            time.sleep(10)
+        subtask_name = f"STANDALONE_{PRINTER_NAME}_b{args.bed_temp}"
+        hot_start    = time.monotonic()
+    else:
+        hot_start = None
+        log.info(f"Waiting for print job to start (polling every {POLL_INTERVAL_S}s)...")
+        subtask_name = "unknown"
+        while True:
+            state = _get_printer_state(auth)
+            gcode_state = (state.get("_printer_state") or {}).get("gcode_state", "UNKNOWN")
+            job = state.get("_active_job_info") or {}
+            subtask_name = job.get("subtask_name", "unknown") or "unknown"
+            if gcode_state in ("RUNNING", "PREPARE"):
+                log.info(f"Job started: '{subtask_name}' (gcode_state={gcode_state})")
+                break
+            log.info(f"  gcode_state={gcode_state} — waiting...")
+            time.sleep(POLL_INTERVAL_S)
 
     # --- Setup output directory ---
     safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in subtask_name)
@@ -483,7 +556,7 @@ def run_monitor() -> None:
             json_name = f"{seq:04d}_{ts_str}.json"
             png_path  = out_dir / png_name
 
-            title = (f"H2D Thermal  |  #{seq}  |  {ts_str}  |  "
+            title = (f"{PRINTER_NAME} Thermal  |  #{seq}  |  {ts_str}  |  "
                      f"Bed: {bed_label}C  ·  Chamber: {floor_label}C  |  "
                      f"State: {gcode_state}  Layer: {layer}  {progress}%")
             render_and_save(disp_pil, p, png_path, title, bed_label, floor_label, dy)
@@ -518,8 +591,16 @@ def run_monitor() -> None:
                               "gcode_state": gcode_state, "bed_temp": bed_temp,
                               "chamber_temp": chamber_temp, "error": str(e)})
 
-        # --- Check for job completion ---
-        if not job_done and gcode_state in ("FINISH", "FAILED", "IDLE"):
+        # --- Standalone hot phase end ---
+        if args.standalone and hot_start is not None and not job_done:
+            if time.monotonic() - hot_start >= args.hot_duration:
+                log.info(f"Standalone hot phase complete ({args.hot_duration}s). "
+                         f"Setting bed to 0°C.")
+                _set_bed_temp(0, auth)
+                job_done = True
+
+        # --- Check for job completion (job mode only) ---
+        if not args.standalone and not job_done and gcode_state in ("FINISH", "FAILED", "IDLE"):
             log.info(f"Job ended (gcode_state={gcode_state}). Entering cool-down monitoring.")
             job_done = True
 
@@ -553,6 +634,7 @@ def run_monitor() -> None:
     summary_lines = [
         f"## Thermal Snapshot Monitor — Run Complete",
         f"",
+        f"**Printer:** {PRINTER_NAME}  |  **Mode:** {'Standalone' if args.standalone else 'Job tracking'}",
         f"**Job:** {subtask_name}",
         f"**Output:** `{out_dir}`",
         f"**Duration:** ~{duration_min} min  |  **Captures:** {total} total, {errors} errors",
@@ -584,5 +666,21 @@ def run_monitor() -> None:
     log.info(f"Summary posted to issue #{GITHUB_ISSUE}.")
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Thermal snapshot monitor for Bambu printers")
+    parser.add_argument("--printer",      default="H2D", choices=list(PRINTER_PROFILES),
+                        help="Printer to monitor (default: H2D)")
+    parser.add_argument("--standalone",   action="store_true",
+                        help="Standalone bench mode: set bed temp, capture, cool down")
+    parser.add_argument("--bed-temp",     type=int, default=100,
+                        help="Bed target °C for standalone mode (default: 100)")
+    parser.add_argument("--hot-duration", type=int, default=1200,
+                        help="Seconds to hold hot phase before cooling (default: 1200)")
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    run_monitor()
+    _args = _parse_args()
+    PROFILE      = PRINTER_PROFILES[_args.printer]
+    PRINTER_NAME = _args.printer
+    run_monitor(_args)
