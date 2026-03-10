@@ -1083,6 +1083,17 @@ class MJPEGServer:
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             self._servers[name] = _ServerEntry(server=server, thread=thread, port=allocated_port, closer=closer)
+            # Probe the socket to ensure serve_forever() has entered its accept loop
+            # before we return the URL (prevents "connection refused" on immediate browser open).
+            import socket as _socket
+            import time as _time
+            deadline = _time.monotonic() + 3.0
+            while _time.monotonic() < deadline:
+                try:
+                    with _socket.create_connection(("127.0.0.1", allocated_port), timeout=0.25):
+                        break
+                except OSError:
+                    _time.sleep(0.05)
         log.info("MJPEGServer.start: started server for %s at http://localhost:%d/", name, allocated_port)
         return f"http://localhost:{allocated_port}/"
 
