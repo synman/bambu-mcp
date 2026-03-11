@@ -409,12 +409,16 @@ def test_compression_benchmark():
         obj["pad"] = _rand_alphanumeric(pad_len)
         return obj
 
-    # Content types × sizes to benchmark
-    SIZES = [
-        ("110k",  110_000),
-        ("250k",  250_000),
-        ("500k",  500_000),
-        ("1M",  1_000_000),
+    import statistics as stats
+
+    ITERATIONS = 20
+
+    # Sizes as multiples of the threshold so they scale with MAX_MCP_OUTPUT_TOKENS
+    MULTIPLIERS = [
+        ("1.1×", 1.1),
+        ("2.5×", 2.5),
+        ("5×",   5.0),
+        ("10×",  10.0),
     ]
 
     CONTENT_TYPES = [
@@ -424,43 +428,64 @@ def test_compression_benchmark():
         ("realistic",    lambda n: _realistic_json(n)),
     ]
 
-    print(f"  {'content':<14} {'size':>6}  {'orig':>10}  {'comp':>10}  {'ratio':>7}  {'time':>8}")
-    print(f"  {'-'*14} {'-'*6}  {'-'*10}  {'-'*10}  {'-'*7}  {'-'*8}")
+    hdr = (f"  {'content':<13} {'size':>7}  {'orig':>10}  {'comp':>10}  {'ratio':>6}"
+           f"  {'n':>3}  {'min':>7}  {'max':>7}  {'avg':>7}  {'med':>7}  {'std':>7}  {'p90':>7}")
+    sep = "  " + "-" * (len(hdr) - 2)
+    print(hdr)
+    print(sep)
 
     all_passed = True
     for content_label, content_fn in CONTENT_TYPES:
-        for size_label, target_size in SIZES:
+        for mult_label, multiplier in MULTIPLIERS:
+            target_size = int(threshold * multiplier)
+            size_label = f"{mult_label} ({target_size // 1000}k)"
+
+            # Pre-generate payload once — bench compression only, not generation
             payload = content_fn(target_size)
             serialized = json.dumps(payload)
             orig_bytes = len(serialized.encode("utf-8"))
 
-            t0 = time.perf_counter()
-            result = compress_if_large(payload)
-            elapsed = time.perf_counter() - t0
-
-            if not result.get("compressed"):
-                # Should always compress since all test payloads exceed threshold
-                print(f"  {FAIL}  {content_label:<12} {size_label:>6}  not compressed (payload={len(serialized):,} threshold={threshold:,})")
-                failures.append(f"benchmark {content_label} {size_label} not compressed")
+            # Verify compression triggers (all payloads must exceed threshold)
+            first = compress_if_large(payload)
+            if not first.get("compressed"):
+                print(f"  {FAIL}  {content_label:<13} {size_label:<16}  not compressed "
+                      f"(payload={len(serialized):,} threshold={threshold:,})")
+                failures.append(f"benchmark {content_label} {mult_label} not compressed")
                 all_passed = False
                 continue
 
-            comp_bytes = result["compressed_size_bytes"]
+            comp_bytes = first["compressed_size_bytes"]
             ratio = comp_bytes / orig_bytes * 100
 
-            # Round-trip correctness
+            # Round-trip correctness (once per scenario)
             try:
-                recovered = json.loads(gzip.decompress(base64.b64decode(result["data"])))
+                recovered = json.loads(gzip.decompress(base64.b64decode(first["data"])))
                 rt_ok = recovered == payload
             except Exception:
                 rt_ok = False
-
-            status = PASS if rt_ok else FAIL
             if not rt_ok:
-                failures.append(f"benchmark {content_label} {size_label} round-trip failed")
+                failures.append(f"benchmark {content_label} {mult_label} round-trip failed")
                 all_passed = False
 
-            print(f"  {status}  {content_label:<12} {size_label:>6}  {orig_bytes:>10,}  {comp_bytes:>10,}  {ratio:>6.1f}%  {elapsed*1000:>6.1f}ms")
+            # Timed iterations — compress only, payload already generated
+            samples = []
+            for _ in range(ITERATIONS):
+                t0 = time.perf_counter()
+                compress_if_large(payload)
+                samples.append((time.perf_counter() - t0) * 1000)
+
+            mn  = min(samples)
+            mx  = max(samples)
+            avg = stats.mean(samples)
+            med = stats.median(samples)
+            std = stats.stdev(samples)
+            p90 = sorted(samples)[int(len(samples) * 0.9)]
+
+            status = PASS if rt_ok else FAIL
+            print(f"  {status}  {content_label:<13} {size_label:<16}  {orig_bytes:>10,}  {comp_bytes:>10,}"
+                  f"  {ratio:>5.1f}%"
+                  f"  {ITERATIONS:>3}"
+                  f"  {mn:>5.1f}ms  {mx:>5.1f}ms  {avg:>5.1f}ms  {med:>5.1f}ms  {std:>5.1f}ms  {p90:>5.1f}ms")
 
     if all_passed:
         ok("all benchmark round-trips verified correct")
