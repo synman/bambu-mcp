@@ -626,7 +626,9 @@ function _hpPoll(){
     var sub=d.subtask_name||'';
     if(sub&&sub!==_hpCurrentJob){_hpCurrentJob=sub;_hpScores=[];_hpDcScores=[];_hpNozzles=[];_hpBeds=[];}
     var f=d.fps||0;
-    if(_lastFrameMs>0&&Date.now()-_lastFrameMs>3000)f=0;
+    if(_lastFrameMs>0&&Date.now()-_lastFrameMs>15000)f=0;
+    // Auto-recover frozen fetch stream
+    if(_lastFrameMs>0&&Date.now()-_lastFrameMs>15000&&typeof _streamConnect==='function'){_lastFrameMs=0;_streamConnect();}
     var fpsCont=document.getElementById('fps');
     if(f>0){
       fpsCont.style.display='flex';
@@ -665,12 +667,15 @@ poll();setInterval(poll,2000);
 // Fetch-based MJPEG parser: bypasses Safari's broken <img src="multipart"> loader.
 // Reads the raw multipart stream via fetch(), parses Content-Length from each part
 // header, extracts the JPEG bytes, and sets img.src to a blob URL. Works in all browsers.
-var _lastFrameMs=0;
+var _lastFrameMs=0;var _streamConnect=null;
 (function(){
   var img=document.getElementById('stream');
   var prevUrl=null;
+  var _ctrl=null;
   function connect(){
-    fetch('/stream').then(function(r){
+    if(_ctrl){try{_ctrl.abort();}catch(e){}}
+    _ctrl=new AbortController();
+    fetch('/stream',{signal:_ctrl.signal}).then(function(r){
       var reader=r.body.getReader();
       var buf=new Uint8Array(0);
       function indexOf(h,n,s){
@@ -714,6 +719,7 @@ var _lastFrameMs=0;
       pump();
     }).catch(function(){setTimeout(connect,1000);});
   }
+  _streamConnect=connect;
   connect();
 })();
 </script>
