@@ -474,7 +474,7 @@ function poll(){_hpPoll();}
 refreshImages();
 setInterval(refreshImages,15000);
 // Health panel state
-var _hpScores=[];var _hpDcScores=[];var _hpNozzles=[];var _hpBeds=[];var _hpMaxSamples=30;
+var _hpScores=[];var _hpDcScores=[];var _hpNozzles=[];var _hpBeds=[];var _hpCurrentJob=null;
 var _hpPollInterval=8000;var _hpLastPoll=0;
 var _hpUserOverride=false;var _hpPrevState=null;
 function hpToggle(hdr){
@@ -589,9 +589,9 @@ function hpUpdateFromResult(d){
   document.getElementById('hp-layer').textContent=(d.layer&&d.total_layers)?d.layer+'/'+d.total_layers:'—';
   document.getElementById('hp-progress').textContent=d.progress_pct!==undefined?d.progress_pct+'%':'—';
   var sp=d.success_probability;
-  _hpScores.push(sp!==null&&sp!==undefined?sp:0);if(_hpScores.length>_hpMaxSamples)_hpScores.shift();
+  _hpScores.push(sp!==null&&sp!==undefined?sp:0);
   hpUpdateSparkline('hp-sp-canvas',_hpScores,'#60d080',0,1,(sp!==null&&sp!==undefined?Math.round(sp*100)+'%':'—'));
-  _hpDcScores.push(dc!==null&&dc!==undefined?dc:0);if(_hpDcScores.length>_hpMaxSamples)_hpDcScores.shift();
+  _hpDcScores.push(dc!==null&&dc!==undefined?dc:0);
   hpUpdateSparkline('hp-dc-canvas',_hpDcScores,'#80a0ff',0,1,(dc!==null&&dc!==undefined?Math.round(dc*100)+'%':'—'),true);
   // Status text row in Trends section
   var statusEl=document.getElementById('hp-trend-status');
@@ -622,6 +622,9 @@ var _origUpdate=typeof update==='function'?update:null;
 function _hpPoll(){
   fetch('/status').then(function(r){return r.json();}).then(function(d){
     if(_origUpdate)_origUpdate(d);
+    // Reset history when a new print job starts
+    var sub=d.subtask_name||'';
+    if(sub&&sub!==_hpCurrentJob){_hpCurrentJob=sub;_hpScores=[];_hpDcScores=[];_hpNozzles=[];_hpBeds=[];}
     var f=d.fps||0;
     if(_lastFrameMs>0&&Date.now()-_lastFrameMs>3000)f=0;
     var fpsCont=document.getElementById('fps');
@@ -652,8 +655,8 @@ function _hpPoll(){
     // Update temp sparklines (fixed scales: nozzle 0-310°C, bed 0-120°C)
     var nozzle=d.nozzles&&d.nozzles.length?d.nozzles[0].temp:0;
     var bed=d.bed_temp||0;
-    _hpNozzles.push(nozzle);if(_hpNozzles.length>_hpMaxSamples)_hpNozzles.shift();
-    _hpBeds.push(bed);if(_hpBeds.length>_hpMaxSamples)_hpBeds.shift();
+    _hpNozzles.push(nozzle);
+    _hpBeds.push(bed);
     hpUpdateSparkline('hp-nz-canvas',_hpNozzles,'#ff9040',0,310,Math.round(nozzle)+'°');
     hpUpdateSparkline('hp-bd-canvas',_hpBeds,'#80a0ff',0,120,Math.round(bed)+'°');
     hpPollJobState();
