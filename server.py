@@ -81,18 +81,24 @@ import tools.knowledge_search as knowledge_tools
 import tools.camera as camera_tools
 import tools.notifications as notification_tools
 
-_log_level = logging.DEBUG if os.environ.get("BAMBU_MCP_DEBUG") else logging.INFO
+_env_level = os.environ.get("BAMBU_MCP_LOG_LEVEL", "WARNING").upper()
+_log_level = getattr(logging, _env_level, logging.WARNING)
 _log_file = Path(__file__).parent / "bambu-mcp.log"
 _file_handler = logging.FileHandler(_log_file, encoding="utf-8")
-_file_handler.setLevel(logging.DEBUG)  # always capture DEBUG to file when enabled
+_file_handler.setLevel(_log_level)
 _file_handler.setFormatter(logging.Formatter(
     "%(asctime)s %(levelname)-8s %(name)s: %(message)s",
     datefmt="%Y-%m-%dT%H:%M:%S",
 ))
-logging.basicConfig(level=_log_level, format="%(levelname)s %(name)s: %(message)s")
-logging.getLogger().addHandler(_file_handler)
-logging.getLogger().setLevel(_log_level)
-logging.getLogger("bpm").setLevel(logging.WARNING)
+# Stderr capped at WARNING regardless of log level — prevents Copilot stdio pipe overflow
+_stream_handler = logging.StreamHandler()
+_stream_handler.setLevel(logging.WARNING)
+_stream_handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+_root = logging.getLogger()
+_root.setLevel(_log_level)
+_root.addHandler(_file_handler)
+_root.addHandler(_stream_handler)
+logging.getLogger("bpm").setLevel(logging.WARNING)  # always suppress bpm Python logging
 log = logging.getLogger("bambu-mcp")
 
 # ── FastMCP server ─────────────────────────────────────────────────────────────

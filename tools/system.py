@@ -380,9 +380,9 @@ def dump_log(tail_lines: int = 200) -> dict:
     Reads the last tail_lines lines from ~/bambu-mcp/bambu-mcp.log.
     No printer parameter required — this is a server-level operation.
 
-    The log file is only written at DEBUG level when BAMBU_MCP_DEBUG=1 is set
-    in the MCP config. Without it, only INFO+ entries appear. Use this tool to
-    diagnose connection issues, tool errors, or unexpected printer behavior.
+    The log file captures entries at the configured log level (set via BAMBU_MCP_LOG_LEVEL
+    in the MCP config; default WARNING). Set BAMBU_MCP_LOG_LEVEL=DEBUG for full debug output.
+    Use this tool to diagnose connection issues, tool errors, or unexpected printer behavior.
 
     Returns a dict with:
     - lines: list of log lines (newest last)
@@ -396,7 +396,7 @@ def dump_log(tail_lines: int = 200) -> dict:
     try:
         if not log_path.exists():
             log.debug("dump_log: log file does not exist at %s", log_path)
-            return {"lines": [], "total_lines": 0, "log_path": str(log_path), "note": "Log file does not exist. Set BAMBU_MCP_DEBUG=1 to enable file logging."}
+            return {"lines": [], "total_lines": 0, "log_path": str(log_path), "note": "Log file does not exist yet — entries will appear once the server logs at the configured BAMBU_MCP_LOG_LEVEL (default WARNING)."}
         with open(log_path, encoding="utf-8", errors="replace") as f:
             all_lines = f.readlines()
         lines = [l.rstrip("\n") for l in all_lines[-tail_lines:]]

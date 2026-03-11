@@ -182,15 +182,17 @@ Restarting `server.py` is required after any code change to `bambu-mcp`. The pro
 1. **Find the running process**: `ps aux | grep "server.py" | grep -v grep`
    - Note: detached processes launched with relative paths show as `.venv/bin/python3 server.py` — the pattern `bambu-mcp.*server.py` misses them.
 2. **Kill it**: `kill <PID>`
-3. **Relaunch using the bash tool with `mode="async", detach=true`**:
+3. **Clear the log**: `truncate -s 0 ~/bambu-mcp/bambu-mcp.log` — wipe stale output so the next startup is easy to read.
+4. **Relaunch using the bash tool with `mode="async", detach=true`**:
    ```
-   cd ~/bambu-mcp && BAMBU_MCP_DEBUG=1 nohup .venv/bin/python3 server.py >> bambu-mcp.log 2>&1
+   cd ~/bambu-mcp && BAMBU_MCP_LOG_LEVEL=DEBUG nohup .venv/bin/python3 server.py >> bambu-mcp.log 2>&1
    ```
+   Add `BAMBU_MCP_BPM_VERBOSE=1` before the command only when raw MQTT message logging is also needed.
    - `detach=true` is **mandatory** — without it, the shell treats the process as a job and suspends it (status `T`/stopped) when the shell exits. `nohup` alone is not sufficient without `detach=true`.
    - Do **not** use `setsid` — not available on macOS.
    - Do **not** use `nohup ... &` in a sync or non-detached async shell — the process will be stopped, not backgrounded.
-4. **Verify**: `ps aux | grep "server.py" | grep -v grep` — confirm the process is running (`S` state, not `T`).
-5. **Check logs**: `tail -10 ~/bambu-mcp/bambu-mcp.log` — confirm clean startup, no import errors.
+5. **Verify**: `ps aux | grep "server.py" | grep -v grep` — confirm the process is running (`S` state, not `T`).
+6. **Check logs**: `tail -10 ~/bambu-mcp/bambu-mcp.log` — confirm clean startup, no import errors.
 
 ### Phase 2 — Reconnect the MCP client (agent action)
 
@@ -373,9 +375,10 @@ log.warning("fn: context: %s", e, exc_info=True)  # or log.error for unexpected 
 
 ### Infrastructure
 
-- Log file: `~/bambu-mcp/bambu-mcp.log` — written at DEBUG level when `BAMBU_MCP_DEBUG=1`.
-- `BAMBU_MCP_DEBUG=1` must be set in the live MCP config (`~/.copilot/mcp-config.json`) for DEBUG output to reach the log file. Without it, only INFO+ is logged.
-- Stderr always receives INFO+ regardless of `BAMBU_MCP_DEBUG`.
+- Log file: `~/bambu-mcp/bambu-mcp.log` — written at the configured log level.
+- `BAMBU_MCP_LOG_LEVEL` controls the MCP log level (`DEBUG`/`INFO`/`WARNING`; default `WARNING`). Set in `~/.copilot/mcp-config.json` under `env`.
+- `BAMBU_MCP_BPM_VERBOSE=1` independently enables bpm's raw MQTT message verbose flag. Only needed when debugging MQTT traffic between bpm and the printer — separate from the MCP log level.
+- Stderr is always capped at `WARNING` regardless of `BAMBU_MCP_LOG_LEVEL` to prevent Copilot's stdio pipe overflow.
 
 ---
 
@@ -580,7 +583,7 @@ The following BPM methods are **intentionally not** exposed as MCP tools or HTTP
 | `notifications.NotificationManager` (mcp-internal) | **A** | mcp-native state transition tracker; not a bpm item. Exposed via `get_pending_alerts()` MCP tool, `GET/DELETE /api/alerts` HTTP routes, and `bambu://alerts/{name}` resource subscription. No direct bpm wrapping needed. |
 | `BambuPrinter.sdcard_file_exists()` | **A** | Internal file existence check used within file operations. No standalone user use case; file operations handle this internally. |
 | `BambuConfig.set_new_bpm_cache_path()` | **A** | Internal config method for relocating the bpm metadata cache. Set at session init by the mcp server; no runtime agent use case. |
-| `BambuConfig.verbose` | **A** | Internal debug logging flag. Controlled by `BAMBU_MCP_DEBUG` env var at the server level, not per-printer config. No agent use case. |
+| `BambuConfig.verbose` | **A** | Raw MQTT verbose flag. Controlled by `BAMBU_MCP_BPM_VERBOSE` env var at the server level, not per-printer config. No agent use case. |
 | `BambuState.fromJson` | **A** | Internal MQTT payload parser classmethod called by bpm's MQTT message handler. Not user-invokable; state is read via `get_printer_state` and targeted tools. |
 | `NozzleCharacteristics.from_telemetry` | **A** | Internal factory classmethod constructing `NozzleCharacteristics` from raw telemetry. Called by `BambuState.fromJson`; not user-facing. |
 | `NozzleCharacteristics.to_identifier` | **A** | Internal nozzle identifier encoder (e.g. `"HS00-0.4"`). Used for telemetry encoding internally; not user-facing. |

@@ -31,8 +31,6 @@ def _ensure_imports():
         _BambuPrinter = BambuPrinter
         _BambuConfig = BambuConfig
         _ServiceState = ServiceState
-        _bpm_level = logging.DEBUG if os.environ.get("BAMBU_MCP_DEBUG") else logging.INFO
-        logging.getLogger("bpm").setLevel(_bpm_level)
 
 
 class SessionManager:
@@ -85,7 +83,7 @@ class SessionManager:
             hostname=creds["ip"],
             access_code=creds["access_code"],
             serial_number=creds["serial"],
-            verbose=bool(os.environ.get("BAMBU_MCP_DEBUG")),
+            verbose=bool(os.environ.get("BAMBU_MCP_BPM_VERBOSE")),
         )
         printer = _BambuPrinter(config=config)
         logger.debug("_start_printer: BambuPrinter object created for '%s'", name)

@@ -6,7 +6,8 @@
       "args": ["/Users/shell/bambu-mcp/server.py"],
       "env": {
         "PYTHONPATH": "/Users/shell/bambu-mcp",
-        "BAMBU_MCP_DEBUG": "1"
+        "BAMBU_MCP_LOG_LEVEL": "DEBUG",
+        "BAMBU_MCP_BPM_VERBOSE": "1"
       }
     }
   }
