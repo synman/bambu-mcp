@@ -66,7 +66,7 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
 #thumb-wrap{left:16px}
 #layout-wrap{right:16px}
 #hp-sec-anomaly{overflow:hidden;transition:max-height .35s ease}
-#hp-sec-anomaly img{display:block;width:100%;aspect-ratio:16/9;border-radius:4px;opacity:.92;margin-top:4px}
+#hp-sec-anomaly img{display:block;width:100%;aspect-ratio:1/1;border-radius:4px;opacity:.92;margin-top:4px}
 #health-panel.hp-wide #hp-sec-anomaly img{width:100%;object-fit:fill}
 .hdr{font-size:12px;color:#888;text-transform:uppercase;letter-spacing:.08em;
   border-bottom:1px solid rgba(255,255,255,.1);margin-bottom:3px;padding-bottom:2px;margin-top:6px;
@@ -191,21 +191,10 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
       <div class="hp-spark-row"><span class="hp-slbl">Bed °C</span><canvas id="hp-bd-canvas" class="hp-spark-mini"></canvas></div>
       <div id="hp-trend-status" style="font-size:11px;color:#888;padding:4px 2px 2px;line-height:1.6"></div>
     </div>
-    <div id="hp-anomaly-section" style="display:none">
-      <div class="hdr" onclick="hpAnomalyToggle(this)">AI Detection<span class="hdr-chev open">▲</span></div>
-      <div id="hp-sec-anomaly">
-        <img id="hp-anomaly-img" src="" alt="Anomaly detection">
-        <div id="hp-det-legend">
-          <div class="hp-det-row"><span class="hp-det-swatch" style="border-color:#ffcc40"></span><span class="hp-det-key">Air Zone</span></div>
-          <div class="hp-det-row"><span class="hp-det-swatch" style="border-color:#60d080"></span><span class="hp-det-key">Plate Zone</span></div>
-          <div class="hp-det-row"><span class="hp-det-swatch" style="background:linear-gradient(90deg,#ff9040,#ff5050)"></span><span class="hp-det-key">Heat Map</span></div>
-        </div>
-      </div>
-    </div>
     <div id="hp-radar-section" style="display:none">
-      <div class="hdr" onclick="hudToggle(this,'hp-sec-radar')">Failure Drivers<span class="hdr-chev open">▲</span></div>
-      <div class="hdr-section" id="hp-sec-radar">
-        <img id="hp-radar-img" src="" alt="Failure factor radar" style="display:block;width:100%;aspect-ratio:1/1;border-radius:4px;opacity:.92;margin-top:4px">
+      <div class="hdr" onclick="hpAnomalyToggle(this)">Failure Drivers<span class="hdr-chev open">▲</span></div>
+      <div id="hp-sec-anomaly">
+        <img id="hp-radar-img" src="" alt="Failure factor radar">
       </div>
     </div>
   </div>
@@ -471,12 +460,6 @@ function refreshImages(){
       lw.classList.remove('hidden');
     } else { lw.classList.add('hidden'); }
   }).catch(function(){lw.classList.add('hidden');});
-  fetch('/annotated?t='+t).then(function(r){
-    if(r.ok&&r.status!==204&&r.headers.get('Content-Type')&&r.headers.get('Content-Type').indexOf('image')>=0){
-      document.getElementById('hp-anomaly-img').src='/annotated?t='+t;
-      document.getElementById('hp-anomaly-section').style.display='';
-    } else { document.getElementById('hp-anomaly-section').style.display='none'; }
-  }).catch(function(){document.getElementById('hp-anomaly-section').style.display='none';});
   fetch('/factors_radar?t='+t).then(function(r){
     if(r.ok&&r.status!==204&&r.headers.get('Content-Type')&&r.headers.get('Content-Type').indexOf('image')>=0){
       document.getElementById('hp-radar-img').src='/factors_radar?t='+t;
