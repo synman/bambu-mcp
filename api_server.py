@@ -1430,7 +1430,8 @@ def _build_app():
         Default (cached=false) performs a live FTPS fetch for up-to-date results.
         """
         log.debug("get_sdcard_3mf_files: called")
-        p, args = _get_printer(_rargs())
+        args = _rargs()
+        p, _ = _get_printer(args)
         if p is None:
             return _err("no printer")
         try:
@@ -1475,7 +1476,8 @@ def _build_app():
         Default (cached=false) performs a live FTPS fetch for up-to-date results.
         """
         log.debug("get_sdcard_contents: called")
-        p, args = _get_printer(_rargs())
+        args = _rargs()
+        p, _ = _get_printer(args)
         if p is None:
             return _err("no printer")
         try:
