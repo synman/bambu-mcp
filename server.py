@@ -80,6 +80,7 @@ import tools.commands as command_tools
 import tools.knowledge_search as knowledge_tools
 import tools.camera as camera_tools
 import tools.notifications as notification_tools
+import tools.url_factory as url_factory_tools
 
 _env_level = os.environ.get("BAMBU_MCP_LOG_LEVEL", "WARNING").upper()
 _log_level = getattr(logging, _env_level, logging.WARNING)
@@ -138,7 +139,17 @@ _TOOL_MODULES = [
     knowledge_tools,
     camera_tools,
     notification_tools,
+    url_factory_tools,
 ]
+
+# Functions registered from url_factory_tools instead of their original modules.
+# These names are skipped during registration of all other modules.
+_URL_FACTORY_NAMES: frozenset[str] = frozenset({
+    "get_snapshot",
+    "get_monitoring_data",
+    "get_monitoring_history",
+    "get_monitoring_series",
+})
 
 import inspect as _inspect
 
@@ -147,6 +158,8 @@ for _mod in _TOOL_MODULES:
     for _name in dir(_mod):
         if _name.startswith("_"):
             continue
+        if _name in _URL_FACTORY_NAMES and _mod_name != "tools.url_factory":
+            continue  # registered from url_factory_tools — skip original module version
         _fn = getattr(_mod, _name)
         # Only register functions defined in this module (not imported names like Enum)
         if (

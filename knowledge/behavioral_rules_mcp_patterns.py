@@ -117,8 +117,9 @@ Never use native in polling loops (4 MB × N calls = significant token burn).
 
 ## Compressed Response Protocol
 
-Some tool responses are gzip+base64 compressed when they exceed the response size
-threshold. A compressed response has this shape:
+Some tool responses are gzip+base64 compressed when they exceed 300 chars (the minimum
+size at which gzip+base64 produces a smaller output than raw JSON). A compressed response
+has this shape:
 
 ```json
 {
@@ -136,15 +137,31 @@ import gzip, json, base64
 data = json.loads(gzip.decompress(base64.b64decode(r["data"])))
 ```
 
-Tools that may return compressed responses: `get_monitoring_series`,
-`list_sdcard_files`, `get_printer_state`, `get_monitoring_data`,
-`get_monitoring_history` (raw=True).
+Tools that may return compressed responses (any tool whose response exceeds 300 chars):
+`get_ams_units`, `get_spool_info`, `get_hms_errors`, `get_capabilities`,
+`get_ams_status`, `get_detector_settings`, `get_knowledge_topic`, `get_climate`,
+`list_sdcard_files`, `get_printer_state`, `dump_log`, `get_monitoring_history` (raw=False),
+`get_nozzle_info`, and others with multi-field responses.
+
+Tools that always return raw (response < 300 chars): `get_temperatures`, `get_fan_speeds`,
+`get_wifi_signal`, `get_chamber_light`, `get_print_progress`, `get_job_info`,
+`get_printer_info`, `get_firmware_version`, `get_stream_url`, `get_server_info`,
+`get_printer_connection_status`, `get_session_status`.
+
+**URL factory tools are NOT compressed** — they return `{"url": "..."}` (< 100 chars).
+Never try to decompress a URL factory response. See **URL Factory Pattern** below.
 
 ### `MAX_MCP_OUTPUT_TOKENS` configuration
 
+**Dual-threshold model:**
+- `_MIN_COMPRESS_SIZE` (300 chars) — compression trigger. Any non-binary response above
+  this size is gzip+base64 encoded regardless of whether it would overflow the token budget.
+- `_max_response_chars()` — ResponseSizeTracker overflow signal only. Used to detect when
+  a response would overflow the MCP token budget and auto-tune MAX_MCP_OUTPUT_TOKENS in
+  mcp-config.json. No longer drives the compression decision.
+
 The Copilot CLI truncates MCP tool results at `MAX_MCP_OUTPUT_TOKENS × 4` characters
-(default 25,000 tokens = 100,000 chars). `compress_if_large()` reads the same env var
-to compress before truncation — thresholds stay in sync automatically.
+(default 25,000 tokens = 100,000 chars).
 
 **Dynamic auto-tuning (ResponseSizeTracker):**
 
@@ -188,6 +205,48 @@ Both paths propagate to the bambu-mcp server. When to raise it: if a single-fiel
 
 The ResponseSizeTracker sets this automatically over time — after running tools that return
 large text responses, the recommended value converges toward the actual maximum observed.
+
+---
+
+## URL Factory Pattern
+
+Four tools return `{"url": "http://localhost:{port}/api/..."}` instead of data. These are
+tools where the payload reliably exhausts the MCP token budget under normal use:
+
+| Tool | Overflow condition | HTTP route |
+|------|--------------------|------------|
+| `get_snapshot` | ~4 MB during active prints at native resolution | `GET /api/snapshot?printer={name}&resolution={res}&quality={q}&include_status={bool}` |
+| `get_monitoring_data` | ~280K chars (full time-series, 99% of budget) | `GET /api/monitoring_data?printer={name}` |
+| `get_monitoring_history` | ~280K chars when raw=True | `GET /api/monitoring_history?printer={name}&raw={bool}` |
+| `get_monitoring_series` | ~120K chars (42% of budget per field) | `GET /api/monitoring_series?printer={name}&field={field}` |
+
+**Response shape:**
+```json
+{"url": "http://localhost:49152/api/snapshot?printer=H2D&resolution=720p&quality=75&include_status=false"}
+```
+
+**Agent action (mandatory — do not stop at the URL):**
+Fetch the URL immediately via bash/curl. Pre-authorized — no human permission needed.
+Same authorization level as HTTP escalation: local GET, read-only, not a scope expansion.
+
+```bash
+# Fetch camera frame
+URL=$(mcp_call get_snapshot name=H2D | python3 -c "import json,sys; print(json.load(sys.stdin)['url'])")
+curl -s "$URL"  # response: {"data_uri": "data:image/jpeg;base64,...", "width": ..., ...}
+
+# Fetch monitoring history summary
+URL=$(mcp_call get_monitoring_history name=H2D | python3 -c "import json,sys; print(json.load(sys.stdin)['url'])")
+curl -s "$URL" | python3 -m json.tool | head -30
+```
+
+**Why URL factory instead of MCP data:** For these tools, P(overflow) is high under normal
+use — the agent already falls back to HTTP when the MCP response is truncated. URL factory
+eliminates the failed MCP round trip and returns control to the agent immediately.
+
+**URL factory ≠ compressed response:**
+- Compressed response → `"compressed": true` key present → decompress with gzip+base64
+- URL factory response → `"url": "http://..."` key present → fetch with curl
+Never decompress a URL factory response. Never assume a `{"url": ...}` response is an error.
 
 ---
 
@@ -236,15 +295,18 @@ curl -s "http://localhost:$PORT/api/printer?printer=H2D" | python3 -m json.tool
 Some tools always return large data regardless of compression because they contain JPEG or
 PNG image bytes (already compressed — gzip would not reduce them further):
 
-| Tool | HTTP equivalent |
-|------|----------------|
-| `get_snapshot` | `GET /api/snapshot?printer={name}&resolution={resolution}&quality={quality}` |
-| `get_plate_thumbnail` | No direct HTTP route — use `get_plate_thumbnail()` MCP tool at lower quality |
-| `get_plate_topview` | No direct HTTP route — use `get_plate_topview()` MCP tool at lower quality |
-| `get_project_info(include_images=True)` | `GET /api/get_3mf_props_for_file?printer=P&file=F&plate=N` |
-| `get_current_job_project_info(include_images=True)` | `GET /api/get_current_3mf_props?printer=P` |
-| `analyze_active_job` | `GET /api/analyze_active_job?printer=P&categories=X` |
+| Tool | HTTP equivalent | Notes |
+|------|----------------|-------|
+| `get_snapshot` | `GET /api/snapshot?printer={name}&resolution={resolution}&quality={quality}` | Returns URL via url_factory — fetch directly |
+| `get_plate_thumbnail` | No direct HTTP route — use `get_plate_thumbnail()` MCP tool at lower quality | |
+| `get_plate_topview` | No direct HTTP route — use `get_plate_topview()` MCP tool at lower quality | |
+| `get_project_info(include_images=True)` | `GET /api/get_3mf_props_for_file?printer=P&file=F&plate=N` | |
+| `get_current_job_project_info(include_images=True)` | `GET /api/get_current_3mf_props?printer=P` | |
+| `analyze_active_job` | `GET /api/analyze_active_job?printer=P&categories=X` | |
 
-For image tools with no direct HTTP equivalent, use a lower `quality` parameter
+`get_snapshot` returns `{"url": "..."}` — see **URL Factory Pattern** above. Fetch the URL
+directly; do not treat the URL factory response as an image payload.
+
+For non-snapshot image tools with no direct HTTP equivalent, use a lower `quality` parameter
 (`"preview"` or `"standard"`) to reduce response size before escalating.
 """

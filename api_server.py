@@ -2646,6 +2646,62 @@ def _build_app():
         log.error("handle_500: unhandled exception: %s", e, exc_info=True)
         return jsonify({"status": "error", "message": str(e), "stacktrace": traceback.format_exc()}), 500
 
+    # ── Monitoring data routes (served directly — no compress_if_large overhead) ──
+
+    @app.route("/api/monitoring_data")
+    def monitoring_data_route():
+        """Return all telemetry history fields as raw JSON (rolling 60 min)."""
+        try:
+            p, printer_name = _get_printer(_rargs())
+            if p is None:
+                return jsonify({"error": "not_connected"}), HTTPStatus.BAD_REQUEST
+            from data_collector import data_collector
+            data = data_collector.get_all_data(printer_name)
+            if data is None:
+                return jsonify({"error": "not_connected"}), HTTPStatus.BAD_REQUEST
+            return jsonify(data)
+        except Exception as e:
+            log.error("monitoring_data: error: %s", e, exc_info=True)
+            return _err(str(e))
+
+    @app.route("/api/monitoring_history")
+    def monitoring_history_route():
+        """Return telemetry history summary (default) or full raw time-series (raw=true)."""
+        try:
+            p, printer_name = _get_printer(_rargs())
+            if p is None:
+                return jsonify({"error": "not_connected"}), HTTPStatus.BAD_REQUEST
+            raw = _rargs().get("raw", "false").lower() == "true"
+            from data_collector import data_collector
+            data = data_collector.get_all_data(printer_name) if raw else data_collector.get_summary(printer_name)
+            if data is None:
+                return jsonify({"error": "not_connected"}), HTTPStatus.BAD_REQUEST
+            return jsonify(data)
+        except Exception as e:
+            log.error("monitoring_history: error: %s", e, exc_info=True)
+            return _err(str(e))
+
+    @app.route("/api/monitoring_series")
+    def monitoring_series_route():
+        """Return the rolling 60-min time-series for a single telemetry field."""
+        try:
+            p, printer_name = _get_printer(_rargs())
+            if p is None:
+                return jsonify({"error": "not_connected"}), HTTPStatus.BAD_REQUEST
+            field = _rargs().get("field")
+            if not field:
+                return jsonify({"error": "field parameter required"}), HTTPStatus.BAD_REQUEST
+            from data_collector import data_collector
+            series = data_collector.get_collection(printer_name, field)
+            if series is None:
+                if data_collector.get_summary(printer_name) is None:
+                    return jsonify({"error": "not_connected"}), HTTPStatus.BAD_REQUEST
+                return jsonify({"error": f"Unknown field: {field!r}"}), HTTPStatus.BAD_REQUEST
+            return jsonify({"field": field, "series": series})
+        except Exception as e:
+            log.error("monitoring_series: error: %s", e, exc_info=True)
+            return _err(str(e))
+
     log.debug("_build_app: → app built with %d routes", len(list(app.url_map.iter_rules())))
     return app
 

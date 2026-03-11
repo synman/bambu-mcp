@@ -17,6 +17,12 @@ def _max_response_chars() -> int:
     return tokens * 4  # Copilot CLI: JG1() * 4 → 100,000 chars default
 
 
+# Compress whenever payload exceeds this many chars — gzip is net-positive above ~250 chars.
+# Separate from _max_response_chars(): that value is the ResponseSizeTracker overflow signal
+# (used for auto-tuning MAX_MCP_OUTPUT_TOKENS); this is the compression trigger.
+_MIN_COMPRESS_SIZE: int = 300
+
+
 # ---------------------------------------------------------------------------
 # ResponseSizeTracker — persistent high-water-mark + config auto-tune
 # ---------------------------------------------------------------------------
@@ -104,9 +110,15 @@ def compress_if_large(data: dict) -> dict:
     latency and complexity. Binary responses are recorded in the size tracker and
     returned as-is regardless of size.
 
-    Threshold is derived from MAX_MCP_OUTPUT_TOKENS (default 25,000 tokens
-    × 4 chars/token = 100,000 chars), matching the Copilot CLI truncation cutoff.
-    If the user raises MAX_MCP_OUTPUT_TOKENS, our threshold scales automatically.
+    Compression trigger: _MIN_COMPRESS_SIZE (300 chars). Gzip is net-positive above
+    ~250 chars; below that threshold the base64 envelope is larger than the raw JSON.
+
+    Dual-threshold model:
+    - _MIN_COMPRESS_SIZE (300): compression trigger — any non-binary response above
+      this size is gzip+base64 encoded.
+    - _max_response_chars(): ResponseSizeTracker signal only — used to detect when a
+      response would overflow the MCP token budget and auto-tune MAX_MCP_OUTPUT_TOKENS
+      in mcp-config.json. This threshold no longer drives the compress decision.
 
     Compressed envelope fields:
       compressed            — True
@@ -129,7 +141,7 @@ def compress_if_large(data: dict) -> dict:
 
     record_response_size(char_count)
 
-    if char_count <= _max_response_chars():
+    if char_count <= _MIN_COMPRESS_SIZE:
         return data
     gz = gzip.compress(serialized.encode("utf-8"), compresslevel=6)
     return {

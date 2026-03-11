@@ -97,6 +97,56 @@ fields are missing after reconnection. Returns `{"success": true}`.
 
 ---
 
+## Monitoring Data
+
+### GET /api/monitoring_data
+
+Return all telemetry history fields for a printer as raw JSON.
+
+Query params:
+- `printer` (required): printer name
+
+Response: the full rolling 60-minute telemetry object including `fields` (dict of field
+→ collection), `gcode_state_durations`, and metadata. Each collection contains ~1440
+data points sampled every ~2.5 seconds. This is the same payload returned by the
+`get_monitoring_data` MCP tool (which redirects here via URL factory).
+
+Fields: tool, tool_1, bed, chamber, part_fan, aux_fan, exhaust_fan, heatbreak_fan.
+
+Equivalent MCP tool: `get_monitoring_data()` — returns `{"url": "..."}` pointing here.
+
+### GET /api/monitoring_history
+
+Return telemetry history: summary statistics (default) or full raw time-series.
+
+Query params:
+- `printer` (required): printer name
+- `raw` (optional, default `false`): `true` = full time-series; `false` = statistics summary
+
+When `raw=false`: returns lightweight summary with `{min, max, avg, last, count}` for
+each of the 8 telemetry fields, plus `gcode_state_durations`.
+
+When `raw=true`: returns the complete rolling 60-minute time-series for all 8 fields
+(~1440 data points each, ~280K chars). Use `get_monitoring_series` for a single field.
+
+Equivalent MCP tool: `get_monitoring_history()` — returns `{"url": "..."}` pointing here.
+
+### GET /api/monitoring_series
+
+Return the rolling 60-min time-series for a single telemetry field.
+
+Query params:
+- `printer` (required): printer name
+- `field` (required): one of `tool`, `tool_1`, `bed`, `chamber`, `part_fan`,
+  `aux_fan`, `exhaust_fan`, `heatbreak_fan`
+
+Response: `{"field": "{field}", "series": [{ts, val}, ...]}` (~1440 data points).
+Use this instead of `monitoring_history?raw=true` when you only need one metric.
+
+Equivalent MCP tool: `get_monitoring_series()` — returns `{"url": "..."}` pointing here.
+
+---
+
 ## Diagnostics
 
 ### GET /api/dump_log
