@@ -382,6 +382,8 @@ def dump_log(tail_lines: int = 200) -> dict:
 
     The log file captures entries at the configured log level (set via BAMBU_MCP_LOG_LEVEL
     in the MCP config; default WARNING). Set BAMBU_MCP_LOG_LEVEL=DEBUG for full debug output.
+    To also capture raw MQTT message payloads from bpm, set BAMBU_MCP_BPM_VERBOSE=1 — this
+    requires BAMBU_MCP_LOG_LEVEL=DEBUG to be effective (bpm emits MQTT data at debug level).
     Use this tool to diagnose connection issues, tool errors, or unexpected printer behavior.
 
     Returns a dict with:

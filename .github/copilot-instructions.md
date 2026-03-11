@@ -377,7 +377,7 @@ log.warning("fn: context: %s", e, exc_info=True)  # or log.error for unexpected 
 
 - Log file: `~/bambu-mcp/bambu-mcp.log` — written at the configured log level.
 - `BAMBU_MCP_LOG_LEVEL` controls the MCP log level (`DEBUG`/`INFO`/`WARNING`; default `WARNING`). Set in `~/.copilot/mcp-config.json` under `env`.
-- `BAMBU_MCP_BPM_VERBOSE=1` independently enables bpm's raw MQTT message verbose flag. Only needed when debugging MQTT traffic between bpm and the printer — separate from the MCP log level.
+- `BAMBU_MCP_BPM_VERBOSE=1` passes `verbose=True` to BambuConfig, enabling bpm's `_on_message` to emit raw MQTT payloads via `logger.debug()`. **Requires `BAMBU_MCP_LOG_LEVEL=DEBUG` to be visible in the log** — with `WARNING` or `INFO`, the bpm debug messages are filtered before reaching the file handler. The two vars are independent flags but only produce MQTT output together.
 - Stderr is always capped at `WARNING` regardless of `BAMBU_MCP_LOG_LEVEL` to prevent Copilot's stdio pipe overflow.
 
 ---

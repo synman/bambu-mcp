@@ -107,6 +107,11 @@ Returns the full contents of the server log as plain text. Includes MQTT connect
 events, command sends, HMS error callbacks, and camera connection activity.
 Useful for diagnosing connection issues or unexpected printer behavior.
 
+Log verbosity is controlled by two env vars in `~/.copilot/mcp-config.json`:
+- `BAMBU_MCP_LOG_LEVEL` — `DEBUG`/`INFO`/`WARNING` (default `WARNING`). Controls what reaches the log file.
+- `BAMBU_MCP_BPM_VERBOSE=1` — enables raw MQTT payload logging via bpm's `_on_message` debug output.
+  **Requires `BAMBU_MCP_LOG_LEVEL=DEBUG`** — bpm emits MQTT data at debug level; lower log levels silently suppress it.
+
 ### DELETE /api/truncate_log
 
 ⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
