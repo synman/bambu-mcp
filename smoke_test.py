@@ -282,6 +282,84 @@ def test_notifications():
 
 
 
+def test_compression():
+    print("\n── compress_if_large ───────────────────────────────────────────────────")
+    import gzip
+    import base64
+    import json
+    import os
+    try:
+        from tools._response import compress_if_large, _max_response_chars
+        ok("tools._response import")
+    except Exception as e:
+        fail("tools._response import", str(e))
+        return
+
+    # 1. Small payload passes through unchanged
+    small = {"key": "value", "num": 42}
+    result = compress_if_large(small)
+    if result == small:
+        ok("small payload returned as-is (no compression envelope)")
+    else:
+        fail("small payload should not be compressed", f"got: {result}")
+
+    # 2. Large payload triggers compression envelope
+    large = {"data": "x" * (_max_response_chars() + 1)}
+    result = compress_if_large(large)
+    if result.get("compressed") is True and result.get("encoding") == "gzip+base64":
+        ok("large payload returns compression envelope (compressed=True, encoding=gzip+base64)")
+    else:
+        fail("large payload should trigger compression", f"compressed={result.get('compressed')}, encoding={result.get('encoding')}")
+
+    # 3. Envelope contains required size fields
+    if "original_size_bytes" in result and "compressed_size_bytes" in result and "data" in result:
+        orig = result["original_size_bytes"]
+        comp = result["compressed_size_bytes"]
+        ok(f"envelope has size fields: original={orig:,} bytes → compressed={comp:,} bytes ({comp/orig*100:.1f}%)")
+    else:
+        fail("envelope missing size fields", f"keys: {list(result.keys())}")
+
+    # 4. Round-trip decompression reproduces original data exactly
+    try:
+        recovered = json.loads(gzip.decompress(base64.b64decode(result["data"])))
+        if recovered == large:
+            ok("round-trip decompression reproduces original data exactly")
+        else:
+            fail("round-trip data mismatch — decompressed data != original")
+    except Exception as e:
+        fail("round-trip decompression failed", str(e))
+
+    # 5. Threshold scales with MAX_MCP_OUTPUT_TOKENS env var
+    orig_env = os.environ.get("MAX_MCP_OUTPUT_TOKENS")
+    try:
+        os.environ["MAX_MCP_OUTPUT_TOKENS"] = "1"  # threshold = 4 chars
+        tiny = {"a": "b"}  # 10 chars serialized — should now exceed threshold
+        result_tiny = compress_if_large(tiny)
+        if result_tiny.get("compressed") is True:
+            ok("threshold scales with MAX_MCP_OUTPUT_TOKENS (forced to 1 token = 4 chars, tiny dict compressed)")
+        else:
+            fail("threshold did not scale — tiny dict should be compressed at MAX_MCP_OUTPUT_TOKENS=1")
+    finally:
+        if orig_env is None:
+            os.environ.pop("MAX_MCP_OUTPUT_TOKENS", None)
+        else:
+            os.environ["MAX_MCP_OUTPUT_TOKENS"] = orig_env
+
+    # 6. Payload exactly at threshold is NOT compressed (boundary condition)
+    threshold = _max_response_chars()
+    serialized_len = len(json.dumps({"data": ""})) + 2  # account for key+quotes overhead
+    filler_len = threshold - serialized_len
+    boundary = {"data": "y" * filler_len}
+    at_boundary_len = len(json.dumps(boundary))
+    result_boundary = compress_if_large(boundary)
+    if at_boundary_len <= threshold and result_boundary.get("compressed") is not True:
+        ok(f"payload at threshold ({at_boundary_len:,} chars ≤ {threshold:,}) not compressed (boundary condition)")
+    elif at_boundary_len > threshold:
+        ok(f"boundary payload ({at_boundary_len:,} chars) slightly over threshold — compression triggered (expected)")
+    else:
+        fail("boundary condition", f"at_boundary_len={at_boundary_len}, threshold={threshold}, compressed={result_boundary.get('compressed')}")
+
+
 def test_openapi_methods(base_url):
     print("\n── OpenAPI method correctness ──────────────────────────────────────────")
     EXPECTED_POST = [
@@ -351,6 +429,7 @@ def main():
         test_imports()
         test_knowledge()
         test_notifications()
+        test_compression()
 
     if not args.no_api:
         base_url = args.base_url
