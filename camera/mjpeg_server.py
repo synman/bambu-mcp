@@ -99,8 +99,7 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
   display:none;flex-direction:column;align-items:stretch;gap:3px;width:52px;text-align:center}
 #fps-num{font:800 14px/1 'Courier New',monospace;letter-spacing:-.02em;transition:color .4s;width:100%}
 #fps-lbl{font:400 12px/1 'Courier New',monospace;letter-spacing:.08em;color:rgba(255,255,255,.4);width:100%}
-#fps-bar{display:flex;gap:2px;align-items:flex-end;height:10px;justify-content:center;width:100%}
-#fps-bar span{width:10px;border-radius:1px;background:rgba(255,255,255,.15);transition:background .4s,height .4s}
+#fps-chart{display:block;width:52px;height:20px}
 .fps-hi{color:#39ff6e}.fps-mid{color:#f5a623}.fps-lo{color:#ff4444}
 .error-link{pointer-events:auto;color:inherit;text-decoration:none;cursor:pointer}
 .error-link:hover{text-decoration:underline}
@@ -157,7 +156,7 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
 </head>
 <body>
 <img id="stream">
-<div id="fps"><span id="fps-num"></span><span id="fps-lbl">FPS</span><div id="fps-bar"><span></span><span></span><span></span><span></span><span></span></div></div>
+<div id="fps"><span id="fps-num"></span><span id="fps-lbl">FPS</span><canvas id="fps-chart" width="52" height="20"></canvas></div>
 <div id="health-panel">
   <div class="hp-hdr" onclick="hpToggle(this)">
     <span>JOB HEALTH</span><span class="hp-chev">▲</span>
@@ -652,14 +651,23 @@ function _hpPoll(){
       numEl.textContent=f<2?f.toFixed(1):f;
       var cap=d.fps_cap||30;
       numEl.className=f>=cap*.8?'fps-hi':f>=cap*.4?'fps-mid':'fps-lo';
-      var bars=document.querySelectorAll('#fps-bar span');
-      var pct=Math.min(f/cap,1),lit=Math.round(pct*5);
-      var barCol=f>=cap*.8?'#39ff6e':f>=cap*.4?'#f5a623':'#ff4444';
-      var heights=['4px','7px','10px','7px','4px'];
-      bars.forEach(function(b,i){
-        if(i<lit){b.style.background=barCol;b.style.height=heights[i];}
-        else{b.style.background='rgba(255,255,255,.15)';b.style.height='3px';}
-      });
+      var hist=d.fps_history||[];
+      var cv=document.getElementById('fps-chart');
+      if(cv&&hist.length>1){
+        var ctx=cv.getContext('2d');
+        ctx.clearRect(0,0,cv.width,cv.height);
+        var maxV=Math.max(cap,Math.max.apply(null,hist));
+        var lineColor=f>=cap*.8?'#39ff6e':f>=cap*.4?'#f5a623':'#ff4444';
+        ctx.strokeStyle=lineColor;
+        ctx.lineWidth=1.5;
+        ctx.beginPath();
+        for(var i=0;i<hist.length;i++){
+          var x=i/(hist.length-1)*cv.width;
+          var y=cv.height-(hist[i]/maxV)*(cv.height-2)+1;
+          if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+        }
+        ctx.stroke();
+      }
     }else{fpsCont.style.display='none';}
     // Update temp sparklines (fixed scales: nozzle 0-310°C, bed 0-120°C)
     var nozzle=d.nozzles&&d.nozzles.length?d.nozzles[0].temp:0;
@@ -759,6 +767,7 @@ class _MJPEGHTTPServer(ThreadingHTTPServer):
         self._fps_lock = threading.Lock()
         self._fps_times: collections.deque[float] = collections.deque()
         self._fps_last_frame_id: int = -1
+        self._fps_history: collections.deque[float] = collections.deque(maxlen=60)
         log.debug("_MJPEGHTTPServer.__init__: ready on port %s", addr[1])
 
 
@@ -829,8 +838,12 @@ class _StreamHandler(BaseHTTPRequestHandler):
                 dq.popleft()
             total = len(dq)
         fps_val = total / 10.0
-        data["fps"] = round(fps_val, 2) if fps_val < 2 else round(fps_val)
+        fps_rounded = round(fps_val, 2) if fps_val < 2 else round(fps_val)
+        self.server._fps_history.append(fps_rounded)
+        fps_history = list(self.server._fps_history)
+        data["fps"] = fps_rounded
         data["fps_cap"] = self.server.fps_cap
+        data["fps_history"] = fps_history
         log.debug("_serve_status: fps=%.1f for request from %s", fps_val, self.client_address)
         body = json.dumps(data).encode()
         self.send_response(200)
