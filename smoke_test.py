@@ -360,6 +360,112 @@ def test_compression():
         fail("boundary condition", f"at_boundary_len={at_boundary_len}, threshold={threshold}, compressed={result_boundary.get('compressed')}")
 
 
+def test_compression_benchmark():
+    import gzip
+    import base64
+    import json
+    import os
+    import random
+    import string
+    import time
+
+    print("\n── compress_if_large benchmark ─────────────────────────────────────────")
+
+    try:
+        from tools._response import compress_if_large, _max_response_chars
+    except Exception as e:
+        fail("tools._response import (benchmark)", str(e))
+        return
+
+    threshold = _max_response_chars()
+    rng = random.Random(0xBAB00)  # fixed seed for reproducibility
+
+    def _rand_alphanumeric(n):
+        """Medium entropy: letters + digits (typical JSON value content)."""
+        chars = string.ascii_letters + string.digits
+        return "".join(rng.choices(chars, k=n))
+
+    def _rand_printable(n):
+        """High entropy: full printable ASCII (worst-case for text compression)."""
+        chars = string.printable.strip()
+        return "".join(rng.choices(chars, k=n))
+
+    def _realistic_json(target_chars):
+        """Realistic MCP payload: fixed schema fields + a padded string to hit target size."""
+        fields = [
+            "printer_name", "gcode_state", "subtask_name", "stage_id",
+            "print_percentage", "elapsed_min", "remaining_min", "layer_num",
+            "total_layers", "nozzle_temp", "bed_temp", "chamber_temp",
+            "part_fan", "aux_fan", "exhaust_fan", "heatbreak_fan",
+            "filament_type", "filament_color", "ams_unit", "tray_id",
+        ]
+        obj = {k: _rand_alphanumeric(rng.randint(8, 32)) for k in fields}
+        obj["nozzle_temp"] = round(rng.uniform(180, 280), 1)
+        obj["bed_temp"] = round(rng.uniform(20, 110), 1)
+        obj["layers"] = [rng.randint(0, 255) for _ in range(100)]
+        # Pad to target with a data field of random alphanumeric content
+        base_len = len(json.dumps(obj))
+        pad_len = max(0, target_chars - base_len - 12)  # 12 = len(', "pad": ""')
+        obj["pad"] = _rand_alphanumeric(pad_len)
+        return obj
+
+    # Content types × sizes to benchmark
+    SIZES = [
+        ("110k",  110_000),
+        ("250k",  250_000),
+        ("500k",  500_000),
+        ("1M",  1_000_000),
+    ]
+
+    CONTENT_TYPES = [
+        ("repetitive",   lambda n: {"data": "x" * n}),
+        ("alphanumeric", lambda n: {"data": _rand_alphanumeric(n)}),
+        ("printable",    lambda n: {"data": _rand_printable(n)}),
+        ("realistic",    lambda n: _realistic_json(n)),
+    ]
+
+    print(f"  {'content':<14} {'size':>6}  {'orig':>10}  {'comp':>10}  {'ratio':>7}  {'time':>8}")
+    print(f"  {'-'*14} {'-'*6}  {'-'*10}  {'-'*10}  {'-'*7}  {'-'*8}")
+
+    all_passed = True
+    for content_label, content_fn in CONTENT_TYPES:
+        for size_label, target_size in SIZES:
+            payload = content_fn(target_size)
+            serialized = json.dumps(payload)
+            orig_bytes = len(serialized.encode("utf-8"))
+
+            t0 = time.perf_counter()
+            result = compress_if_large(payload)
+            elapsed = time.perf_counter() - t0
+
+            if not result.get("compressed"):
+                # Should always compress since all test payloads exceed threshold
+                print(f"  {FAIL}  {content_label:<12} {size_label:>6}  not compressed (payload={len(serialized):,} threshold={threshold:,})")
+                failures.append(f"benchmark {content_label} {size_label} not compressed")
+                all_passed = False
+                continue
+
+            comp_bytes = result["compressed_size_bytes"]
+            ratio = comp_bytes / orig_bytes * 100
+
+            # Round-trip correctness
+            try:
+                recovered = json.loads(gzip.decompress(base64.b64decode(result["data"])))
+                rt_ok = recovered == payload
+            except Exception:
+                rt_ok = False
+
+            status = PASS if rt_ok else FAIL
+            if not rt_ok:
+                failures.append(f"benchmark {content_label} {size_label} round-trip failed")
+                all_passed = False
+
+            print(f"  {status}  {content_label:<12} {size_label:>6}  {orig_bytes:>10,}  {comp_bytes:>10,}  {ratio:>6.1f}%  {elapsed*1000:>6.1f}ms")
+
+    if all_passed:
+        ok("all benchmark round-trips verified correct")
+
+
 def test_openapi_methods(base_url):
     print("\n── OpenAPI method correctness ──────────────────────────────────────────")
     EXPECTED_POST = [
@@ -430,6 +536,7 @@ def main():
         test_knowledge()
         test_notifications()
         test_compression()
+        test_compression_benchmark()
 
     if not args.no_api:
         base_url = args.base_url
