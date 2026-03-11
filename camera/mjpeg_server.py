@@ -641,7 +641,7 @@ function _hpPoll(){
       if(cv&&hist.length>1){
         var ctx=cv.getContext('2d');
         ctx.clearRect(0,0,cv.width,cv.height);
-        var maxV=Math.max(cap,Math.max.apply(null,hist));
+        var maxV=cap;
         var lineColor=f>=cap*.8?'#39ff6e':f>=cap*.4?'#f5a623':'#ff4444';
         ctx.strokeStyle=lineColor;
         ctx.lineWidth=1.5;
