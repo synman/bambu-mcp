@@ -275,6 +275,39 @@ def compress_if_large(data: dict) -> dict:
 | `knowledge/behavioral_rules_camera.py` | 3 | Document URL return |
 | `knowledge/behavioral_rules_mcp_patterns.py` | 3 | Document selective URL factory pattern |
 
+---
+
+## Knowledge Updates Required (Agent AI Behavioral Knowledge)
+
+> These are not documentation niceties — they define how the AI agent handles responses from the changed tools. Missing or stale knowledge causes the agent to handle URL responses incorrectly or to be surprised by compressed medium responses.
+
+### Phase 1 — Gzip threshold knowledge
+
+| File | Update |
+|------|--------|
+| `knowledge/behavioral_rules_mcp_patterns.py` | **"Compressed Response Protocol"** — change threshold description from "exceeds 100K chars" to "exceeds 300 chars" |
+| `knowledge/behavioral_rules_mcp_patterns.py` | **"Tools that may return compressed responses"** list — expand to include `get_ams_units`, `get_spool_info`, `get_hms_errors`, `get_capabilities`, `get_knowledge_topic`, `get_ams_status`, `get_detector_settings`, `get_nozzle_info`, `get_climate`, etc. |
+| `knowledge/behavioral_rules_mcp_patterns.py` | **`MAX_MCP_OUTPUT_TOKENS` section** — document dual-threshold model: `_MIN_COMPRESS_SIZE=300` (compression trigger) is now distinct from `_max_response_chars()` (ResponseSizeTracker overflow signal) |
+
+### Phase 3 — URL factory knowledge
+
+| File | Update |
+|------|--------|
+| `knowledge/behavioral_rules_mcp_patterns.py` | **Add "URL Factory Pattern" section**: which tools return `{"url": "..."}`, agent action (fetch via curl immediately, pre-authorized), why (P(overflow) high → HTTP primary saves a failed round trip), response shape |
+| `knowledge/behavioral_rules_mcp_patterns.py` | **"Inherently large responses" table** — remove "No direct HTTP route" for `get_plate_thumbnail`/`get_plate_topview`; add their new HTTP routes |
+| `knowledge/behavioral_rules_camera.py` | Document `get_snapshot` URL return: agent must not interpret `{"url": "..."}` as image data — it must fetch the URL |
+| `knowledge/http_api_system.py` | Add 3 new monitoring routes: `GET /api/monitoring_data`, `GET /api/monitoring_history`, `GET /api/monitoring_series` |
+| `knowledge/http_api_files.py` | Add `GET /api/plate_thumbnail` and `GET /api/plate_topview` routes (if Phase 3 adds them) |
+
+### Why each gap matters
+
+| Gap | Consequence if missing |
+|-----|----------------------|
+| Gzip threshold not updated | Agent tries to interpret raw JSON from medium tools; decompress path never called for `get_ams_units` etc. |
+| URL factory pattern undocumented | Agent calls `get_snapshot`, gets `{"url": "..."}`, doesn't know what to do — either discards it or returns it raw to user |
+| "No HTTP route" table not updated | Agent uses `get_plate_thumbnail` at lower quality instead of calling the (now-existing) HTTP route |
+| Monitoring routes not in knowledge | Agent can't discover the routes via `get_knowledge_topic('http_api/system')` |
+
 ## What Does NOT Change
 
 - `compress_if_large` stays — still handles `dump_log`, `monitoring_history(raw=True)`, all Tier 3 tools
