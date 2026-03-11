@@ -95,7 +95,7 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
 .hidden{display:none}
 #fps{position:fixed;top:12px;right:14px;background:rgba(0,0,0,.72);padding:6px 8px 8px;
   border-radius:6px;pointer-events:none;border:1px solid rgba(255,255,255,.10);
-  display:none;flex-direction:column;align-items:stretch;gap:3px;width:52px;text-align:center}
+  display:none;flex-direction:column;align-items:stretch;gap:3px;text-align:center;overflow:hidden}
 #fps-num{font:800 14px/1 'Courier New',monospace;letter-spacing:-.02em;transition:color .4s;width:100%}
 #fps-lbl{font:400 12px/1 'Courier New',monospace;letter-spacing:.08em;color:rgba(255,255,255,.4);width:100%}
 #fps-chart{display:block;width:52px;height:20px}
