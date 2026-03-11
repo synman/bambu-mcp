@@ -64,6 +64,8 @@ _flask_app = None
 _server_thread: threading.Thread | None = None
 _werkzeug_server = None  # holds make_server instance for clean shutdown
 _port: int = 0           # set by start(); 0 = not running
+_zc_instance = None      # Zeroconf instance for mDNS service registration
+_zc_info = None          # ServiceInfo registered with Zeroconf
 _UPLOADS = os.path.join(os.path.dirname(__file__), "uploads")
 
 DEFAULT_PRINTER = os.environ.get("BAMBU_API_PRINTER", "")
@@ -2708,6 +2710,58 @@ def _build_app():
 
 # ── Server lifecycle ───────────────────────────────────────────────────────────
 
+
+def _register_mdns(port: int) -> None:
+    """Register a Zeroconf/mDNS service so non-MCP clients can discover the API port."""
+    global _zc_instance, _zc_info
+    try:
+        import socket
+        from importlib.metadata import version as _pkg_version
+        from zeroconf import ServiceInfo, Zeroconf
+
+        from tools.management import get_configured_printers
+        printers_result = get_configured_printers()
+        printer_names = ",".join(p["name"] for p in printers_result.get("printers", []))
+
+        pkg_ver = _pkg_version("bambu-mcp")
+        props = {
+            "version": pkg_ver,
+            "api_url": f"http://localhost:{port}/api",
+            "printers": printer_names,
+        }
+        info = ServiceInfo(
+            "_bambu-mcp._tcp.local.",
+            "bambu-mcp._bambu-mcp._tcp.local.",
+            addresses=[socket.inet_aton("127.0.0.1")],
+            port=port,
+            properties=props,
+        )
+        zc = Zeroconf()
+        zc.register_service(info)
+        _zc_instance = zc
+        _zc_info = info
+        log.info("mDNS: registered _bambu-mcp._tcp.local. on port %d", port)
+    except Exception as exc:
+        log.warning("mDNS: registration failed (non-fatal): %s", exc)
+
+
+def _unregister_mdns() -> None:
+    """Deregister the Zeroconf/mDNS service and close the Zeroconf instance."""
+    global _zc_instance, _zc_info
+    if _zc_instance is None:
+        return
+    try:
+        if _zc_info is not None:
+            _zc_instance.unregister_service(_zc_info)
+        _zc_instance.close()
+        log.info("mDNS: deregistered _bambu-mcp._tcp.local.")
+    except Exception as exc:
+        log.warning("mDNS: deregistration failed (non-fatal): %s", exc)
+    finally:
+        _zc_instance = None
+        _zc_info = None
+
+
 def start(port: int | None = None) -> int:
     """
     Start the bambu-mcp-api HTTP server in a background non-daemon thread.
@@ -2803,6 +2857,7 @@ def start(port: int | None = None) -> int:
     _server_thread = threading.Thread(target=_run, name="bambu-mcp-api", daemon=False)
     _server_thread.start()
     log.info("bambu-mcp-api started on http://localhost:%s  (docs: http://localhost:%s/api/docs)", _port, _port)
+    _register_mdns(_port)
     return _port
 
 
@@ -2818,6 +2873,7 @@ def stop() -> None:
     """
     global _server_thread, _werkzeug_server, _port
     log.debug("stop: called")
+    _unregister_mdns()
     if _werkzeug_server is not None:
         try:
             _werkzeug_server.shutdown()

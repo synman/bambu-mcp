@@ -56,6 +56,33 @@ Equivalent MCP tool: `get_server_info()`
 
 ---
 
+## mDNS / Zeroconf Service Discovery
+
+At startup, bambu-mcp registers a Zeroconf/Bonjour mDNS service so non-MCP clients
+(Home Assistant integrations, scripts, external tools) can discover the API port without
+polling or hard-coding it.
+
+Service type: `_bambu-mcp._tcp.local.`
+Instance name: `bambu-mcp._bambu-mcp._tcp.local.`
+
+TXT record fields:
+
+| Key | Example value | Description |
+|-----|--------------|-------------|
+| `version` | `0.8.0` | bambu-mcp package version |
+| `api_url` | `http://localhost:49152/api` | Full REST API base URL including port |
+| `printers` | `H2D,A1` | Comma-separated names of all configured printers (empty string if none) |
+
+The service is deregistered automatically when `stop()` is called (MCP server shutdown).
+
+To browse the service from the command line:
+```bash
+dns-sd -B _bambu-mcp._tcp local.    # macOS
+avahi-browse _bambu-mcp._tcp        # Linux
+```
+
+---
+
 ## Session Management
 
 ### PATCH /api/rename_printer
