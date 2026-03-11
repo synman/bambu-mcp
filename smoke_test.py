@@ -1208,7 +1208,7 @@ def _generate_html_report(json_path, html_path):
     css = """
     * { box-sizing: border-box; }
     body { background: #0d1117; color: #c9d1d9; font-family: 'Segoe UI', Arial, sans-serif;
-           margin: 0; padding: 32px; max-width: 1100px; margin: 0 auto; }
+           margin: 0; padding: 32px; max-width: 1200px; margin: 0 auto; }
     h1 { color: #58a6ff; margin-bottom: 4px; }
     h2 { color: #f0f6fc; border-bottom: 1px solid #30363d; padding-bottom: 6px; margin-top: 40px; }
     h3 { color: #79c0ff; margin-top: 24px; }
@@ -1246,6 +1246,59 @@ def _generate_html_report(json_path, html_path):
     table.analysis td.emoji  { font-size: 1.1rem; width: 32px; text-align: center; white-space: nowrap; }
     table.analysis td.ob-label { font-weight: bold; color: #c9d1d9; white-space: nowrap; }
     table.analysis td.ob-body  { color: #8b949e; font-size: 0.87rem; line-height: 1.6; }
+    /* ── evolution diagram ─────────────────────────────────────────────── */
+    .evo-container { display: flex; gap: 0; align-items: stretch; margin: 20px 0 8px; }
+    .evo-col { flex: 1; display: flex; flex-direction: column; }
+    .evo-arrow { display: flex; align-items: center; justify-content: center;
+                 width: 44px; flex-shrink: 0; color: #6e7681; font-size: 1.6rem; }
+    .evo-card { flex: 1; background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+                overflow: hidden; display: flex; flex-direction: column; }
+    .evo-header { padding: 11px 16px; font-weight: 700; font-size: 0.92rem;
+                  border-bottom: 1px solid #30363d; letter-spacing: 0.02em; }
+    .evo-prior   .evo-header { background: #2a0e0e; color: #ff7b72; }
+    .evo-trans   .evo-header { background: #221900; color: #f5a623; }
+    .evo-end     .evo-header { background: #0b1f0f; color: #3fb950; }
+    .evo-card ul { margin: 0; padding: 12px 14px 14px 30px; flex: 1; }
+    .evo-card ul li { padding: 3px 0; font-size: 0.83rem; color: #c9d1d9; line-height: 1.55;
+                      position: relative; }
+    .evo-card ul li::before { content: ""; position: absolute; left: -14px; top: 9px;
+                               width: 5px; height: 5px; border-radius: 50%; }
+    .evo-prior ul li::before { background: #ff7b72; }
+    .evo-trans ul li::before { background: #f5a623; }
+    .evo-end   ul li::before { background: #3fb950; }
+    .evo-card ul li code { background: #0d1117; color: #79c0ff; padding: 1px 4px;
+                           border-radius: 3px; border: 1px solid #30363d; font-size: 0.8rem; }
+    /* ── Path A/B/C flow ──────────────────────────────────────────────── */
+    .path-flow { display: flex; gap: 0; margin: 20px 0 6px; align-items: stretch; }
+    .path-box { flex: 1; padding: 12px 15px; background: #161b22;
+                border-top: 1px solid #30363d; border-bottom: 1px solid #30363d;
+                border-right: 1px solid #30363d; }
+    .path-box:first-child { border-left: 1px solid #30363d; border-radius: 8px 0 0 8px; }
+    .path-box:last-child  { border-radius: 0 8px 8px 0; }
+    .path-label { font-weight: 700; font-size: 0.88rem; margin-bottom: 5px; }
+    .path-badge { display: inline-block; font-size: 0.7rem; font-weight: 700;
+                  padding: 1px 6px; border-radius: 10px; margin-left: 6px;
+                  vertical-align: middle; }
+    .path-a .path-label { color: #3fb950; }
+    .path-a .path-badge { background: #0e2a1a; color: #3fb950; }
+    .path-b .path-label { color: #f5a623; }
+    .path-b .path-badge { background: #221900; color: #f5a623; }
+    .path-c .path-label { color: #ff7b72; }
+    .path-c .path-badge { background: #2a0e0e; color: #ff7b72; }
+    .path-desc { font-size: 0.8rem; color: #8b949e; line-height: 1.5; }
+    .path-sep { display: flex; align-items: center; padding: 0 6px;
+                color: #6e7681; font-size: 1.1rem; flex-shrink: 0; }
+    /* ── Actions Taken table ──────────────────────────────────────────── */
+    table.actions { margin-top: 10px; }
+    table.actions td { vertical-align: top; padding: 9px 12px; white-space: normal; }
+    table.actions td.act-status { text-align: center; font-size: 1.1rem; width: 36px;
+                                   padding-top: 11px; }
+    table.actions td.act-session { font-size: 0.78rem; color: #6e7681; white-space: nowrap;
+                                    padding-top: 11px; }
+    table.actions td.act-change  { font-family: monospace; font-size: 0.82rem; color: #79c0ff; }
+    table.actions td.act-desc    { font-size: 0.83rem; color: #8b949e; line-height: 1.5; }
+    table.actions tr.done td { background: #0b1a10; }
+    table.actions tr.sess td { background: #111b0f; }
     """
 
     timing_th = (
@@ -1403,6 +1456,111 @@ def _generate_html_report(json_path, html_path):
 <h2>MCP Response Threshold</h2>
 <pre class="threshold">Default MAX_MCP_OUTPUT_TOKENS = {def_tokens:,}  ×4 =  {def_threshold:,} chars   (current MCP limit)
 Ideal   MAX_MCP_OUTPUT_TOKENS = {ideal_tokens:,}  ×4 =  {ideal_threshold:,} chars   (driven by: {max_label})</pre>
+
+<h2>Response Path Evolution</h2>
+<p class="note">What we started with, what we discovered, and what we fixed.</p>
+
+<div class="evo-container">
+  <div class="evo-col">
+    <div class="evo-card evo-prior">
+      <div class="evo-header">❌ Prior State — The Bugs</div>
+      <ul>
+        <li><code>_fetch_sample</code> used <code>get_json()</code> → parsed dict → <code>json.dumps()</code> always compact</li>
+        <li><code>text/xlarge</code> measured same as <code>text/large</code> (~94K; real wire size 168K hidden)</li>
+        <li>Pass 2 gzip operated on compact dict → never exceeded threshold → reported 0% ratios</li>
+        <li><code>MAX_MCP_OUTPUT_TOKENS</code> static at 25,000 — no config auto-tuning</li>
+        <li>Binary responses (JPEG) passed through gzip — ~0–4% reduction, wasted CPU</li>
+        <li>No <code>?pretty=true</code> on OpenAPI spec → <code>text/xlarge</code> used same endpoint as <code>text/large</code></li>
+      </ul>
+    </div>
+  </div>
+  <div class="evo-arrow">&#8594;</div>
+  <div class="evo-col">
+    <div class="evo-card evo-trans">
+      <div class="evo-header">🔬 Transition — Investigation</div>
+      <ul>
+        <li>Port probe returned wrong port → stale process serving old code → all measurements invalid</li>
+        <li>After MCP reload: <code>text/xlarge</code> = <code>text/large</code> = ~94K → bug confirmed</li>
+        <li>Root cause: <code>get_json()</code> discards wire bytes; re-serialisation always produces compact JSON</li>
+        <li>Pass 2 gzip on compact dict (~94K) never crossed threshold → 0% ratios explained</li>
+        <li>All 15 samples measured with raw wire bytes: max = <strong>271,976 chars</strong> (<code>mixed/high</code>)</li>
+        <li>Ideal <code>MAX_MCP_OUTPUT_TOKENS</code> = <strong>67,994</strong> — <code>ceil(271,976 / 4)</code></li>
+      </ul>
+    </div>
+  </div>
+  <div class="evo-arrow">&#8594;</div>
+  <div class="evo-col">
+    <div class="evo-card evo-end">
+      <div class="evo-header">✅ End State — Fixes Applied</div>
+      <ul>
+        <li><code>_fetch_sample</code> uses <code>urllib.request</code> directly → captures raw wire bytes → <code>text/xlarge</code> = 168,935 ✓</li>
+        <li>Pass 2 gzip on raw bytes → <strong>89.8% ratio</strong> for <code>text/xlarge</code> ✓</li>
+        <li><code>?pretty=true</code> on <code>/api/openapi.json</code> → true xlarge endpoint distinct from large</li>
+        <li><code>ResponseSizeTracker</code>: persistent high-water-mark → auto-writes <code>MAX_MCP_OUTPUT_TOKENS</code> to <code>mcp-config.json</code></li>
+        <li>Binary gzip exemption: responses containing <code>data:</code> values skip gzip entirely</li>
+        <li>Knowledge module updated with dynamic scaling + binary exemption rules</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<h3>MCP Response Path — Path A / B / C</h3>
+<div class="path-flow">
+  <div class="path-box path-a">
+    <div class="path-label">Path A <span class="path-badge">Happy</span></div>
+    <div class="path-desc">Payload ≤ {def_threshold:,} chars raw.<br>Returned as-is. Agent reads directly.</div>
+  </div>
+  <div class="path-sep">&#8594;</div>
+  <div class="path-box path-b">
+    <div class="path-label">Path B <span class="path-badge">Compressed</span></div>
+    <div class="path-desc">Text payload &gt; threshold. gzip+base64 envelope fits within limit.<br>Agent decompresses: <code style="font-size:0.76rem">gzip.decompress(base64.b64decode(r["data"]))</code></div>
+  </div>
+  <div class="path-sep">&#8594;</div>
+  <div class="path-box path-c">
+    <div class="path-label">Path C <span class="path-badge">Overflow</span></div>
+    <div class="path-desc">Binary (JPEG) or very large text where envelope still exceeds threshold.<br>CLI truncates mid-stream → agent must use HTTP fallback route.</div>
+  </div>
+</div>
+
+<h3>Actions Taken</h3>
+<table class="actions">
+<thead><tr>
+  <th style="width:36px"></th>
+  <th>Change</th>
+  <th>What &amp; Why</th>
+  <th>Session</th>
+</tr></thead>
+<tbody>
+<tr class="done"><td class="act-status">✅</td>
+  <td class="act-change">_fetch_sample raw bytes</td>
+  <td class="act-desc">Switched from <code>get_json()</code> to <code>urllib.request</code> to capture raw wire bytes before JSON parsing. Fixed <code>text/xlarge</code> reporting same size as <code>text/large</code> — root cause was re-serialisation always producing compact JSON, masking the true 168K wire size.</td>
+  <td class="act-session">Prior</td></tr>
+<tr class="done"><td class="act-status">✅</td>
+  <td class="act-change">Pass 2 gzip on raw bytes</td>
+  <td class="act-desc">Pass 2 now gzips the raw wire bytes rather than a freshly-dumped compact dict. Fixed 0% compression ratios — the compact dict was always under threshold and gzip was never exercised.</td>
+  <td class="act-session">Prior</td></tr>
+<tr class="done"><td class="act-status">✅</td>
+  <td class="act-change">?pretty=true on /api/openapi.json</td>
+  <td class="act-desc">Added <code>?pretty=true</code> query parameter to the OpenAPI spec endpoint so the <code>text/xlarge</code> sample returns indented JSON (~168K) rather than the same compact form as <code>text/large</code> (~94K), giving distinct measurement points that span the threshold.</td>
+  <td class="act-session">Prior</td></tr>
+<tr class="done"><td class="act-status">✅</td>
+  <td class="act-change">4-pass live test suite</td>
+  <td class="act-desc">Replaced offline synthetic PIL benchmarks with a live 4-pass suite: Pass 1 raw, Pass 2 gzip, Pass 3 HTTP fallback, Pass 4 ideal token math. 15 samples spanning text/image/mixed with per-sample timing (min/max/avg/med/P90). Pre-test gate enforces default <code>MAX_MCP_OUTPUT_TOKENS</code>.</td>
+  <td class="act-session">Prior</td></tr>
+<tr class="sess"><td class="act-status">✅</td>
+  <td class="act-change">ResponseSizeTracker</td>
+  <td class="act-desc">Added persistent high-water-mark tracker in <code>tools/_response.py</code>. Every response through <code>compress_if_large()</code> is measured. New maxima auto-write <code>MAX_MCP_OUTPUT_TOKENS = ceil(max/4)</code> to <code>~/.copilot/mcp-config.json</code>. In-session threshold never rises — config takes effect on next restart.</td>
+  <td class="act-session">This</td></tr>
+<tr class="sess"><td class="act-status">✅</td>
+  <td class="act-change">Binary gzip exemption</td>
+  <td class="act-desc">Responses containing <code>data:</code> URI values (JPEG/PNG) now bypass gzip entirely. JPEG is already compressed at capture; gzip achieves only 0–5% reduction on base64-encoded JPEG while burning CPU. Binary responses are recorded in the tracker and returned as-is.</td>
+  <td class="act-session">This</td></tr>
+<tr class="sess"><td class="act-status">✅</td>
+  <td class="act-change">Knowledge update</td>
+  <td class="act-desc">Updated <code>behavioral_rules_mcp_patterns.py</code> TEXT block to document dynamic <code>MAX_MCP_OUTPUT_TOKENS</code> auto-tuning via <code>ResponseSizeTracker</code> and the binary gzip exemption. Agents can now read the rationale from <code>get_knowledge_topic('behavioral_rules/mcp_patterns')</code>.</td>
+  <td class="act-session">This</td></tr>
+</tbody>
+</table>
 
 <h2>Pass 1 — Raw payload (no gzip)</h2>
 <p class="note">All 15 samples fetched raw. <em>Fits?</em> = payload ≤ {def_threshold:,} chars (MCP limit). Timing = client-side wall-clock including network + server + JSON parse.</p>

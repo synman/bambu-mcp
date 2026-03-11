@@ -146,6 +146,24 @@ The Copilot CLI truncates MCP tool results at `MAX_MCP_OUTPUT_TOKENS × 4` chara
 (default 25,000 tokens = 100,000 chars). `compress_if_large()` reads the same env var
 to compress before truncation — thresholds stay in sync automatically.
 
+**Dynamic auto-tuning (ResponseSizeTracker):**
+
+Every response that passes through `compress_if_large()` is measured. When a new maximum
+is observed the tracker:
+1. Writes `~/.bambu-mcp/response_size_tracker.json` with `max_chars_seen`, `recommended_tokens`, and `max_label`
+2. Updates `~/.copilot/mcp-config.json` → `mcpServers.bambu-mcp.env.MAX_MCP_OUTPUT_TOKENS` = `ceil(max_chars_seen / 4)`
+
+The in-session threshold never rises — the update takes effect on the next MCP server
+restart. This prevents false "fits" signals during a session where the CLI still truncates
+at the old value.
+
+**Binary response exemption:**
+
+Responses containing `data:` URI values (JPEG/PNG base64) are **never gzip'd**. Image data
+is already compressed at capture time; gzip achieves only 0–5% reduction on base64-encoded
+JPEG while adding CPU overhead. Binary responses are recorded in the size tracker and
+returned as-is regardless of their size.
+
 **Tuning options** (when large payloads are needed):
 
 *Option A — shell (session-scoped):*
@@ -167,6 +185,9 @@ gh copilot ...
 
 Both paths propagate to the bambu-mcp server. When to raise it: if a single-field
 `get_monitoring_series` response is still too large for the client to handle.
+
+The ResponseSizeTracker sets this automatically over time — after running tools that return
+large text responses, the recommended value converges toward the actual maximum observed.
 
 ---
 
