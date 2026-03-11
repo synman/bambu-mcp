@@ -180,7 +180,7 @@ Key fields:
 | active_nozzle_temp | float | extruder.temp (actual) |
 | active_nozzle_temp_target | int | extruder.temp (target) |
 | active_nozzle | NozzleCharacteristics | from extruder nozzle block |
-| ams_status_raw | int | Raw unparsed AMS status integer from telemetry. Companion to ams_status_text. Note: get_ams_status() returns this as key `ams_status_raw`; get_printer_state() uses the same key. |
+| ams_status_raw | int | Raw unparsed AMS status integer from telemetry. Companion to ams_status_text. Accessible via get_printer_state() (key `ams_status_raw`). Note: get_ams_status() does NOT return this field — it returns only `ams_status` (text), `ams_count`, and `units`. |
 | ams_status_text | str | Human-readable AMS status string from parseAMSStatus(). Note: get_ams_status() returns this as key `ams_status`; in get_printer_state() the key is `ams_status_text`. |
 | ams_connected_count | int | Number of connected AMS units. |
 | ams_units | list[AMSUnitState] | ams.ams[] + info.module[] |

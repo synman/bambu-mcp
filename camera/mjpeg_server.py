@@ -433,8 +433,8 @@ function update(d){
     var html='';
     d.hms_errors.forEach(function(e){
       var lbl='\u26a0 '+(e.code||'error');
-      if(e.url) html+='<a class="error-link warn" href="'+e.url+'" onclick="window.open(this.href,\\'hms_popup\\',\\'width=600,height=400,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes\\');return false;">'+lbl+'</a><br>';
-      else html+='<span class="warn">'+lbl+'</span><br>';
+      if(e.url) html+='<a class="error-link warn" href="'+e.url+'" title="'+(e.description||'')+'" onclick="window.open(this.href,\\'hms_popup\\',\\'width=600,height=400,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes\\');return false;">'+lbl+'</a><br>';
+      else html+='<span class="warn" title="'+(e.description||'')+'">'+lbl+'</span><br>';
     });
     eEl.innerHTML=html;
     eEl.classList.remove('hidden');
