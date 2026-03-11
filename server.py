@@ -98,7 +98,8 @@ _root = logging.getLogger()
 _root.setLevel(_log_level)
 _root.addHandler(_file_handler)
 _root.addHandler(_stream_handler)
-logging.getLogger("bpm").setLevel(logging.WARNING)  # always suppress bpm Python logging
+_bpm_log_level = _log_level if os.environ.get("BAMBU_MCP_BPM_VERBOSE") else logging.WARNING
+logging.getLogger("bpm").setLevel(_bpm_log_level)
 log = logging.getLogger("bambu-mcp")
 
 # ── FastMCP server ─────────────────────────────────────────────────────────────
