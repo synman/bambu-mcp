@@ -870,10 +870,20 @@ def _build_app():
 
     @app.route("/api/openapi.json")
     def get_openapi_spec():
-        """Return the OpenAPI 3.0 specification for this API."""
+        """Return the OpenAPI 3.0 specification for this API.
+
+        Add ?pretty=true for indented JSON (~168 KB). Useful for inspecting large
+        payloads and for testing gzip compression against over-threshold text responses.
+        """
+        import json as _json
         log.debug("get_openapi_spec: called")
         doc = build_openapi_document(app)
         log.debug("get_openapi_spec: → %d paths", len(doc["paths"]))
+        if request.args.get("pretty", "").lower() in ("true", "1", "yes"):
+            return Response(
+                _json.dumps(doc, indent=2),
+                mimetype="application/json",
+            )
         return jsonify(doc)
 
     @app.route("/api/docs")

@@ -17,6 +17,7 @@ Exit code 0 = all checks passed.  Non-zero = failures (details printed).
 
 import argparse
 import importlib
+import os
 import sys
 import traceback
 
@@ -698,12 +699,14 @@ def _payload_samples(base_url, printer_name):
     import urllib.parse
     p = urllib.parse.quote(printer_name or "", safe="")
     return [
-        # ── Dimension A: text-only JSON (5 endpoints, varying size/composition) ──
+        # ── Dimension A: text-only JSON — must span sub-threshold → over-threshold ──
+        # Measured (live 2026-03-11): tiny≈132  small≈97  medium≈19,874
+        #   large≈94,486 (near limit)  xlarge≈168,561 (over — indented OpenAPI)
         ("text/tiny",   f"{base_url}/api/printers",                                                              1),
         ("text/small",  f"{base_url}/api/default_printer",                                                       1),
         ("text/medium", f"{base_url}/api/printer?printer={p}",                                                   1),
-        ("text/large",  f"{base_url}/api/health_check?printer={p}",                                              1),
-        ("text/xlarge", f"{base_url}/api/get_sdcard_contents?printer={p}",                                       1),
+        ("text/large",  f"{base_url}/api/openapi.json",                                                          1),
+        ("text/xlarge", f"{base_url}/api/openapi.json?pretty=true",                                              1),
         # ── Dimension B: binary image (5 knowledge profiles) ─────────────────────
         ("image/preview",  f"{base_url}/api/snapshot?printer={p}&resolution=180p&quality=55",                    3),
         ("image/low",      f"{base_url}/api/snapshot?printer={p}&resolution=480p&quality=65",                    3),
@@ -720,16 +723,30 @@ def _payload_samples(base_url, printer_name):
 
 
 def _fetch_sample(url, iters, timeout=15):
-    """Fetch url `iters` times.  Returns (avg_ms, last_response_dict)."""
+    """Fetch url `iters` times.  Returns (timing_stats, last_response_dict).
+
+    timing_stats keys: min_ms, max_ms, avg_ms, med_ms, p90_ms, iters
+    All times are client-side wall-clock (includes network + server + JSON parse).
+    """
     import time
-    import statistics as stats
+    import statistics as stats_mod
     timings = []
     data = None
     for _ in range(iters):
         t0 = time.perf_counter()
         _status, data = get_json(url, timeout=timeout)
-        timings.append(time.perf_counter() - t0)
-    return stats.mean(timings) * 1000, data
+        timings.append((time.perf_counter() - t0) * 1000)
+    s = sorted(timings)
+    n = len(s)
+    p90 = s[min(int(n * 0.9), n - 1)]
+    return {
+        "min_ms":  round(s[0], 1),
+        "max_ms":  round(s[-1], 1),
+        "avg_ms":  round(stats_mod.mean(s), 1),
+        "med_ms":  round(stats_mod.median(s), 1),
+        "p90_ms":  round(p90, 1),
+        "iters":   n,
+    }, data
 
 
 def _payload_chars(data):
@@ -739,6 +756,26 @@ def _payload_chars(data):
 
 
 _MCP_THRESHOLD = 100_000   # MAX_MCP_OUTPUT_TOKENS=25000 * 4 chars/token
+_DEFAULT_MCP_TOKENS = 25_000
+
+
+def _check_default_tokens():
+    """Fail fast if MAX_MCP_OUTPUT_TOKENS has been overridden in the environment.
+
+    All 4 payload passes assume the 25,000-token / 100,000-char default threshold.
+    A non-default value produces misleading 'fits'/'truncated' verdicts in Pass 1
+    and an incorrect ideal_tokens calculation in Pass 4.
+    Returns True if safe to proceed, False if passes must be skipped.
+    """
+    val = os.environ.get("MAX_MCP_OUTPUT_TOKENS")
+    if val is not None and val.strip() != str(_DEFAULT_MCP_TOKENS):
+        fail(
+            "pre-test: MAX_MCP_OUTPUT_TOKENS",
+            f"must be unset or {_DEFAULT_MCP_TOKENS} before payload tests "
+            f"(got {val!r}) — unset the env var and re-run"
+        )
+        return False
+    return True
 
 
 def test_payload_raw(base_url, printer_name):
@@ -759,17 +796,19 @@ def test_payload_raw(base_url, printer_name):
 
     for label, url, iters in _payload_samples(base_url, printer_name):
         try:
-            avg_ms, data = _fetch_sample(url, iters)
+            timing, data = _fetch_sample(url, iters)
             if "error" in data:
                 fail(label, str(data["error"])[:120])
                 continue
             chars = _payload_chars(data)
             fits = chars <= _MCP_THRESHOLD
-            raw_results[label] = {"chars": chars, "avg_ms": avg_ms, "fits": fits, "data": data}
+            raw_results[label] = {"chars": chars, "fits": fits, "timing": timing, "data": data}
+            t = timing
             ok(
                 label,
                 f"{chars:,} chars  {'✅ fits' if fits else '❌ truncated'}  "
-                f"avg={avg_ms:.0f}ms"
+                f"avg={t['avg_ms']:.0f}ms  min={t['min_ms']:.0f}  max={t['max_ms']:.0f}  "
+                f"p90={t['p90_ms']:.0f}  (n={t['iters']})"
             )
         except Exception as e:
             fail(label, f"{type(e).__name__}: {e}")
@@ -792,17 +831,19 @@ def test_payload_gzip(base_url, printer_name):
 
     if not printer_name:
         skip("payload gzip", "no printer name (pass --printer NAME)")
-        return
+        return {}
 
     try:
         from tools._response import compress_if_large
     except Exception as e:
         fail("tools._response import (payload gzip)", str(e))
-        return
+        return {}
+
+    gzip_results = {}
 
     for label, url, iters in _payload_samples(base_url, printer_name):
         try:
-            avg_ms, data = _fetch_sample(url, iters)
+            timing, data = _fetch_sample(url, iters)
             if "error" in data:
                 fail(label, str(data["error"])[:120])
                 continue
@@ -817,24 +858,32 @@ def test_payload_gzip(base_url, printer_name):
                 comp_chars = raw_chars
                 ratio = 0.0
                 fits_after = raw_chars <= _MCP_THRESHOLD
+            t = timing
+            gzip_results[label] = {
+                "raw_chars": raw_chars, "comp_chars": comp_chars,
+                "ratio_pct": round(ratio, 1), "fits": fits_after, "timing": timing,
+            }
             ok(
                 label,
                 f"{raw_chars:,} → {comp_chars:,} chars  ratio={ratio:.1f}%  "
                 f"{'✅ fits' if fits_after else '❌ truncated'}  "
-                f"avg={avg_ms:.0f}ms"
+                f"avg={t['avg_ms']:.0f}ms  min={t['min_ms']:.0f}  max={t['max_ms']:.0f}  "
+                f"p90={t['p90_ms']:.0f}  (n={t['iters']})"
             )
         except Exception as e:
             fail(label, f"{type(e).__name__}: {e}")
 
+    return gzip_results
+
 
 def test_payload_fallback(base_url, printer_name):
-    """Pass 3 — HTTP 200 + valid payload for all 15 samples.
+    """Pass 3 — HTTP 200 + valid payload + timing for all 15 samples.
 
     Demonstrates that the HTTP fallback path always delivers complete, untruncated
     data regardless of payload size — no MCP size limit applies over HTTP.
 
     Checks:
-      text/…   — status 200, non-empty dict, no 'error' key
+      text/…   — status 200, non-empty dict/list, no 'error' key
       image/…  — status 200, 'data_uri' key present and starts with 'data:'
       mixed/…  — status 200, 'data_uri' present AND 'status' key present
     """
@@ -842,47 +891,53 @@ def test_payload_fallback(base_url, printer_name):
 
     if not printer_name:
         skip("payload fallback", "no printer name (pass --printer NAME)")
-        return
+        return {}
 
-    import urllib.request
+    fallback_results = {}
 
     for label, url, iters in _payload_samples(base_url, printer_name):
         try:
-            import urllib.request as _req
-            import json as _json
-            with _req.urlopen(url, timeout=15) as r:
-                status = r.status
-                data = _json.loads(r.read())
+            timing, data = _fetch_sample(url, iters)
+            chars = _payload_chars(data)
 
-            if status != 200:
-                fail(label, f"HTTP {status}")
-                continue
             if "error" in data:
                 fail(label, str(data["error"])[:120])
                 continue
 
+            valid = True
             if label.startswith("text/"):
                 if not data:
-                    fail(label, "empty response dict")
-                    continue
+                    fail(label, "empty response")
+                    valid = False
             elif label.startswith("image/"):
                 uri = data.get("data_uri", "")
                 if not uri.startswith("data:"):
                     fail(label, "missing/invalid data_uri")
-                    continue
+                    valid = False
             else:  # mixed/
                 uri = data.get("data_uri", "")
-                has_status = "status" in data
                 if not uri.startswith("data:"):
                     fail(label, "missing/invalid data_uri")
-                    continue
-                if not has_status:
+                    valid = False
+                elif "status" not in data:
                     fail(label, "missing 'status' key (include_status=true not honoured)")
-                    continue
+                    valid = False
 
-            ok(label, "HTTP 200  valid payload")
+            if not valid:
+                continue
+
+            fallback_results[label] = {"chars": chars, "valid": True, "timing": timing}
+            t = timing
+            ok(
+                label,
+                f"HTTP 200  {chars:,} chars  "
+                f"avg={t['avg_ms']:.0f}ms  min={t['min_ms']:.0f}  max={t['max_ms']:.0f}  "
+                f"p90={t['p90_ms']:.0f}  (n={t['iters']})"
+            )
         except Exception as e:
             fail(label, f"{type(e).__name__}: {e}")
+
+    return fallback_results
 
 
 def test_payload_ideal_tokens(base_url, printer_name, raw_results):
@@ -893,6 +948,7 @@ def test_payload_ideal_tokens(base_url, printer_name, raw_results):
     by re-running each sample against that raised threshold.
 
     If raw_results is empty (Pass 1 was skipped), falls back to 1-iter HTTP calls.
+    Returns a dict with ideal_tokens, max_chars, max_label, and per-sample results.
     """
     import math
     import os
@@ -901,7 +957,7 @@ def test_payload_ideal_tokens(base_url, printer_name, raw_results):
 
     if not printer_name:
         skip("payload ideal tokens", "no printer name (pass --printer NAME)")
-        return
+        return {}
 
     # --- Step 1: find max chars across all samples ---
     if raw_results:
@@ -926,18 +982,31 @@ def test_payload_ideal_tokens(base_url, printer_name, raw_results):
                     max_label = label
             except Exception:
                 pass
-        raw_results = {k: {"chars": _payload_chars(v), "fits": _payload_chars(v) <= _MCP_THRESHOLD, "data": v}
-                       for k, v in sample_data.items()}
+        raw_results = {
+            k: {"chars": _payload_chars(v), "fits": _payload_chars(v) <= _MCP_THRESHOLD, "data": v}
+            for k, v in sample_data.items()
+        }
 
     ideal_tokens = math.ceil(max_chars / 4)
-    print(f"  max payload: {max_chars:,} chars  ({max_label})")
-    print(f"  ideal MAX_MCP_OUTPUT_TOKENS = {ideal_tokens:,}  (current default: 25,000)")
+    ideal_threshold = ideal_tokens * 4
+    print(f"  max payload : {max_chars:,} chars  ({max_label})")
+    print(f"  ideal tokens: {ideal_tokens:,}  (default: {_DEFAULT_MCP_TOKENS:,})")
+    print(f"  ideal limit : {ideal_threshold:,} chars  (default: {_MCP_THRESHOLD:,} chars)")
+
+    ideal_results = {
+        "ideal_tokens":     ideal_tokens,
+        "ideal_threshold":  ideal_threshold,
+        "default_tokens":   _DEFAULT_MCP_TOKENS,
+        "default_threshold": _MCP_THRESHOLD,
+        "max_chars":        max_chars,
+        "max_label":        max_label,
+        "samples":          {},
+    }
 
     # --- Step 2: re-run all 15 at ideal threshold ---
     old_val = os.environ.get("MAX_MCP_OUTPUT_TOKENS")
     try:
         os.environ["MAX_MCP_OUTPUT_TOKENS"] = str(ideal_tokens)
-        # Force re-import to pick up new env var
         import importlib
         try:
             import tools._response as _resp
@@ -949,14 +1018,11 @@ def test_payload_ideal_tokens(base_url, printer_name, raw_results):
             try:
                 if label in raw_results:
                     chars = raw_results[label]["chars"]
-                    data = raw_results[label].get("data")
-                    if data is None:
-                        _, data = _fetch_sample(url, 1)
-                        chars = _payload_chars(data)
                 else:
                     _, data = _fetch_sample(url, 1)
                     chars = _payload_chars(data)
-                fits = chars <= ideal_tokens * 4
+                fits = chars <= ideal_threshold
+                ideal_results["samples"][label] = {"chars": chars, "fits": fits}
                 ok(label, f"{chars:,} chars  {'✅ fits' if fits else '❌ still truncated'}")
             except Exception as e:
                 fail(label, f"{type(e).__name__}: {e}")
@@ -965,12 +1031,304 @@ def test_payload_ideal_tokens(base_url, printer_name, raw_results):
             os.environ.pop("MAX_MCP_OUTPUT_TOKENS", None)
         else:
             os.environ["MAX_MCP_OUTPUT_TOKENS"] = old_val
-        # Restore original threshold
         try:
             import tools._response as _resp
             importlib.reload(_resp)
         except Exception:
             pass
+
+    return ideal_results
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Results serialization + HTML report
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _write_results_json(path, meta, raw_r, gzip_r, fallback_r, ideal_r):
+    """Write all 4 pass results + meta to a JSON file. Returns path."""
+    import json
+    import datetime
+    payload = {
+        "generated_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "meta": meta,
+        "pass1_raw":      raw_r,
+        "pass2_gzip":     gzip_r,
+        "pass3_fallback": fallback_r,
+        "pass4_ideal":    ideal_r,
+    }
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2)
+    return path
+
+
+def _generate_html_report(json_path, html_path):
+    """Read JSON results and write a styled HTML report to html_path."""
+    import json
+
+    with open(json_path, encoding="utf-8") as fh:
+        data = json.load(fh)
+
+    meta      = data.get("meta", {})
+    raw_r     = data.get("pass1_raw", {})
+    gzip_r    = data.get("pass2_gzip", {})
+    fallback_r = data.get("pass3_fallback", {})
+    ideal_r   = data.get("pass4_ideal", {})
+
+    generated_at   = data.get("generated_at", "unknown")
+    def_tokens     = meta.get("default_tokens", _DEFAULT_MCP_TOKENS)
+    def_threshold  = meta.get("default_threshold", _MCP_THRESHOLD)
+    ideal_tokens   = ideal_r.get("ideal_tokens", 0)
+    ideal_threshold = ideal_r.get("ideal_threshold", 0)
+    max_label      = ideal_r.get("max_label", "—")
+    printer        = meta.get("printer", "—")
+
+    # ── sample label order ──
+    LABELS = [
+        "text/tiny", "text/small", "text/medium", "text/large", "text/xlarge",
+        "image/preview", "image/low", "image/standard", "image/high", "image/native",
+        "mixed/preview", "mixed/low", "mixed/standard", "mixed/high", "mixed/native",
+    ]
+
+    def dim_group(label):
+        return label.split("/")[0]  # "text" | "image" | "mixed"
+
+    def fits_cell(fits):
+        if fits is None:
+            return '<td class="na">—</td>'
+        color = "green" if fits else "red"
+        text = "✅ yes" if fits else "❌ no"
+        return f'<td class="{color}">{text}</td>'
+
+    def timing_cells(t):
+        if not t:
+            return "<td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td>"
+        p90 = t.get("p90_ms", 0)
+        avg = t.get("avg_ms", 1) or 1
+        p90_cls = ' class="amber"' if p90 > avg * 5 else ''
+        return (
+            f"<td>{t.get('min_ms', 0):.0f}</td>"
+            f"<td>{t.get('max_ms', 0):.0f}</td>"
+            f"<td>{t.get('avg_ms', 0):.0f}</td>"
+            f"<td>{t.get('med_ms', 0):.0f}</td>"
+            f"<td{p90_cls}>{p90:.0f}</td>"
+            f"<td>{t.get('iters', 0)}</td>"
+        )
+
+    def fmt_chars(n):
+        return f"{n:,}" if isinstance(n, int) and n else ("—" if not n else f"{n:,}")
+
+    # ── build rows for each pass ──
+
+    def pass1_rows():
+        rows = []
+        prev_dim = None
+        for label in LABELS:
+            d = dim_group(label)
+            if prev_dim and d != prev_dim:
+                rows.append('<tr class="sep"><td colspan="9"></td></tr>')
+            prev_dim = d
+            info = raw_r.get(label, {})
+            chars = info.get("chars")
+            fits  = info.get("fits")
+            t     = info.get("timing", {})
+            rows.append(
+                f'<tr><td class="lbl">{label}</td>'
+                f'<td class="num">{fmt_chars(chars)}</td>'
+                + fits_cell(fits)
+                + timing_cells(t) + "</tr>"
+            )
+        return "\n".join(rows)
+
+    def pass2_rows():
+        rows = []
+        prev_dim = None
+        for label in LABELS:
+            d = dim_group(label)
+            if prev_dim and d != prev_dim:
+                rows.append('<tr class="sep"><td colspan="10"></td></tr>')
+            prev_dim = d
+            info = gzip_r.get(label, {})
+            raw_c  = info.get("raw_chars")
+            comp_c = info.get("comp_chars")
+            ratio  = info.get("ratio_pct")
+            fits   = info.get("fits")
+            t      = info.get("timing", {})
+            ratio_str = f"{ratio:.1f}%" if isinstance(ratio, (int, float)) else "—"
+            rows.append(
+                f'<tr><td class="lbl">{label}</td>'
+                f'<td class="num">{fmt_chars(raw_c)}</td>'
+                f'<td class="num">{fmt_chars(comp_c)}</td>'
+                f'<td class="num">{ratio_str}</td>'
+                + fits_cell(fits)
+                + timing_cells(t) + "</tr>"
+            )
+        return "\n".join(rows)
+
+    def pass3_rows():
+        rows = []
+        prev_dim = None
+        for label in LABELS:
+            d = dim_group(label)
+            if prev_dim and d != prev_dim:
+                rows.append('<tr class="sep"><td colspan="9"></td></tr>')
+            prev_dim = d
+            info = fallback_r.get(label, {})
+            chars = info.get("chars")
+            valid = info.get("valid")
+            t     = info.get("timing", {})
+            valid_cell = ('<td class="green">✅ yes</td>' if valid
+                          else '<td class="red">❌ no</td>' if valid is False
+                          else '<td class="na">—</td>')
+            rows.append(
+                f'<tr><td class="lbl">{label}</td>'
+                f'<td class="num">{fmt_chars(chars)}</td>'
+                + valid_cell
+                + timing_cells(t) + "</tr>"
+            )
+        return "\n".join(rows)
+
+    def pass4_rows():
+        samples = ideal_r.get("samples", {})
+        rows = []
+        prev_dim = None
+        for label in LABELS:
+            d = dim_group(label)
+            if prev_dim and d != prev_dim:
+                rows.append('<tr class="sep"><td colspan="4"></td></tr>')
+            prev_dim = d
+            # chars come from Pass 1 (ideal tokens re-run uses same payloads)
+            p1_info = raw_r.get(label, {})
+            chars = p1_info.get("chars")
+            info  = samples.get(label, {})
+            fits  = info.get("fits")
+            rows.append(
+                f'<tr><td class="lbl">{label}</td>'
+                f'<td class="num">{fmt_chars(chars)}</td>'
+                + fits_cell(fits) + "</tr>"
+            )
+        return "\n".join(rows)
+
+    css = """
+    * { box-sizing: border-box; }
+    body { background: #0d1117; color: #c9d1d9; font-family: 'Segoe UI', Arial, sans-serif;
+           margin: 0; padding: 32px; max-width: 1100px; margin: 0 auto; }
+    h1 { color: #58a6ff; margin-bottom: 4px; }
+    h2 { color: #f0f6fc; border-bottom: 1px solid #30363d; padding-bottom: 6px; margin-top: 40px; }
+    h3 { color: #79c0ff; margin-top: 24px; }
+    .meta { color: #8b949e; font-size: 0.85rem; margin-bottom: 32px; }
+    pre.threshold {
+        background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+        padding: 16px 20px; color: #79c0ff; font-size: 0.95rem; line-height: 1.7;
+    }
+    table { border-collapse: collapse; width: 100%; margin-top: 12px; font-size: 0.88rem; }
+    th { background: #161b22; color: #79c0ff; padding: 8px 10px; text-align: left;
+         border-bottom: 1px solid #30363d; white-space: nowrap; }
+    tr:nth-child(even) { background: #111820; }
+    tr:nth-child(odd)  { background: #0d1117; }
+    td { padding: 6px 10px; border-bottom: 1px solid #21262d; white-space: nowrap; }
+    td.lbl { font-family: monospace; font-size: 0.86rem; color: #c9d1d9; }
+    td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    td.green { background: #0e2a1a; color: #3fb950; font-weight: bold; }
+    td.red   { background: #2a0e0e; color: #ff7b72; font-weight: bold; }
+    td.amber { color: #f5a623; }
+    td.na    { color: #6e7681; }
+    tr.sep td { background: #161b22 !important; padding: 3px 0; border: none; }
+    th.timing-group { text-align: center; border-left: 1px solid #30363d; }
+    th.num { text-align: right; }
+    .note { color: #8b949e; font-size: 0.82rem; margin-top: 6px; }
+    """
+
+    timing_th = (
+        '<th class="num">Min ms</th>'
+        '<th class="num">Max ms</th>'
+        '<th class="num">Avg ms</th>'
+        '<th class="num">Med ms</th>'
+        '<th class="num">P90 ms</th>'
+        '<th class="num">N</th>'
+    )
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>bambu-mcp smoke test report</title>
+<style>{css}</style>
+</head>
+<body>
+<h1>bambu-mcp smoke test report</h1>
+<div class="meta">
+  Generated: {generated_at} &nbsp;|&nbsp;
+  Printer: <code>{printer}</code> &nbsp;|&nbsp;
+  Default MAX_MCP_OUTPUT_TOKENS: <strong>{def_tokens:,}</strong>
+</div>
+
+<h2>MCP Response Threshold</h2>
+<pre class="threshold">Default MAX_MCP_OUTPUT_TOKENS = {def_tokens:,}  ×4 =  {def_threshold:,} chars   (current MCP limit)
+Ideal   MAX_MCP_OUTPUT_TOKENS = {ideal_tokens:,}  ×4 =  {ideal_threshold:,} chars   (driven by: {max_label})</pre>
+
+<h2>Pass 1 — Raw payload (no gzip)</h2>
+<p class="note">All 15 samples fetched raw. <em>Fits?</em> = payload ≤ {def_threshold:,} chars (MCP limit). Timing = client-side wall-clock including network + server + JSON parse.</p>
+<table>
+<thead><tr>
+  <th>Sample</th>
+  <th class="num">Raw chars</th>
+  <th>Fits?</th>
+  {timing_th}
+</tr></thead>
+<tbody>
+{pass1_rows()}
+</tbody>
+</table>
+
+<h2>Pass 2 — Gzip payload</h2>
+<p class="note">Same 15 samples with <code>compress_if_large()</code> applied. <em>Ratio</em> = compressed / raw (lower = better compression). <em>Fits?</em> = compressed payload ≤ {def_threshold:,} chars.</p>
+<table>
+<thead><tr>
+  <th>Sample</th>
+  <th class="num">Raw chars</th>
+  <th class="num">Comp chars</th>
+  <th class="num">Ratio</th>
+  <th>Fits?</th>
+  {timing_th}
+</tr></thead>
+<tbody>
+{pass2_rows()}
+</tbody>
+</table>
+
+<h2>Pass 3 — HTTP fallback (no MCP size limit)</h2>
+<p class="note">HTTP <code>GET</code> direct — no MCP truncation applies. <em>Valid?</em> = HTTP 200 + well-formed payload. All samples should always be valid.</p>
+<table>
+<thead><tr>
+  <th>Sample</th>
+  <th class="num">HTTP chars (no limit)</th>
+  <th>Valid?</th>
+  {timing_th}
+</tr></thead>
+<tbody>
+{pass3_rows()}
+</tbody>
+</table>
+
+<h2>Pass 4 — Ideal token threshold validation</h2>
+<p class="note">Using ideal MAX_MCP_OUTPUT_TOKENS = <strong>{ideal_tokens:,}</strong> (×4 = {ideal_threshold:,} chars). All 15 samples should fit at this threshold. No fresh calls — char counts from Pass 1.</p>
+<table>
+<thead><tr>
+  <th>Sample</th>
+  <th class="num">Chars (from Pass 1)</th>
+  <th>Fits at ideal?</th>
+</tr></thead>
+<tbody>
+{pass4_rows()}
+</tbody>
+</table>
+
+</body>
+</html>"""
+
+    with open(html_path, "w", encoding="utf-8") as fh:
+        fh.write(html)
+    return html_path
 
 
 def main():
@@ -979,6 +1337,8 @@ def main():
     parser.add_argument("--no-api", action="store_true", help="Skip live API tests")
     parser.add_argument("--printer", default=None, help="Printer name for per-printer API tests")
     parser.add_argument("--base-url", default=None, help="Override API base URL")
+    parser.add_argument("--json-output", default=None, metavar="PATH",
+                        help="Write structured test results to PATH (JSON); also generates HTML report")
     args = parser.parse_args()
 
     # Make sure we can import project modules
@@ -993,6 +1353,8 @@ def main():
         test_compression_envelope_limits()
         test_compression_fallback_docs()
 
+    raw_r = gzip_r = fallback_r = ideal_r = {}
+
     if not args.no_api:
         base_url = args.base_url
         if not base_url:
@@ -1006,13 +1368,35 @@ def main():
         if base_url:
             test_api(base_url, args.printer)
             if args.printer:
-                raw = test_payload_raw(base_url, args.printer)
-                test_payload_gzip(base_url, args.printer)
-                test_payload_fallback(base_url, args.printer)
-                test_payload_ideal_tokens(base_url, args.printer, raw)
+                if _check_default_tokens():
+                    raw_r = test_payload_raw(base_url, args.printer)
+                    gzip_r = test_payload_gzip(base_url, args.printer)
+                    fallback_r = test_payload_fallback(base_url, args.printer)
+                    ideal_r = test_payload_ideal_tokens(base_url, args.printer, raw_r)
+                else:
+                    skip("payload passes 1-4", "MAX_MCP_OUTPUT_TOKENS is not at default — see failure above")
             else:
                 skip("payload passes 1-4", "no printer name (pass --printer NAME)")
             test_openapi_methods(base_url)
+
+    if args.json_output and (raw_r or gzip_r or fallback_r or ideal_r):
+        import subprocess
+        meta = {
+            "printer": args.printer,
+            "base_url": args.base_url,
+            "default_tokens": _DEFAULT_MCP_TOKENS,
+            "default_threshold": _MCP_THRESHOLD,
+        }
+        try:
+            import subprocess as _sp
+            path = _write_results_json(args.json_output, meta, raw_r, gzip_r, fallback_r, ideal_r)
+            html_path = path.replace(".json", ".html") if path.endswith(".json") else path + ".html"
+            _generate_html_report(path, html_path)
+            print(f"\n  📄  Results JSON : {path}")
+            print(f"  📊  HTML report  : {html_path}")
+            _sp.run(["open", html_path], check=False)
+        except Exception as e:
+            print(f"\n  ⚠️  Report generation failed: {e}")
 
     print(f"\n{'─' * 60}")
     if failures:
