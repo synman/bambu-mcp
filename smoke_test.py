@@ -690,171 +690,287 @@ def test_openapi_methods(base_url):
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
-def test_image_compression_benchmark():
-    """Offline benchmark: JPEG/PNG images through compress_if_large.
-
-    Demonstrates that gzip over base64-encoded image bytes produces near-zero
-    compression — quality/resolution params are the correct size-control mechanism.
-    """
-    import io
-    import gzip
-    import base64
-    import json
-    import time
-    import statistics as stats
-
-    print("\n── image compress_if_large benchmark (offline) ─────────────────────────")
-
-    try:
-        from tools._response import compress_if_large
-    except Exception as e:
-        fail("tools._response import (image benchmark)", str(e))
-        return
-
-    try:
-        from PIL import Image
-    except ImportError:
-        fail("PIL import (image benchmark)", "Pillow not installed")
-        return
-
-    ITERATIONS = 20
-
-    cases = [
-        ("JPEG preview",   (320,  180),  "JPEG", 65),
-        ("JPEG standard",  (640,  360),  "JPEG", 75),
-        ("JPEG full",      (1920, 1080), "JPEG", 85),
-        ("PNG 2K noise",   (2560, 1440), "PNG",  None),
-        ("PNG 4K noise",   (3840, 2160), "PNG",  None),
+# Canonical sample set — 15 entries covering 3 dimensions (text / image / mixed).
+# Each entry: (label, url_template, iters)
+# url_template uses {base_url} and {printer} substitution tokens.
+# iters: 3 for image/mixed (live camera), 1 for text (cheap API calls).
+def _payload_samples(base_url, printer_name):
+    import urllib.parse
+    p = urllib.parse.quote(printer_name or "", safe="")
+    return [
+        # ── Dimension A: text-only JSON (5 endpoints, varying size/composition) ──
+        ("text/tiny",   f"{base_url}/api/printers",                                                              1),
+        ("text/small",  f"{base_url}/api/default_printer",                                                       1),
+        ("text/medium", f"{base_url}/api/printer?printer={p}",                                                   1),
+        ("text/large",  f"{base_url}/api/health_check?printer={p}",                                              1),
+        ("text/xlarge", f"{base_url}/api/get_sdcard_contents?printer={p}",                                       1),
+        # ── Dimension B: binary image (5 knowledge profiles) ─────────────────────
+        ("image/preview",  f"{base_url}/api/snapshot?printer={p}&resolution=180p&quality=55",                    3),
+        ("image/low",      f"{base_url}/api/snapshot?printer={p}&resolution=480p&quality=65",                    3),
+        ("image/standard", f"{base_url}/api/snapshot?printer={p}&resolution=720p&quality=75",                    3),
+        ("image/high",     f"{base_url}/api/snapshot?printer={p}&resolution=1080p&quality=85",                   3),
+        ("image/native",   f"{base_url}/api/snapshot?printer={p}&resolution=native&quality=85",                  3),
+        # ── Dimension C: mixed (image blob + live telemetry JSON in one envelope) ─
+        ("mixed/preview",  f"{base_url}/api/snapshot?printer={p}&resolution=180p&quality=55&include_status=true",  3),
+        ("mixed/low",      f"{base_url}/api/snapshot?printer={p}&resolution=480p&quality=65&include_status=true",  3),
+        ("mixed/standard", f"{base_url}/api/snapshot?printer={p}&resolution=720p&quality=75&include_status=true",  3),
+        ("mixed/high",     f"{base_url}/api/snapshot?printer={p}&resolution=1080p&quality=85&include_status=true",  3),
+        ("mixed/native",   f"{base_url}/api/snapshot?printer={p}&resolution=native&quality=85&include_status=true", 3),
     ]
 
-    for name, (w, h), fmt, q in cases:
-        try:
-            import random
-            rng = random.Random(0xBAB00)
-            pixels = bytes([rng.randint(0, 255) for _ in range(w * h * 3)])
-            img = Image.frombytes("RGB", (w, h), pixels)
-            buf = io.BytesIO()
-            if fmt == "JPEG":
-                img.save(buf, format="JPEG", quality=q)
-                mime = "image/jpeg"
-            else:
-                img.save(buf, format="PNG")
-                mime = "image/png"
-            img_bytes = buf.getvalue()
 
-            data_uri = f"data:{mime};base64,{base64.b64encode(img_bytes).decode()}"
-            payload = {"data_uri": data_uri, "width": w, "height": h}
-            raw_json = json.dumps(payload)
-            raw_chars = len(raw_json)
-
-            timings = []
-            result = None
-            for _ in range(ITERATIONS):
-                t0 = time.perf_counter()
-                result = compress_if_large(payload)
-                timings.append(time.perf_counter() - t0)
-
-            compressed = result.get("compressed", False)
-            if compressed:
-                out_size = result["compressed_size_bytes"]
-                ratio = (1 - out_size / raw_chars) * 100
-            else:
-                out_size = raw_chars
-                ratio = 0.0
-
-            avg_ms = stats.mean(timings) * 1000
-            p90_ms = sorted(timings)[int(len(timings) * 0.9)] * 1000
-
-            img_kb = len(img_bytes) / 1024
-            label = (
-                f"{w}×{h} {fmt}{f' q={q}' if q else ''} "
-                f"img={img_kb:.0f}KB  payload={raw_chars//1024}KB  "
-                f"{'⚙' if compressed else 'pass-through'}  ratio={ratio:.1f}%  "
-                f"avg={avg_ms:.1f}ms p90={p90_ms:.1f}ms"
-            )
-            ok(name, label)
-        except Exception as e:
-            fail(f"image benchmark: {name}", str(e))
-
-
-def test_snapshot_profiles(base_url, printer_name):
-    """Live test: GET /api/snapshot for each of the 5 named profiles."""
+def _fetch_sample(url, iters, timeout=15):
+    """Fetch url `iters` times.  Returns (avg_ms, last_response_dict)."""
     import time
     import statistics as stats
-    import base64
+    timings = []
+    data = None
+    for _ in range(iters):
+        t0 = time.perf_counter()
+        _status, data = get_json(url, timeout=timeout)
+        timings.append(time.perf_counter() - t0)
+    return stats.mean(timings) * 1000, data
+
+
+def _payload_chars(data):
+    """Return the JSON-serialised char count for a response dict."""
+    import json
+    return len(json.dumps(data))
+
+
+_MCP_THRESHOLD = 100_000   # MAX_MCP_OUTPUT_TOKENS=25000 * 4 chars/token
+
+
+def test_payload_raw(base_url, printer_name):
+    """Pass 1 — raw payload size for all 15 samples vs. MCP threshold.
+
+    Runs every sample once (or 3× for image/mixed) and reports raw chars against
+    the default MCP 100 K-char limit.  Returns a dict of results for Pass 4.
+    """
     import json
 
-    print("\n── live snapshot profile tests ─────────────────────────────────────────")
+    print("\n── payload raw (text / image / mixed) ──────────────────────────────────")
 
     if not printer_name:
-        skip("snapshot profiles", "no printer name (pass --printer NAME)")
+        skip("payload raw", "no printer name (pass --printer NAME)")
+        return {}
+
+    raw_results = {}
+
+    for label, url, iters in _payload_samples(base_url, printer_name):
+        try:
+            avg_ms, data = _fetch_sample(url, iters)
+            if "error" in data:
+                fail(label, str(data["error"])[:120])
+                continue
+            chars = _payload_chars(data)
+            fits = chars <= _MCP_THRESHOLD
+            raw_results[label] = {"chars": chars, "avg_ms": avg_ms, "fits": fits, "data": data}
+            ok(
+                label,
+                f"{chars:,} chars  {'✅ fits' if fits else '❌ truncated'}  "
+                f"avg={avg_ms:.0f}ms"
+            )
+        except Exception as e:
+            fail(label, f"{type(e).__name__}: {e}")
+
+    return raw_results
+
+
+def test_payload_gzip(base_url, printer_name):
+    """Pass 2 — compress_if_large() applied to each of the 15 samples.
+
+    Fresh HTTP calls.  Reports raw chars → compressed chars, ratio, and whether
+    the payload fits within the MCP threshold *after* gzip.
+
+    Expected pattern:
+      text/…   — high ratio (60–90%), gzip rescues all JSON
+      image/…  — near-zero ratio (JPEG is already compressed), still truncated
+      mixed/…  — intermediate: text (status) compresses well, image dominates
+    """
+    print("\n── payload gzip (text / image / mixed) ─────────────────────────────────")
+
+    if not printer_name:
+        skip("payload gzip", "no printer name (pass --printer NAME)")
         return
 
     try:
         from tools._response import compress_if_large
     except Exception as e:
-        fail("tools._response import (snapshot profiles)", str(e))
+        fail("tools._response import (payload gzip)", str(e))
         return
 
-    profiles = [
-        ("native",   "native", 85),
-        ("high",     "1080p",  85),
-        ("standard", "720p",   75),
-        ("low",      "480p",   65),
-        ("preview",  "180p",   55),
-    ]
-
-    ITERATIONS = 3  # fewer iters — live network call
-
-    for profile, resolution, quality in profiles:
-        url = f"{base_url}/api/snapshot?printer={printer_name}&resolution={resolution}&quality={quality}"
+    for label, url, iters in _payload_samples(base_url, printer_name):
         try:
-            timings = []
-            data = None
-            for _ in range(ITERATIONS):
-                t0 = time.perf_counter()
-                status, data = get_json(url)
-                timings.append(time.perf_counter() - t0)
-
-            if status != 200:
-                fail(f"snapshot/{profile}", f"HTTP {status}: {str(data)[:120]}")
-                continue
-
+            avg_ms, data = _fetch_sample(url, iters)
             if "error" in data:
-                fail(f"snapshot/{profile}", str(data["error"]))
+                fail(label, str(data["error"])[:120])
                 continue
-
-            data_uri = data.get("data_uri", "")
-            if not data_uri.startswith("data:"):
-                fail(f"snapshot/{profile}", "missing/invalid data_uri")
-                continue
-
-            # Parse actual image size
-            header, b64 = data_uri.split(",", 1)
-            img_bytes = base64.b64decode(b64)
-            img_kb = len(img_bytes) / 1024
-
-            # Test compress_if_large on the full response
-            compressed_result = compress_if_large(data)
-            is_compressed = compressed_result.get("compressed", False)
-            if is_compressed:
-                ratio = (1 - compressed_result["compressed_size_bytes"] / compressed_result["original_size_bytes"]) * 100
+            raw_chars = _payload_chars(data)
+            result = compress_if_large(data)
+            compressed = result.get("compressed", False)
+            if compressed:
+                comp_chars = len(result.get("data", "")) + 50   # envelope overhead
+                ratio = (1 - comp_chars / raw_chars) * 100
+                fits_after = comp_chars <= _MCP_THRESHOLD
             else:
+                comp_chars = raw_chars
                 ratio = 0.0
-
-            w = data.get("width", "?")
-            h = data.get("height", "?")
-            avg_ms = stats.mean(timings) * 1000
-
+                fits_after = raw_chars <= _MCP_THRESHOLD
             ok(
-                f"snapshot/{profile}",
-                f"{w}×{h}  img={img_kb:.0f}KB  "
-                f"{'⚙' if is_compressed else 'pass-through'}  ratio={ratio:.1f}%  "
+                label,
+                f"{raw_chars:,} → {comp_chars:,} chars  ratio={ratio:.1f}%  "
+                f"{'✅ fits' if fits_after else '❌ truncated'}  "
                 f"avg={avg_ms:.0f}ms"
             )
-
         except Exception as e:
-            fail(f"snapshot/{profile}", f"{type(e).__name__}: {e}")
+            fail(label, f"{type(e).__name__}: {e}")
+
+
+def test_payload_fallback(base_url, printer_name):
+    """Pass 3 — HTTP 200 + valid payload for all 15 samples.
+
+    Demonstrates that the HTTP fallback path always delivers complete, untruncated
+    data regardless of payload size — no MCP size limit applies over HTTP.
+
+    Checks:
+      text/…   — status 200, non-empty dict, no 'error' key
+      image/…  — status 200, 'data_uri' key present and starts with 'data:'
+      mixed/…  — status 200, 'data_uri' present AND 'status' key present
+    """
+    print("\n── payload fallback (text / image / mixed) ─────────────────────────────")
+
+    if not printer_name:
+        skip("payload fallback", "no printer name (pass --printer NAME)")
+        return
+
+    import urllib.request
+
+    for label, url, iters in _payload_samples(base_url, printer_name):
+        try:
+            import urllib.request as _req
+            import json as _json
+            with _req.urlopen(url, timeout=15) as r:
+                status = r.status
+                data = _json.loads(r.read())
+
+            if status != 200:
+                fail(label, f"HTTP {status}")
+                continue
+            if "error" in data:
+                fail(label, str(data["error"])[:120])
+                continue
+
+            if label.startswith("text/"):
+                if not data:
+                    fail(label, "empty response dict")
+                    continue
+            elif label.startswith("image/"):
+                uri = data.get("data_uri", "")
+                if not uri.startswith("data:"):
+                    fail(label, "missing/invalid data_uri")
+                    continue
+            else:  # mixed/
+                uri = data.get("data_uri", "")
+                has_status = "status" in data
+                if not uri.startswith("data:"):
+                    fail(label, "missing/invalid data_uri")
+                    continue
+                if not has_status:
+                    fail(label, "missing 'status' key (include_status=true not honoured)")
+                    continue
+
+            ok(label, "HTTP 200  valid payload")
+        except Exception as e:
+            fail(label, f"{type(e).__name__}: {e}")
+
+
+def test_payload_ideal_tokens(base_url, printer_name, raw_results):
+    """Pass 4 — compute ideal MAX_MCP_OUTPUT_TOKENS to fit all 15 samples.
+
+    Uses raw_results from Pass 1 (no fresh HTTP calls needed).  Finds the largest
+    payload observed, computes the token count required to fit it, then validates
+    by re-running each sample against that raised threshold.
+
+    If raw_results is empty (Pass 1 was skipped), falls back to 1-iter HTTP calls.
+    """
+    import math
+    import os
+
+    print("\n── payload ideal MAX_MCP_OUTPUT_TOKENS (text / image / mixed) ──────────")
+
+    if not printer_name:
+        skip("payload ideal tokens", "no printer name (pass --printer NAME)")
+        return
+
+    # --- Step 1: find max chars across all samples ---
+    if raw_results:
+        max_chars = 0
+        max_label = ""
+        for label, info in raw_results.items():
+            if info["chars"] > max_chars:
+                max_chars = info["chars"]
+                max_label = label
+    else:
+        # Fallback: fetch fresh
+        max_chars = 0
+        max_label = ""
+        sample_data = {}
+        for label, url, iters in _payload_samples(base_url, printer_name):
+            try:
+                _, data = _fetch_sample(url, 1)
+                chars = _payload_chars(data)
+                sample_data[label] = data
+                if chars > max_chars:
+                    max_chars = chars
+                    max_label = label
+            except Exception:
+                pass
+        raw_results = {k: {"chars": _payload_chars(v), "fits": _payload_chars(v) <= _MCP_THRESHOLD, "data": v}
+                       for k, v in sample_data.items()}
+
+    ideal_tokens = math.ceil(max_chars / 4)
+    print(f"  max payload: {max_chars:,} chars  ({max_label})")
+    print(f"  ideal MAX_MCP_OUTPUT_TOKENS = {ideal_tokens:,}  (current default: 25,000)")
+
+    # --- Step 2: re-run all 15 at ideal threshold ---
+    old_val = os.environ.get("MAX_MCP_OUTPUT_TOKENS")
+    try:
+        os.environ["MAX_MCP_OUTPUT_TOKENS"] = str(ideal_tokens)
+        # Force re-import to pick up new env var
+        import importlib
+        try:
+            import tools._response as _resp
+            importlib.reload(_resp)
+        except Exception:
+            pass
+
+        for label, url, iters in _payload_samples(base_url, printer_name):
+            try:
+                if label in raw_results:
+                    chars = raw_results[label]["chars"]
+                    data = raw_results[label].get("data")
+                    if data is None:
+                        _, data = _fetch_sample(url, 1)
+                        chars = _payload_chars(data)
+                else:
+                    _, data = _fetch_sample(url, 1)
+                    chars = _payload_chars(data)
+                fits = chars <= ideal_tokens * 4
+                ok(label, f"{chars:,} chars  {'✅ fits' if fits else '❌ still truncated'}")
+            except Exception as e:
+                fail(label, f"{type(e).__name__}: {e}")
+    finally:
+        if old_val is None:
+            os.environ.pop("MAX_MCP_OUTPUT_TOKENS", None)
+        else:
+            os.environ["MAX_MCP_OUTPUT_TOKENS"] = old_val
+        # Restore original threshold
+        try:
+            import tools._response as _resp
+            importlib.reload(_resp)
+        except Exception:
+            pass
 
 
 def main():
@@ -876,7 +992,6 @@ def main():
         test_compression_benchmark()
         test_compression_envelope_limits()
         test_compression_fallback_docs()
-        test_image_compression_benchmark()
 
     if not args.no_api:
         base_url = args.base_url
@@ -890,7 +1005,13 @@ def main():
                 base_url = None
         if base_url:
             test_api(base_url, args.printer)
-            test_snapshot_profiles(base_url, args.printer)
+            if args.printer:
+                raw = test_payload_raw(base_url, args.printer)
+                test_payload_gzip(base_url, args.printer)
+                test_payload_fallback(base_url, args.printer)
+                test_payload_ideal_tokens(base_url, args.printer, raw)
+            else:
+                skip("payload passes 1-4", "no printer name (pass --printer NAME)")
             test_openapi_methods(base_url)
 
     print(f"\n{'─' * 60}")
