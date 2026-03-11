@@ -747,7 +747,7 @@ class _MJPEGHTTPServer(ThreadingHTTPServer):
         self._fps_lock = threading.Lock()
         self._fps_times: collections.deque[float] = collections.deque()
         self._fps_last_frame_id: int = -1
-        self._fps_history: collections.deque[float] = collections.deque(maxlen=60)
+        self._fps_history: collections.deque[float] = collections.deque([fps_cap] * 60, maxlen=60)
         log.debug("_MJPEGHTTPServer.__init__: ready on port %s", addr[1])
 
 
