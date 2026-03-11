@@ -322,13 +322,24 @@ atexit.register(_shutdown)
 # ── Main ───────────────────────────────────────────────────────────────────────
 def main() -> None:
     """Entry point for the bambu-mcp CLI script."""
-    _startup()
     transport = "stdio"
     for i, arg in enumerate(sys.argv[1:], 1):
         if arg in ("--transport", "-t") and i < len(sys.argv) - 1:
             transport = sys.argv[i + 1]
         elif arg in ("sse", "stdio", "streamable-http"):
             transport = arg
+
+    if transport == "stdio":
+        # Run startup in a background thread so mcp.run() can respond to the
+        # MCP initialize request immediately. Copilot CLI has a 60s init timeout;
+        # printer SSL handshakes block startup long enough to exceed it. Tools
+        # are available instantly — printer sessions connect in the background
+        # and become fully functional once established.
+        import threading
+        threading.Thread(target=_startup, daemon=True, name="bambu-mcp-startup").start()
+    else:
+        _startup()
+
     log.info(f"Starting Bambu Lab MCP server (transport: {transport})")
     mcp.run(transport=transport)
 
