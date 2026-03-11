@@ -1228,7 +1228,7 @@ The agent must attempt full autonomy. When a step cannot be made autonomous (tec
 1. Apply the minimum effective change (KISS — no speculative scope)
 2. `python -m py_compile` the edited file immediately — before doing anything else
 3. Deploy the fix to the live system before running any test phases:
-   - Server-side change (MCP tool, knowledge module, api_server.py): `mcp-reload`, wait for `-i done`, verify tools are live
+   - Server-side change (any file imported by `server.py` — MCP tools, knowledge modules, `api_server.py`, `camera/mjpeg_server.py`, etc.): `mcp-reload`, wait for `-i done`, verify tools are live. **`stop_stream`/`start_stream` does NOT deploy changes to `camera/mjpeg_server.py`** — stream threads run inside the MCP server process; only a full process restart reloads the module. See *In-Memory Cache Trap* in global rules.
    - Library dependency change (bpm): `pip install --force-reinstall ~/bambu-printer-manager` in the mcp venv (`.venv/`), then `mcp-reload`
    - Both may apply if a bpm change also requires a knowledge update
 
