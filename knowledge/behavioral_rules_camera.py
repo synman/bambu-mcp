@@ -93,8 +93,7 @@ the following named components (polls `/status` every 2 s):
 - Numeric FPS readout + 5-column animated bar graph (green ≥80 % cap / amber ≥40 % / red)
 
 **Bottom image panels** (appear only when a print job is active):
-- **Thumbnail panel** (bottom-left): isometric 3D render of the current job's plate
-- **Layout panel** (bottom-right): annotated top-down plate layout image with bounding boxes
+- **PLATE PREVIEW panel** (bottom-left): side-by-side isometric thumbnail (left) + annotated top-down plate layout (right); hidden when neither image is available
 
 **Right-side JOB HEALTH panel** (`#health-panel`, position:fixed top-right; appears when a print
 is active — auto-expands on RUNNING/PAUSE/FAILED/FINISH, collapses on IDLE; polls `/job_state`

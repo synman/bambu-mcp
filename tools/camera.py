@@ -418,8 +418,7 @@ def start_stream(name: str, port: int | None = None) -> dict:
       - Numeric FPS readout + 5-column animated bar graph (green/amber/red by rate)
 
     Bottom image panels (appear when a print job is active):
-      - Thumbnail panel (bottom-left): isometric 3D render of the current job
-      - Layout panel (bottom-right): annotated top-down plate layout image
+      - PLATE PREVIEW panel (bottom-left): side-by-side isometric thumbnail (left) + plate layout (right)
 
     Right-side JOB HEALTH panel (appears when a print is active):
       - Verdict badge: CLEAN / WARNING / CRITICAL / STANDBY (color-coded composite score)

@@ -63,8 +63,7 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
   transition:max-width .35s cubic-bezier(.17,.67,.36,1.12),
              max-height .35s cubic-bezier(.17,.67,.36,1.12)}
 .img-panel.expanded img{max-width:570px;max-height:570px}
-#thumb-wrap{left:16px}
-#layout-wrap{right:16px}
+#preview-wrap{left:16px}
 #hp-sec-anomaly{overflow:hidden;transition:max-height .35s ease}
 #hp-sec-anomaly img{display:block;width:100%;aspect-ratio:1/1;border-radius:4px;opacity:.92;margin-top:4px}
 #health-panel.hp-wide #hp-sec-anomaly img{width:100%;object-fit:fill}
@@ -232,15 +231,10 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
     </div>
   </div>
 </div>
-<div id="thumb-wrap" class="img-panel hidden">
-  <div class="img-panel-hdr" onclick="imgPanelHdrToggle(this,'thumb-body')">3D PREVIEW<span class="hdr-chev open">▲</span></div>
-  <div class="img-panel-body" id="thumb-body">
-    <img id="thumb-img" src="" alt="3D preview" onclick="imgPanelToggle(this.closest('.img-panel'))">
-  </div>
-</div>
-<div id="layout-wrap" class="img-panel hidden">
-  <div class="img-panel-hdr" onclick="imgPanelHdrToggle(this,'layout-body')">PLATE LAYOUT<span class="hdr-chev open">▲</span></div>
-  <div class="img-panel-body" id="layout-body">
+<div id="preview-wrap" class="img-panel hidden">
+  <div class="img-panel-hdr" onclick="imgPanelHdrToggle(this,'preview-body')">PLATE PREVIEW<span class="hdr-chev open">▲</span></div>
+  <div class="img-panel-body" id="preview-body" style="display:flex;gap:6px;align-items:flex-start">
+    <img id="thumb-img" src="" alt="Isometric view" onclick="imgPanelToggle(this.closest('.img-panel'))">
     <img id="layout-img" src="" alt="Plate layout" onclick="imgPanelToggle(this.closest('.img-panel'))">
   </div>
 </div>
@@ -446,20 +440,23 @@ function update(d){
 }
 function refreshImages(){
   var t=Date.now();
-  var tw=document.getElementById('thumb-wrap');
-  var lw=document.getElementById('layout-wrap');
+  var pw=document.getElementById('preview-wrap');
+  var _thumbOk=false,_layoutOk=false;
+  function _updatePreview(){if(_thumbOk||_layoutOk)pw.classList.remove('hidden');else pw.classList.add('hidden');}
   fetch('/thumbnail?t='+t).then(function(r){
     if(r.ok&&r.headers.get('Content-Type').indexOf('image')>=0){
       document.getElementById('thumb-img').src='/thumbnail?t='+t;
-      tw.classList.remove('hidden');
-    } else { tw.classList.add('hidden'); }
-  }).catch(function(){tw.classList.add('hidden');});
+      _thumbOk=true;
+    }
+    _updatePreview();
+  }).catch(function(){_updatePreview();});
   fetch('/layout?t='+t).then(function(r){
     if(r.ok&&r.headers.get('Content-Type').indexOf('image')>=0){
       document.getElementById('layout-img').src='/layout?t='+t;
-      lw.classList.remove('hidden');
-    } else { lw.classList.add('hidden'); }
-  }).catch(function(){lw.classList.add('hidden');});
+      _layoutOk=true;
+    }
+    _updatePreview();
+  }).catch(function(){_updatePreview();});
   fetch('/factors_radar?t='+t).then(function(r){
     if(r.ok&&r.status!==204&&r.headers.get('Content-Type')&&r.headers.get('Content-Type').indexOf('image')>=0){
       document.getElementById('hp-radar-img').src='/factors_radar?t='+t;
