@@ -646,10 +646,13 @@ function _hpPoll(){
         ctx.strokeStyle=lineColor;
         ctx.lineWidth=1.5;
         ctx.beginPath();
+        var inLine=false;
         for(var i=0;i<hist.length;i++){
           var x=i/(hist.length-1)*cv.width;
-          var y=cv.height-(hist[i]/maxV)*(cv.height-2)+1;
-          if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+          var v=hist[i];
+          if(v<0.5){inLine=false;continue;}
+          var y=cv.height-(v/maxV)*(cv.height-2)+1;
+          if(!inLine){ctx.moveTo(x,y);inLine=true;}else ctx.lineTo(x,y);
         }
         ctx.stroke();
       }
