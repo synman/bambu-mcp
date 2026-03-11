@@ -31,6 +31,10 @@ def get_server_info() -> dict:
     Use this tool to discover the actual REST API port at runtime before constructing
     an HTTP request URL.  The REST API base URL is: http://localhost:{api_port}/api
 
+    The server also registers a Zeroconf/mDNS service (`_bambu-mcp._tcp.local.`) at startup
+    so non-MCP clients can discover the port without calling this tool. See
+    get_knowledge_topic('http_api/system') for the TXT record schema.
+
     Returns:
         api_port      — TCP port the REST API is currently bound to (0 if not running)
         api_url       — convenience base URL: http://localhost:{api_port}/api

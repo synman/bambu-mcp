@@ -154,7 +154,7 @@ def get_knowledge_topic(topic: str) -> dict | str:
     - http_api/climate — temperature, fan, and lighting REST routes
     - http_api/hardware — nozzle config and AI vision detector REST routes
     - http_api/files — SD card file management REST routes
-    - http_api/system — system, diagnostics, and API documentation REST routes
+    - http_api/system — system, diagnostics, API documentation REST routes, and mDNS/Zeroconf service discovery
     """
     log.debug("get_knowledge_topic: topic=%s", topic)
     if topic not in _KNOWN_TOPICS:
