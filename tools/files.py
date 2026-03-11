@@ -342,6 +342,9 @@ def get_plate_thumbnail(
     or open_plate_layout() for an annotated single-plate view. Returning a raw
     data_uri to a human in a chat or terminal context is never the right choice.
 
+    For print_file pre-flight / print job prep, always use open_plate_viewer() —
+    never this tool. See print_file STEP 1 for the correct sequence.
+
     Note: this tool returns a raw base64 data URI which may exceed the CLI inline
     display limit. If output is truncated, call get_knowledge_topic('http_api/files')
     for the equivalent HTTP endpoints, then use bash/curl to retrieve the data
@@ -384,6 +387,9 @@ def get_plate_topview(
     the top view", "let me see it" — call open_plate_viewer() to show all plates
     or open_plate_layout() for an annotated single-plate view. Returning a raw
     data_uri to a human in a chat or terminal context is never the right choice.
+
+    For print_file pre-flight / print job prep, always use open_plate_viewer() —
+    never this tool. See print_file STEP 1 for the correct sequence.
 
     Note: this tool returns a raw base64 data URI which may exceed the CLI inline
     display limit. If output is truncated, call get_knowledge_topic('http_api/files')
@@ -622,6 +628,9 @@ def print_file(
     STEP 1 — Gather everything first (no user interaction yet):
       Call get_project_info(), get_ams_units(), get_spool_info() to collect all data
       needed to build the complete summary before asking the user anything.
+      To show plate visuals to the user, call open_plate_viewer(name, file_path) — do NOT
+      call get_plate_thumbnail() or get_plate_topview() and embed the data_uri in the
+      response. Humans cannot see raw base64 in a terminal or chat context.
       Also look up stored preferences for each sticky field using user_prefs:
         from user_prefs import get_pref
         bed_leveling     = get_pref(f"{name}:bed_leveling",     True)

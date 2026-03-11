@@ -162,6 +162,7 @@ the right choice.
 | "show me the camera", "let me watch", "open the stream" | `view_stream()` |
 | "show me the print health", "show me what the AI sees", "open the composite" | `open_job_state()` |
 | "show me the plate", "open the project viewer" | `open_plate_viewer()` — opens a browser with **all plates** (isometric 3D + top-down per plate) |
+| `print_file` pre-flight / "prep this job", "what's in the file?" | `open_plate_viewer()` — always use this during print job prep; never call `get_plate_thumbnail()` or embed a data_uri |
 | "show me just plate N", "annotated layout for plate N" | `open_plate_layout(plate_num=N)` — opens a browser with the annotated top-down view for **one plate** |
 | "is there a 3D view?", "show me the isometric render" | `open_plate_viewer()` — the isometric thumbnails are in the all-plates viewer |
 | "what does it look like?", "describe it", "is anything wrong?" | `get_snapshot()`, `analyze_active_job()` — AI analyzes |
