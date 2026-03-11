@@ -2371,6 +2371,173 @@ def _build_app():
             log.error("analyze_active_job: error: %s", e, exc_info=True)
             return jsonify({"status": "error", "message": str(e)}), 500
 
+    # ── camera / stream routes ─────────────────────────────────────────────────
+
+    @app.route("/api/snapshot")
+    def snapshot():
+        """Return a single still frame from the printer camera.
+
+        Query parameters:
+          printer        — printer name (required)
+          resolution     — "native" | "1080p" | "720p" | "480p" | "360p" | "180p" (default "native")
+          quality        — JPEG quality integer 1–100 (default 85)
+          include_status — "true" to include live print telemetry in the response
+
+        Named profiles (agent guidance):
+          native   resolution=native  quality=85  ~1–4 MB/frame  Max fidelity
+          high     resolution=1080p   quality=85  ~500KB–2MB     Anomaly detection
+          standard resolution=720p    quality=75  ~200–400KB     Routine analysis ⚠️ default for agents
+          low      resolution=480p    quality=65  ~80–150KB      Quick status checks
+          preview  resolution=180p    quality=55  ~20–40KB       Thumbnails
+
+        ⚠️ native resolution in polling loops burns significant tokens (4 MB/call).
+        """
+        log.debug("snapshot: called")
+        import importlib
+        try:
+            p, printer_name = _get_printer(_rargs())
+            if p is None:
+                return jsonify({"error": "not_connected"}), 400
+            resolution     = _rargs().get("resolution", "native")
+            quality        = int(_rargs().get("quality", "85"))
+            include_status = _rargs().get("include_status", "false").lower() == "true"
+            cam = importlib.import_module("tools.camera")
+            result = cam.get_snapshot(printer_name, resolution=resolution, quality=quality, include_status=include_status)
+            if "error" in result:
+                return jsonify(result), 400
+            return jsonify(result)
+        except Exception as e:
+            log.error("snapshot: error: %s", e, exc_info=True)
+            return jsonify({"status": "error", "message": str(e)}), 500
+
+    @app.route("/api/stream_url")
+    def stream_url():
+        """Return camera stream URL information for a printer.
+
+        Query parameters:
+          printer — printer name (required)
+
+        Returns:
+          protocol        — "rtsps", "tcp_tls", or "none"
+          rtsps_url       — RTSPS URL (password redacted), or null
+          local_mjpeg_url — base URL of running MJPEG server, or null
+          streaming       — bool: whether a stream server is currently active
+        """
+        log.debug("stream_url: called")
+        import importlib
+        try:
+            p, printer_name = _get_printer(_rargs())
+            if p is None:
+                return jsonify({"error": "not_connected"}), 400
+            cam = importlib.import_module("tools.camera")
+            result = cam.get_stream_url(printer_name)
+            return jsonify(result)
+        except Exception as e:
+            log.error("stream_url: error: %s", e, exc_info=True)
+            return jsonify({"status": "error", "message": str(e)}), 500
+
+    @app.route("/api/start_stream", methods=["POST"])
+    def start_stream():
+        """⚠️ Start the local MJPEG camera stream server for a printer.
+
+        The server always runs at native resolution — per-client quality is applied
+        by the browser tab via URL params (use /api/view_stream for parameterized tabs).
+
+        Request body (JSON):
+          printer — printer name (required)
+          port    — optional preferred port integer
+
+        Returns:
+          url      — base stream URL http://localhost:{port}/
+          port     — allocated port number
+          protocol — "rtsps" or "tcp_tls"
+        """
+        log.debug("start_stream: called")
+        import importlib
+        try:
+            body = _rbody()
+            p, printer_name = _get_printer(body)
+            if p is None:
+                return jsonify({"error": "not_connected"}), 400
+            port = body.get("port")
+            cam = importlib.import_module("tools.camera")
+            result = cam.start_stream(printer_name, port=int(port) if port is not None else None)
+            if "error" in result:
+                return jsonify(result), 400
+            return jsonify(result)
+        except Exception as e:
+            log.error("start_stream: error: %s", e, exc_info=True)
+            return jsonify({"status": "error", "message": str(e)}), 500
+
+    @app.route("/api/stop_stream", methods=["POST"])
+    def stop_stream():
+        """⚠️ Stop the local MJPEG camera stream server for a printer.
+
+        Request body (JSON):
+          printer — printer name (required)
+
+        Returns:
+          stopped — bool: True if a server was running and has been stopped
+          name    — printer name
+        """
+        log.debug("stop_stream: called")
+        import importlib
+        try:
+            body = _rbody()
+            p, printer_name = _get_printer(body)
+            if p is None:
+                return jsonify({"error": "not_connected"}), 400
+            cam = importlib.import_module("tools.camera")
+            result = cam.stop_stream(printer_name)
+            return jsonify(result)
+        except Exception as e:
+            log.error("stop_stream: error: %s", e, exc_info=True)
+            return jsonify({"status": "error", "message": str(e)}), 500
+
+    @app.route("/api/view_stream", methods=["POST"])
+    def view_stream():
+        """⚠️ Start the MJPEG stream server (if not already running) and open a browser tab.
+
+        The tab opens at the requested resolution/quality via URL params. Multiple calls
+        with different settings open independent tabs on the same server port.
+
+        Request body (JSON):
+          printer    — printer name (required)
+          resolution — "native" | "1080p" | "720p" | "480p" | "360p" | "180p" (default "native")
+          quality    — JPEG quality integer 1–100 (default 85)
+
+        Named profiles (agent guidance):
+          native   resolution=native  quality=85  Max fidelity (default for streams)
+          high     resolution=1080p   quality=85  High detail
+          standard resolution=720p    quality=75  Good balance
+          low      resolution=480p    quality=65  Low bandwidth
+          preview  resolution=180p    quality=55  Minimal bandwidth
+
+        Returns:
+          url            — the parameterized URL opened in the browser
+          port           — stream server port
+          protocol       — "rtsps" or "tcp_tls"
+          opened         — bool: True if browser tab was opened
+          overlay_active — always True
+        """
+        log.debug("view_stream: called")
+        import importlib
+        try:
+            body = _rbody()
+            p, printer_name = _get_printer(body)
+            if p is None:
+                return jsonify({"error": "not_connected"}), 400
+            resolution = body.get("resolution", "native")
+            quality    = int(body.get("quality", 85))
+            cam = importlib.import_module("tools.camera")
+            result = cam.view_stream(printer_name, resolution=resolution, quality=quality)
+            if "error" in result:
+                return jsonify(result), 400
+            return jsonify(result)
+        except Exception as e:
+            log.error("view_stream: error: %s", e, exc_info=True)
+            return jsonify({"status": "error", "message": str(e)}), 500
+
     # ── error handler ─────────────────────────────────────────────────────────
 
     @app.route("/api/alerts", methods=["GET", "DELETE"])

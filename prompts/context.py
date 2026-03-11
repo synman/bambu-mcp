@@ -200,15 +200,20 @@ beyond the access_code already stored at add_printer() time.
 The MCP handles all streaming complexity internally. Two protocols are used:
 RTSPS (X1/H2D, port 322) and TCP+TLS binary (A1/P1, port 6000). You only use tools.
 
-- get_snapshot(name, quality="standard", include_status=False) — Capture a single still frame. Returns:
+- get_snapshot(name, resolution="native", quality=85, include_status=False) — Capture a single still frame. Returns:
                                data_uri   — complete data:image/jpeg;base64,... string
                                             Embed directly: ![snapshot]({data_uri})
                                             No decoding or saving needed.
                                width, height — frame dimensions in pixels
-                               quality    — tier used ("preview" ~5 KB / "standard" ~16 KB / "full" ~71 KB)
+                               resolution — resolution string used
+                               quality    — JPEG quality integer used
                                protocol   — "rtsps" or "tcp_tls"
                                timestamp  — ISO8601 capture time
                                status     — live print telemetry dict (only when include_status=True)
+                              resolution: "native"/"1080p"/"720p"/"480p"/"360p"/"180p"
+                              quality: JPEG int 1–100 (default 85)
+                              Named profiles: native(~4MB) / high(~1MB) / standard(720p,75,~300KB) /
+                              low(480p,65,~100KB) / preview(180p,55,~30KB). Default: standard for agents.
                               Best for: "show me what's printing", visual quality check,
                               passing image to AI vision. Does NOT start a background server.
 
@@ -216,7 +221,7 @@ RTSPS (X1/H2D, port 322) and TCP+TLS binary (A1/P1, port 6000). You only use too
                                Returns: rtsps_url (X1/H2D raw URL, open in VLC),
                                local_mjpeg_url (if server running), streaming (bool).
 
-- start_stream(name, port?) — Start a local MJPEG HTTP server. Returns:
+- start_stream(name, port?) — Start a local MJPEG HTTP server (always native resolution). Returns:
                                url  — http://localhost:{port}/ — open in any browser
                                port — allocated port (default: 8090+)
                                protocol — "rtsps" or "tcp_tls"
@@ -226,10 +231,12 @@ RTSPS (X1/H2D, port 322) and TCP+TLS binary (A1/P1, port 6000). You only use too
 - stop_stream(name)         — Stop the MJPEG server and disconnect from camera.
                                Returns: {stopped: bool, name: str}
 
-- view_stream(name)         — Start server (if needed) + open browser automatically.
+- view_stream(name, resolution="native", quality=85) — Start server + open browser tab at requested quality.
                                Returns: {url, port, protocol, opened: bool, overlay_active: bool}
-                              Uses webbrowser.open() — works on macOS, Linux, Windows.
+                              resolution/quality are per-client URL params — multiple tabs at different
+                              settings share one server port. Uses webbrowser.open() — macOS/Linux/Windows.
                               Preferred for "let me watch the print" / "open the camera".
+                              Profiles: native(85) / high(1080p,85) / standard(720p,75) / low(480p,65) / preview(180p,55).
                               overlay_active=True means stream includes live status + thumbnail overlays.
 
 Session-level operations: MQTT connection management, firmware version, telemetry history, and full state refresh. Rarely needed in normal operation. Some require user_permission=True.

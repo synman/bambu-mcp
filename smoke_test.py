@@ -29,8 +29,8 @@ SKIP = "\033[33m⊘\033[0m"
 failures = []
 
 
-def ok(label):
-    print(f"  {PASS}  {label}")
+def ok(label, detail=""):
+    print(f"  {PASS}  {label}" + (f"\n       {detail}" if detail else ""))
 
 
 def fail(label, detail=""):
@@ -690,6 +690,173 @@ def test_openapi_methods(base_url):
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
+def test_image_compression_benchmark():
+    """Offline benchmark: JPEG/PNG images through compress_if_large.
+
+    Demonstrates that gzip over base64-encoded image bytes produces near-zero
+    compression — quality/resolution params are the correct size-control mechanism.
+    """
+    import io
+    import gzip
+    import base64
+    import json
+    import time
+    import statistics as stats
+
+    print("\n── image compress_if_large benchmark (offline) ─────────────────────────")
+
+    try:
+        from tools._response import compress_if_large
+    except Exception as e:
+        fail("tools._response import (image benchmark)", str(e))
+        return
+
+    try:
+        from PIL import Image
+    except ImportError:
+        fail("PIL import (image benchmark)", "Pillow not installed")
+        return
+
+    ITERATIONS = 20
+
+    cases = [
+        ("JPEG preview",   (320,  180),  "JPEG", 65),
+        ("JPEG standard",  (640,  360),  "JPEG", 75),
+        ("JPEG full",      (1920, 1080), "JPEG", 85),
+        ("PNG 2K noise",   (2560, 1440), "PNG",  None),
+        ("PNG 4K noise",   (3840, 2160), "PNG",  None),
+    ]
+
+    for name, (w, h), fmt, q in cases:
+        try:
+            import random
+            rng = random.Random(0xBAB00)
+            pixels = bytes([rng.randint(0, 255) for _ in range(w * h * 3)])
+            img = Image.frombytes("RGB", (w, h), pixels)
+            buf = io.BytesIO()
+            if fmt == "JPEG":
+                img.save(buf, format="JPEG", quality=q)
+                mime = "image/jpeg"
+            else:
+                img.save(buf, format="PNG")
+                mime = "image/png"
+            img_bytes = buf.getvalue()
+
+            data_uri = f"data:{mime};base64,{base64.b64encode(img_bytes).decode()}"
+            payload = {"data_uri": data_uri, "width": w, "height": h}
+            raw_json = json.dumps(payload)
+            raw_chars = len(raw_json)
+
+            timings = []
+            result = None
+            for _ in range(ITERATIONS):
+                t0 = time.perf_counter()
+                result = compress_if_large(payload)
+                timings.append(time.perf_counter() - t0)
+
+            compressed = result.get("compressed", False)
+            if compressed:
+                out_size = result["compressed_size_bytes"]
+                ratio = (1 - out_size / raw_chars) * 100
+            else:
+                out_size = raw_chars
+                ratio = 0.0
+
+            avg_ms = stats.mean(timings) * 1000
+            p90_ms = sorted(timings)[int(len(timings) * 0.9)] * 1000
+
+            img_kb = len(img_bytes) / 1024
+            label = (
+                f"{w}×{h} {fmt}{f' q={q}' if q else ''} "
+                f"img={img_kb:.0f}KB  payload={raw_chars//1024}KB  "
+                f"{'⚙' if compressed else 'pass-through'}  ratio={ratio:.1f}%  "
+                f"avg={avg_ms:.1f}ms p90={p90_ms:.1f}ms"
+            )
+            ok(name, label)
+        except Exception as e:
+            fail(f"image benchmark: {name}", str(e))
+
+
+def test_snapshot_profiles(base_url, printer_name):
+    """Live test: GET /api/snapshot for each of the 5 named profiles."""
+    import time
+    import statistics as stats
+    import base64
+    import json
+
+    print("\n── live snapshot profile tests ─────────────────────────────────────────")
+
+    if not printer_name:
+        skip("snapshot profiles", "no printer name (pass --printer NAME)")
+        return
+
+    try:
+        from tools._response import compress_if_large
+    except Exception as e:
+        fail("tools._response import (snapshot profiles)", str(e))
+        return
+
+    profiles = [
+        ("native",   "native", 85),
+        ("high",     "1080p",  85),
+        ("standard", "720p",   75),
+        ("low",      "480p",   65),
+        ("preview",  "180p",   55),
+    ]
+
+    ITERATIONS = 3  # fewer iters — live network call
+
+    for profile, resolution, quality in profiles:
+        url = f"{base_url}/api/snapshot?printer={printer_name}&resolution={resolution}&quality={quality}"
+        try:
+            timings = []
+            data = None
+            for _ in range(ITERATIONS):
+                t0 = time.perf_counter()
+                status, data = get_json(url)
+                timings.append(time.perf_counter() - t0)
+
+            if status != 200:
+                fail(f"snapshot/{profile}", f"HTTP {status}: {str(data)[:120]}")
+                continue
+
+            if "error" in data:
+                fail(f"snapshot/{profile}", str(data["error"]))
+                continue
+
+            data_uri = data.get("data_uri", "")
+            if not data_uri.startswith("data:"):
+                fail(f"snapshot/{profile}", "missing/invalid data_uri")
+                continue
+
+            # Parse actual image size
+            header, b64 = data_uri.split(",", 1)
+            img_bytes = base64.b64decode(b64)
+            img_kb = len(img_bytes) / 1024
+
+            # Test compress_if_large on the full response
+            compressed_result = compress_if_large(data)
+            is_compressed = compressed_result.get("compressed", False)
+            if is_compressed:
+                ratio = (1 - compressed_result["compressed_size_bytes"] / compressed_result["original_size_bytes"]) * 100
+            else:
+                ratio = 0.0
+
+            w = data.get("width", "?")
+            h = data.get("height", "?")
+            avg_ms = stats.mean(timings) * 1000
+
+            ok(
+                f"snapshot/{profile}",
+                f"{w}×{h}  img={img_kb:.0f}KB  "
+                f"{'⚙' if is_compressed else 'pass-through'}  ratio={ratio:.1f}%  "
+                f"avg={avg_ms:.0f}ms"
+            )
+
+        except Exception as e:
+            fail(f"snapshot/{profile}", f"{type(e).__name__}: {e}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="bambu-mcp smoke test")
     parser.add_argument("--api-only", action="store_true", help="Skip import/knowledge tests")
@@ -709,6 +876,7 @@ def main():
         test_compression_benchmark()
         test_compression_envelope_limits()
         test_compression_fallback_docs()
+        test_image_compression_benchmark()
 
     if not args.no_api:
         base_url = args.base_url
@@ -722,6 +890,7 @@ def main():
                 base_url = None
         if base_url:
             test_api(base_url, args.printer)
+            test_snapshot_profiles(base_url, args.printer)
             test_openapi_methods(base_url)
 
     print(f"\n{'─' * 60}")

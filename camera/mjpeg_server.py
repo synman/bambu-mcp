@@ -21,6 +21,7 @@ import json
 import logging
 import threading
 import time
+import urllib.parse
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable, Iterator
@@ -742,7 +743,8 @@ class _MJPEGHTTPServer(ThreadingHTTPServer):
                  thumbnail_fn: Callable[[], bytes | None] | None = None,
                  layout_fn: Callable[[], bytes | None] | None = None,
                  fps_cap: float = 30,
-                 printer_name: str = ""):
+                 printer_name: str = "",
+                 frame_transform_fn: Callable[[bytes, str, int], bytes] | None = None):
         super().__init__(addr, handler_class)
         log.debug("_MJPEGHTTPServer.__init__: starting on port %s", addr[1])
         self.frame_factory = frame_factory
@@ -751,6 +753,7 @@ class _MJPEGHTTPServer(ThreadingHTTPServer):
         self.layout_fn = layout_fn
         self.fps_cap = fps_cap
         self.printer_name = printer_name
+        self.frame_transform_fn = frame_transform_fn
         self._running = True
         # FPS tracking — rolling 10s window of frame timestamps; deduplicated by frame id
         self._fps_lock = threading.Lock()
@@ -790,7 +793,18 @@ class _StreamHandler(BaseHTTPRequestHandler):
     def _serve_html(self):
         log.debug("_serve_html: serving HTML to %s", self.client_address)
         title = f"Bambu Cam — {self.server.printer_name}" if self.server.printer_name else "Bambu Cam"
-        body = _HTML_PAGE.replace("<title>Bambu Cam</title>", f"<title>{title}</title>", 1).encode()
+        # Inject per-client quality params into the stream fetch URL so each browser
+        # tab gets the resolution/quality it requested via ?resolution=X&quality=Y.
+        stream_url = "/stream"
+        if "?" in self.path:
+            qs = self.path.split("?", 1)[1]
+            params = urllib.parse.parse_qs(qs)
+            resolution = params.get("resolution", ["native"])[0]
+            quality = int(params.get("quality", ["85"])[0])
+            if not (resolution == "native" and quality == 85):
+                stream_url = f"/stream?resolution={resolution}&quality={quality}"
+        body = _HTML_PAGE.replace("<title>Bambu Cam</title>", f"<title>{title}</title>", 1)
+        body = body.replace("fetch('/stream')", f"fetch('{stream_url}')").encode()
         log.debug("_serve_html: %d bytes", len(body))
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -969,15 +983,25 @@ class _StreamHandler(BaseHTTPRequestHandler):
         Called by view_stream() via webbrowser.open('/open?name=bambu-{printer}').
         The page calls window.open('/', target) — browsers reuse an existing window
         with that name on subsequent calls, achieving single-tab-per-printer behavior.
+        Resolution/quality params are forwarded to the stream page.
         """
         log.debug("_serve_open: serving portal to %s", self.client_address)
+        # Forward resolution/quality so the opened tab requests the right quality.
+        stream_path = "/"
+        if "?" in self.path:
+            qs = self.path.split("?", 1)[1]
+            params = urllib.parse.parse_qs(qs)
+            resolution = params.get("resolution", ["native"])[0]
+            quality = int(params.get("quality", ["85"])[0])
+            if not (resolution == "native" and quality == 85):
+                stream_path = f"/?resolution={resolution}&quality={quality}"
         html = (
             "<!doctype html><html><head><title>Opening Bambu Cam\u2026</title></head>"
             "<body><script>"
             "var n=new URLSearchParams(location.search).get('name')||'bambu-cam';"
-            "var w=window.open(location.origin+'/',n);"
+            f"var w=window.open(location.origin+'{stream_path}',n);"
             "if(w){w.focus();setTimeout(function(){window.close();},150);}"
-            "else{location.replace('/');}"
+            f"else{{location.replace('{stream_path}');}}"
             "</script><p>Opening stream\u2026</p></body></html>"
         ).encode()
         self.send_response(200)
@@ -991,6 +1015,17 @@ class _StreamHandler(BaseHTTPRequestHandler):
         ua = self.headers.get("User-Agent", "unknown")
         log.debug("_serve_stream: starting for client %s", self.client_address)
         log.info("stream_connect: client=%s ua=%s", self.client_address[0], ua)
+        # Parse per-client quality params from the request URL.
+        resolution = "native"
+        quality = 85
+        if "?" in self.path:
+            qs = self.path.split("?", 1)[1]
+            params = urllib.parse.parse_qs(qs)
+            resolution = params.get("resolution", ["native"])[0]
+            quality = int(params.get("quality", ["85"])[0])
+        transform = self.server.frame_transform_fn
+        apply_transform = transform is not None and not (resolution == "native" and quality == 85)
+        log.debug("_serve_stream: resolution=%s quality=%d apply_transform=%s", resolution, quality, apply_transform)
         self.send_response(200)
         self.send_header("Content-Type", "application/octet-stream")
         self.send_header("Cache-Control", "no-cache")
@@ -1000,6 +1035,11 @@ class _StreamHandler(BaseHTTPRequestHandler):
             for jpeg in self.server.frame_factory():
                 if not self.server._running:
                     break
+                if apply_transform:
+                    try:
+                        jpeg = transform(jpeg, resolution, quality)
+                    except Exception as _te:
+                        log.debug("_serve_stream: transform error: %s", _te)
                 self.wfile.write(b"--frame\r\n")
                 self.wfile.write(b"Content-Type: image/jpeg\r\n")
                 self.wfile.write(b"X-Timestamp: 0.000000\r\n")
@@ -1048,7 +1088,8 @@ class MJPEGServer:
               thumbnail_fn: Callable[[], bytes | None] | None = None,
               layout_fn: Callable[[], bytes | None] | None = None,
               closer: Callable[[], None] | None = None,
-              fps_cap: float = 30) -> str:
+              fps_cap: float = 30,
+              frame_transform_fn: Callable[[bytes, str, int], bytes] | None = None) -> str:
         """
         Start a local MJPEG server for the named printer.
 
@@ -1079,6 +1120,7 @@ class MJPEGServer:
                 ("", allocated_port), _StreamHandler, frame_factory,
                 status_fn=status_fn, thumbnail_fn=thumbnail_fn, layout_fn=layout_fn,
                 fps_cap=fps_cap, printer_name=name,
+                frame_transform_fn=frame_transform_fn,
             )
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()

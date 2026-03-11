@@ -120,7 +120,34 @@ Use this vocabulary when describing what the user sees or when explaining stream
 
 ---
 
-## Cleanup
+## Camera quality profiles
+
+These profiles are **documentation-only** — no `profile` parameter exists. The agent
+reads this table and picks the appropriate `resolution` and `quality` values for the task.
+
+Applies to `get_snapshot` and `view_stream`. `analyze_active_job.quality` is a
+**different parameter** controlling composite output image size (tier strings:
+"preview"/"standard"/"full"/"auto") and is completely unrelated — leave it untouched.
+
+| Profile | `resolution` | `quality` | Approx JPEG payload | When to use |
+|---|---|---|---|---|
+| **native** | `"native"` | `85` | 1–4 MB (camera-dependent) | Calibration, archival, maximum fidelity |
+| **high** | `"1080p"` | `85` | ~500 KB–2 MB | Anomaly detection, spaghetti, strand analysis |
+| **standard** | `"720p"` | `75` | ~200–400 KB | Routine AI analysis — default |
+| **low** | `"480p"` | `65` | ~80–150 KB | Quick status checks, low-bandwidth monitoring |
+| **preview** | `"180p"` | `55` | ~20–40 KB | Thumbnails, rapid overviews, minimal token usage |
+
+**Agent selection rules:**
+- Default to **standard** (`resolution="720p"`, `quality=75`) for routine `get_snapshot` calls.
+- Use **high** or **native** for anomaly detection or when small details matter (layer gaps,
+  nozzle blob, strand detection, calibration verification).
+- Use **low** or **preview** for quick status checks when detail is not required.
+- `view_stream` defaults to **native** — the browser renders the full-quality stream. Use a
+  lower profile only if bandwidth is explicitly constrained.
+- **Never** use **native** in automated polling loops (`get_snapshot` called repeatedly) —
+  payload can reach 4 MB per call, consuming significant MCP tokens.
+
+---
 
 - Call `stop_stream(name)` when the user is done watching or the conversation is ending.
 - Do NOT leave streams running indefinitely — each stream holds an active TCP/TLS

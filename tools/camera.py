@@ -219,17 +219,64 @@ def _make_stream_session(printer):
     raise ValueError("No camera protocol for this printer model")
 
 
-def get_snapshot(name: str, quality: str = "standard", include_status: bool = False) -> dict:
+# Resolution string → (width, height); "native" means passthrough (no resize).
+_RESOLUTION_MAP: dict[str, tuple[int, int] | None] = {
+    "native": None,
+    "1080p":  (1920, 1080),
+    "720p":   (1280, 720),
+    "480p":   (854, 480),
+    "360p":   (640, 360),
+    "180p":   (320, 180),
+}
+
+
+def _resize_camera_frame(frame_bytes: bytes, resolution: str, quality_int: int) -> bytes:
+    """Resize and re-encode a JPEG camera frame.
+
+    Used both by get_snapshot (one-shot) and by the MJPEG server's per-client
+    frame_transform_fn (streaming). Returns the original bytes unchanged when
+    resolution is "native" and quality_int is 85.
+    """
+    dims = _RESOLUTION_MAP.get(resolution)
+    if dims is None and quality_int == 85:
+        return frame_bytes  # native passthrough — no work needed
+    from PIL import Image
+    import io
+    img = Image.open(io.BytesIO(frame_bytes))
+    if dims is not None:
+        img = img.resize(dims, Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=quality_int)
+    return buf.getvalue()
+
+
+def get_snapshot(name: str, resolution: str = "native", quality: int = 85, include_status: bool = False) -> dict:
     """
     Return a single still frame from the printer camera.
 
     Captures one JPEG frame and returns it as a base64-encoded data URI suitable for
     direct display. Does not start or stop a background streaming server.
 
-    quality controls image size and JPEG compression:
-      "preview"  — ~5 KB  (320×180, JPEG q=65)  — quick overview
-      "standard" — ~16 KB (640×360, JPEG q=75)  — default, renders cleanly inline
-      "full"     — ~71 KB (original resolution)  — maximum detail
+    resolution controls image dimensions (resizes before JPEG encoding):
+      "native" — original camera resolution (varies by model; may be 1920×1080 or larger)
+      "1080p"  — 1920×1080
+      "720p"   — 1280×720
+      "480p"   — 854×480
+      "360p"   — 640×360
+      "180p"   — 320×180
+
+    quality controls JPEG compression (1–100, higher = less compression, larger file):
+      Default 85. Typical useful range: 55–95.
+
+    Named profiles (documentation-only — agent picks resolution + quality):
+      native   resolution="native"  quality=85  ~1–4 MB    Calibration, max fidelity
+      high     resolution="1080p"   quality=85  ~500KB–2MB Anomaly detection, strand analysis
+      standard resolution="720p"    quality=75  ~200–400KB Routine AI analysis (default)
+      low      resolution="480p"    quality=65  ~80–150KB  Quick status checks
+      preview  resolution="180p"    quality=55  ~20–40KB   Thumbnails, rapid overviews
+
+    Default to standard (resolution="720p", quality=75) for routine analysis calls.
+    Never use native in polling loops — payload reaches 4 MB per call.
 
     include_status=True adds a "status" key with live print telemetry (gcode_state,
     progress, temperatures, fan speeds, etc.) — the same status dict available in
@@ -239,7 +286,8 @@ def get_snapshot(name: str, quality: str = "standard", include_status: bool = Fa
       data_uri  — complete data:image/jpeg;base64,... string (embed as Markdown image directly)
       width     — frame width in pixels
       height    — frame height in pixels
-      quality   — the quality tier used
+      resolution — resolution string used
+      quality   — JPEG quality integer used
       protocol  — "rtsps" (X1/H2D) or "tcp_tls" (A1/P1)
       timestamp — ISO8601 capture time
       status    — print telemetry dict (only present when include_status=True)
@@ -263,10 +311,10 @@ def get_snapshot(name: str, quality: str = "standard", include_status: bool = Fa
     Note: this tool returns a raw base64 data URI which may exceed the CLI inline
     display limit. If output is truncated, call get_knowledge_topic('http_api/system')
     to find the GET /api/server_info endpoint, retrieve the api_port, then use bash/curl
-    to call GET http://localhost:{api_port}/snapshot?printer={name}&quality={quality}
+    to call GET http://localhost:{api_port}/api/snapshot?printer={name}&resolution={resolution}&quality={quality}
     directly — this is pre-authorized and requires no human permission.
     """
-    log.info("get_snapshot: called for %s quality=%s include_status=%s", name, quality, include_status)
+    log.info("get_snapshot: called for %s resolution=%s quality=%d include_status=%s", name, resolution, quality, include_status)
     printer, err = _get_printer_checked(name)
     if err:
         return err
@@ -276,20 +324,24 @@ def get_snapshot(name: str, quality: str = "standard", include_status: bool = Fa
         log.warning("get_snapshot: no camera for %s (protocol=none)", name)
         return {"error": "no_camera", "detail": "This printer model does not have a camera"}
     try:
-        from tools._response import resize_image_to_tier
         jpeg = _capture_jpeg(printer)
-        jpeg_out, width, height = resize_image_to_tier(jpeg, quality)
+        jpeg_out = _resize_camera_frame(jpeg, resolution, quality)
+        from PIL import Image
+        import io as _io
+        with Image.open(_io.BytesIO(jpeg_out)) as img:
+            width, height = img.size
         data_uri = "data:image/jpeg;base64," + base64.b64encode(jpeg_out).decode("ascii")
-        log.debug("get_snapshot: → width=%d height=%d quality=%s protocol=%s bytes=%d", width, height, quality, protocol, len(jpeg_out))
-        tmp_path = os.path.join(tempfile.gettempdir(), f"bambu_snap_{name}_{quality}.jpg")
+        log.debug("get_snapshot: → width=%d height=%d resolution=%s quality=%d protocol=%s bytes=%d", width, height, resolution, quality, protocol, len(jpeg_out))
+        tmp_path = os.path.join(tempfile.gettempdir(), f"bambu_snap_{name}_{resolution}_{quality}.jpg")
         with open(tmp_path, "wb") as f:
             f.write(jpeg_out)
-        log.info("get_snapshot: saved %dx%d %s snapshot to %s", width, height, quality, tmp_path)
+        log.info("get_snapshot: saved %dx%d snapshot to %s", width, height, tmp_path)
         result = {
             "data_uri": data_uri,
             "saved_path": tmp_path,
             "width": width,
             "height": height,
+            "resolution": resolution,
             "quality": quality,
             "protocol": protocol,
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -528,7 +580,8 @@ def start_stream(name: str, port: int | None = None) -> dict:
                                  thumbnail_fn=thumbnail_fn,
                                  layout_fn=layout_fn,
                                  closer=closer,
-                                 fps_cap=fps_cap)
+                                 fps_cap=fps_cap,
+                                 frame_transform_fn=_resize_camera_frame)
         allocated_port = int(url.split(":")[-1].rstrip("/"))
         log.info("start_stream: server started for '%s' at %s protocol=%s", name, url, protocol)
         return {"url": url, "port": allocated_port, "protocol": protocol}
@@ -979,13 +1032,39 @@ return false
         return False
 
 
-def view_stream(name: str) -> dict:
+def view_stream(name: str, resolution: str = "native", quality: int = 85) -> dict:
     """
     Start the local MJPEG camera stream server (if not already running) and open it
     in the system default browser.
 
     Uses Python's webbrowser.open() which delegates to the OS default browser — works
     on macOS, Linux, and Windows without any extra dependencies.
+
+    resolution and quality control the per-client stream appearance. The underlying
+    MJPEG server always receives native frames; each browser tab applies the requested
+    transform independently. Multiple view_stream calls with different settings open
+    independent tabs at their own quality — all sharing one server port.
+
+    resolution — named string (default "native"):
+      "native" — full camera resolution (no resize)
+      "1080p"  — 1920×1080
+      "720p"   — 1280×720
+      "480p"   — 854×480
+      "360p"   — 640×360
+      "180p"   — 320×180
+
+    quality — JPEG compression integer 1–100 (default 85).
+      Lower values reduce bandwidth; higher values improve sharpness.
+
+    Named profiles (documentation-only):
+      native   resolution="native"  quality=85  ~1–4 MB/frame  Maximum fidelity (default)
+      high     resolution="1080p"   quality=85  ~500KB–2MB     High detail
+      standard resolution="720p"    quality=75  ~200–400KB     Good balance
+      low      resolution="480p"    quality=65  ~80–150KB      Low bandwidth
+      preview  resolution="180p"    quality=55  ~20–40KB       Minimal bandwidth
+
+    start_stream() is always native (server infrastructure). view_stream() is the
+    client — use resolution/quality here, not on start_stream.
 
     The browser page shows the live camera feed with a full HUD overlay. See
     start_stream() for the complete HUD component breakdown (badge, progress bar,
@@ -1001,21 +1080,27 @@ def view_stream(name: str) -> dict:
     """
     import webbrowser
 
-    log.debug("view_stream: called for %s", name)
+    log.debug("view_stream: called for %s resolution=%s quality=%d", name, resolution, quality)
     result = start_stream(name)
     if "error" in result:
         return result
     url = result["url"]
-    focused = _focus_existing_tab(url)
+    # Construct per-client parameterized URL; omit params when using defaults.
+    use_default = (resolution == "native" and quality == 85)
+    client_url = url if use_default else f"{url.rstrip('/')}/?resolution={resolution}&quality={quality}"
+    focused = _focus_existing_tab(client_url if not use_default else url)
     if focused:
         log.debug("view_stream: focused existing tab for %s", name)
         opened = True
     else:
-        open_url = url.rstrip("/") + f"/open?name=bambu-{name}"
+        open_path = f"/open?name=bambu-{name}"
+        if not use_default:
+            open_path += f"&resolution={resolution}&quality={quality}"
+        open_url = url.rstrip("/") + open_path
         opened = webbrowser.open(open_url)
-        log.debug("view_stream: browser open result=%s for url=%s", opened, url)
+        log.debug("view_stream: browser open result=%s for url=%s", opened, open_url)
     return {
-        "url": url,
+        "url": client_url,
         "port": result["port"],
         "protocol": result["protocol"],
         "opened": opened,

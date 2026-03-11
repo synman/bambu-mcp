@@ -87,7 +87,19 @@ recently completed or failed job whose file is still on the SD card.
 
 ### Image quality tiers
 
-Tools returning images accept a `quality` parameter:
+Image tools use one of two quality systems depending on the tool:
+
+**Camera tools** (`get_snapshot`, `view_stream`) use `resolution` (string) + `quality` (int):
+
+| Profile | `resolution` | `quality` | Approx size | Use |
+|---|---|---|---|---|
+| native | `"native"` | `85` | 1–4 MB | Calibration, max fidelity |
+| high | `"1080p"` | `85` | ~500KB–2MB | Anomaly detection, strand analysis |
+| standard | `"720p"` | `75` | ~200–400KB | Routine AI analysis (agent default) |
+| low | `"480p"` | `65` | ~80–150KB | Quick status checks |
+| preview | `"180p"` | `55` | ~20–40KB | Thumbnails, minimal tokens |
+
+**Plate/file tools** (`get_plate_thumbnail`, `get_plate_topview`) use a tier string `quality`:
 
 | Tier | Size | Use |
 |---|---|---|
@@ -95,7 +107,11 @@ Tools returning images accept a `quality` parameter:
 | `"standard"` | ~16 KB | Default — renders cleanly inline |
 | `"full"` | ~71 KB | When pixel detail is required |
 
-Applies to: `get_snapshot`, `get_plate_thumbnail`, `get_plate_topview`.
+**`analyze_active_job.quality`** uses the same tier strings as plate tools ("preview"/"standard"/"full"/"auto")
+and controls composite **output** image size — it is an unrelated axis from camera snapshot quality.
+
+Default to **standard** profile (`resolution="720p"`, `quality=75`) for routine `get_snapshot` calls.
+Never use native in polling loops (4 MB × N calls = significant token burn).
 
 ---
 
@@ -201,7 +217,7 @@ PNG image bytes (already compressed — gzip would not reduce them further):
 
 | Tool | HTTP equivalent |
 |------|----------------|
-| `get_snapshot` | MJPEG stream server `/snapshot` endpoint (see `get_stream_url()`) |
+| `get_snapshot` | `GET /api/snapshot?printer={name}&resolution={resolution}&quality={quality}` |
 | `get_plate_thumbnail` | No direct HTTP route — use `get_plate_thumbnail()` MCP tool at lower quality |
 | `get_plate_topview` | No direct HTTP route — use `get_plate_topview()` MCP tool at lower quality |
 | `get_project_info(include_images=True)` | `GET /api/get_3mf_props_for_file?printer=P&file=F&plate=N` |

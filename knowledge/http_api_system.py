@@ -22,7 +22,7 @@ All routes accept `?printer=<name>` (or `printer` in POST body) to select the ta
 
 Serve the Swagger UI for interactive API exploration.
 
-Opens a browser-friendly interface listing all 51 routes with request parameters,
+Opens a browser-friendly interface listing all 56 routes with request parameters,
 example responses, and a "Try it out" button for live testing. No authentication required.
 
 ### GET /api/openapi.json
@@ -161,6 +161,98 @@ calling `set_ams_filament_setting` or cross-referencing spool catalog codes.
 
 ## Camera & Print Health Analysis
 
+### GET /api/snapshot
+
+Capture a single still frame from the printer camera.
+
+Query parameters:
+- `printer` (required) — printer name
+- `resolution` — `"native"` | `"1080p"` | `"720p"` | `"480p"` | `"360p"` | `"180p"` (default: `"native"`)
+- `quality` — JPEG quality integer 1–100 (default: `85`)
+- `include_status` — `"true"` to include live print telemetry in the response
+
+Named profiles (agent guidance — no `profile` param):
+| Profile | `resolution` | `quality` | Approx payload | When to use |
+|---|---|---|---|---|
+| native | `"native"` | `85` | 1–4 MB | Calibration, max fidelity |
+| high | `"1080p"` | `85` | ~500KB–2MB | Anomaly detection |
+| standard | `"720p"` | `75` | ~200–400KB | Routine AI analysis ⚠️ default for agents |
+| low | `"480p"` | `65` | ~80–150KB | Quick status |
+| preview | `"180p"` | `55` | ~20–40KB | Thumbnails |
+
+Response fields: `data_uri`, `width`, `height`, `resolution`, `quality`, `protocol`, `timestamp`, optionally `status`.
+
+Error responses: `{"error": "no_camera"}`, `{"error": "not_connected"}`, `{"error": "stream_failed"}`.
+
+⚠️ Native resolution in polling loops can reach 4 MB/call — significant token cost. Default to standard for routine agents.
+
+Equivalent MCP tool: `get_snapshot()`
+
+---
+
+### GET /api/stream_url
+
+Return camera stream URL information without starting a server or connecting to the camera.
+
+Query parameters:
+- `printer` (required) — printer name
+
+Response fields: `protocol`, `rtsps_url` (password redacted), `local_mjpeg_url`, `streaming` (bool).
+
+Equivalent MCP tool: `get_stream_url()`
+
+---
+
+### POST /api/start_stream ⚠️
+
+Start the local MJPEG camera stream server for a printer. Always runs at native resolution;
+per-client quality is applied via URL query params when clients connect.
+
+Request body (JSON):
+- `printer` (required) — printer name
+- `port` — optional preferred port integer
+
+Response fields: `url` (base stream URL), `port`, `protocol`.
+
+Write guard: this is a POST route because starting a stream creates a background server and
+occupies a port (state-changing operation).
+
+Equivalent MCP tool: `start_stream()`
+
+---
+
+### POST /api/stop_stream ⚠️
+
+Stop the local MJPEG camera stream server for a printer.
+
+Request body (JSON):
+- `printer` (required) — printer name
+
+Response fields: `stopped` (bool), `name`.
+
+Equivalent MCP tool: `stop_stream()`
+
+---
+
+### POST /api/view_stream ⚠️
+
+Start the MJPEG stream server (if not already running) and open a browser tab at the
+requested resolution/quality. Multiple calls with different settings open independent tabs
+sharing one server port.
+
+Request body (JSON):
+- `printer` (required) — printer name
+- `resolution` — `"native"` | `"1080p"` | `"720p"` | `"480p"` | `"360p"` | `"180p"` (default: `"native"`)
+- `quality` — JPEG quality integer 1–100 (default: `85`)
+
+See `/api/snapshot` for named profiles. Profiles for streams default to native/85 (browser renders full quality).
+
+Response fields: `url` (parameterized client URL), `port`, `protocol`, `opened` (bool), `overlay_active` (bool).
+
+Equivalent MCP tool: `view_stream()`
+
+---
+
 ### GET /api/analyze_active_job
 
 Capture the live camera frame and produce a full active job state report.
@@ -169,6 +261,7 @@ Query parameters:
 - `printer` (required) — printer name
 - `store_reference` — `"true"` to store the current frame as the diff baseline (in-memory)
 - `quality` — `"auto"` | `"preview"` | `"standard"` | `"full"` (default: `"auto"`)
+  Note: this controls composite **output** image size, not capture resolution.
 - `categories` — comma-separated asset category letters (default `"X"` — composite only):
   - `P` = project thumbnail + plate layout images
   - `C` = raw camera frame + diff frame
