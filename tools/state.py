@@ -126,8 +126,9 @@ def get_printer_state(name: str) -> dict:
     Response may be gzip+base64 compressed if the payload is large. Decompress:
       import gzip, json, base64
       data = json.loads(gzip.decompress(base64.b64decode(r["data"])))
+    If the compressed envelope itself exceeds the MCP response limit, fall back to:
+      GET /api/printer?printer=<name>
     """
-    log.debug("get_printer_state: called for printer=%s", name)
     from tools._response import compress_if_large
     state = session_manager.get_state(name)
     if state is None:
@@ -447,6 +448,8 @@ def get_monitoring_data(name: str) -> dict:
     Response may be gzip+base64 compressed if the payload is large. Decompress:
       import gzip, json, base64
       data = json.loads(gzip.decompress(base64.b64decode(r["data"])))
+    No HTTP fallback route exists for this tool. If the response exceeds the MCP
+    limit, use get_monitoring_series(name, field) to fetch individual fields instead.
     """
     log.debug("get_monitoring_data: called for printer=%s", name)
     from tools._response import compress_if_large

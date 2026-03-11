@@ -57,7 +57,9 @@ def list_sdcard_files(name: str, path: str = "/", cached: bool = False) -> dict:
     Response may be gzip+base64 compressed if the full tree is large. Decompress:
       import gzip, json, base64
       data = json.loads(gzip.decompress(base64.b64decode(r["data"])))
-    """
+    If the compressed envelope itself exceeds the MCP response limit, use the HTTP fallback:
+      GET /api/get_sdcard_contents?printer=<name>
+    Or reduce scope by listing a specific subdirectory (e.g. path="/cache").    """
     log.debug("list_sdcard_files: called for name=%s path=%s cached=%s", name, path, cached)
     from tools._response import compress_if_large
     printer = session_manager.get_printer(name)

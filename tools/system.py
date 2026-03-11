@@ -187,6 +187,9 @@ def get_monitoring_history(name: str, raw: bool = False) -> dict:
     Response may be gzip+base64 compressed if the payload is large. Decompress:
       import gzip, json, base64
       data = json.loads(gzip.decompress(base64.b64decode(r["data"])))
+    No HTTP fallback route exists for this tool. If raw=True response exceeds the
+    MCP limit even after compression, use get_monitoring_series(field) to fetch
+    one field at a time instead.
     """
     log.debug("get_monitoring_history: called for name=%s raw=%s", name, raw)
     from tools._response import compress_if_large
@@ -218,6 +221,9 @@ def get_monitoring_series(name: str, field: str) -> dict:
     Response may be gzip+base64 compressed if the payload is large. Decompress:
       import gzip, json, base64
       data = json.loads(gzip.decompress(base64.b64decode(r["data"])))
+    No HTTP fallback route exists for this tool. This is already the smallest
+    scope of monitoring data (one field). If the envelope still exceeds the MCP
+    limit, the series is unusually large — check data_collector for retention issues.
     """
     log.debug("get_monitoring_series: called for name=%s field=%s", name, field)
     from tools._response import compress_if_large
@@ -390,6 +396,13 @@ def dump_log(tail_lines: int = 200) -> dict:
     - lines: list of log lines (newest last)
     - total_lines: number of lines returned
     - log_path: absolute path to the log file
+
+    Response may be gzip+base64 compressed if the payload is large. Decompress:
+      import gzip, json, base64
+      data = json.loads(gzip.decompress(base64.b64decode(r["data"])))
+    If the compressed envelope itself exceeds the MCP response limit, fall back to:
+      GET /api/dump_log?tail_lines=<n>
+    (Reduce tail_lines to shrink the response — default is 200.)
     """
     log.debug("dump_log: called with tail_lines=%s", tail_lines)
     from pathlib import Path

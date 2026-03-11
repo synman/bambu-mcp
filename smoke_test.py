@@ -491,6 +491,151 @@ def test_compression_benchmark():
         ok("all benchmark round-trips verified correct")
 
 
+def test_compression_envelope_limits():
+    import gzip
+    import base64
+    import json
+    import os
+    import random
+    import string
+
+    print("\n── compress_if_large envelope limits ───────────────────────────────────")
+
+    try:
+        from tools._response import compress_if_large, _max_response_chars
+    except Exception as e:
+        fail("tools._response import (envelope limits)", str(e))
+        return
+
+    threshold = _max_response_chars()
+    rng = random.Random(0xBAB00)
+
+    def _rand_alphanumeric(n):
+        chars = string.ascii_letters + string.digits
+        return "".join(rng.choices(chars, k=n))
+
+    def _rand_printable(n):
+        chars = string.printable.strip()
+        return "".join(rng.choices(chars, k=n))
+
+    def _realistic_json(target_chars):
+        fields = [
+            "printer_name", "gcode_state", "subtask_name", "stage_id",
+            "print_percentage", "elapsed_min", "remaining_min", "layer_num",
+            "total_layers", "nozzle_temp", "bed_temp", "chamber_temp",
+            "part_fan", "aux_fan", "exhaust_fan", "heatbreak_fan",
+            "filament_type", "filament_color", "ams_unit", "tray_id",
+        ]
+        obj = {k: _rand_alphanumeric(rng.randint(8, 32)) for k in fields}
+        obj["nozzle_temp"] = round(rng.uniform(180, 280), 1)
+        obj["bed_temp"] = round(rng.uniform(20, 110), 1)
+        obj["layers"] = [rng.randint(0, 255) for _ in range(100)]
+        base_len = len(json.dumps(obj))
+        pad_len = max(0, target_chars - base_len - 12)
+        obj["pad"] = _rand_alphanumeric(pad_len)
+        return obj
+
+    CONTENT_TYPES = [
+        ("repetitive",   lambda n: {"data": "x" * n}),
+        ("alphanumeric", lambda n: {"data": _rand_alphanumeric(n)}),
+        ("printable",    lambda n: {"data": _rand_printable(n)}),
+        ("realistic",    lambda n: _realistic_json(n)),
+    ]
+
+    MAX_PAYLOAD = 4_000_000
+
+    print(f"  Threshold: {threshold:,} chars (MAX_MCP_OUTPUT_TOKENS × 4)")
+    print(f"  Envelope break-even = size at which compressed envelope ALSO exceeds threshold")
+    print(f"\n  {'content':<14} {'payload':>10}  {'orig':>10}  {'envelope':>10}  {'ratio':>7}  {'rt'}")
+    print(f"  {'-'*14} {'-'*10}  {'-'*10}  {'-'*10}  {'-'*7}  {'--'}")
+
+    all_rt_ok = True
+    for content_label, content_fn in CONTENT_TYPES:
+        size = threshold + 1
+        found_breakeven = False
+        while size <= MAX_PAYLOAD:
+            payload = content_fn(size)
+            result = compress_if_large(payload)
+            if not result.get("compressed"):
+                # Shouldn't happen — payload exceeds threshold, compression must fire
+                size *= 2
+                continue
+
+            envelope_json = json.dumps(result)
+            envelope_chars = len(envelope_json)
+            orig_bytes = result["original_size_bytes"]
+
+            if envelope_chars > threshold:
+                found_breakeven = True
+                try:
+                    recovered = json.loads(gzip.decompress(base64.b64decode(result["data"])))
+                    rt_ok = recovered == payload
+                except Exception:
+                    rt_ok = False
+
+                if not rt_ok:
+                    all_rt_ok = False
+                    failures.append(f"envelope limit {content_label} round-trip failed at payload={size:,}")
+
+                ratio = envelope_chars / orig_bytes * 100
+                rt_icon = PASS if rt_ok else FAIL
+                print(f"  {rt_icon}  {content_label:<12} {size:>10,}  {orig_bytes:>10,}  {envelope_chars:>10,}  {ratio:>6.1f}%  {'ok' if rt_ok else 'FAIL'}")
+                break
+
+            size *= 2
+
+        if not found_breakeven:
+            # Compression is so effective that even at MAX_PAYLOAD the envelope fits
+            print(f"  {PASS}  {content_label:<12} envelope never exceeds threshold up to {MAX_PAYLOAD:,} chars (compression too effective to test)")
+
+    if all_rt_ok:
+        ok("all envelope-limit round-trips verified correct")
+
+    print(f"\n  When envelope exceeds threshold the agent receives truncated JSON (undecompressable).")
+    print(f"  Expected agent action: fall back to the HTTP API — see each tool's docstring.")
+
+
+def test_compression_fallback_docs():
+    import importlib
+
+    print("\n── compress_if_large fallback documentation ─────────────────────────")
+
+    # (module, function_name, expected_phrase_in_docstring, has_http_route)
+    TOOLS = [
+        ("tools.files",  "list_sdcard_files",    "HTTP fallback",         True),
+        ("tools.state",  "get_printer_state",    "GET /api/printer",      True),
+        ("tools.state",  "get_monitoring_data",  "No HTTP fallback",      False),
+        ("tools.system", "get_monitoring_history","No HTTP fallback",     False),
+        ("tools.system", "get_monitoring_series", "No HTTP fallback",     False),
+        ("tools.system", "dump_log",             "GET /api/dump_log",     True),
+    ]
+
+    for module_name, func_name, expected_phrase, has_route in TOOLS:
+        try:
+            mod = importlib.import_module(module_name)
+            fn = getattr(mod, func_name)
+            doc = fn.__doc__ or ""
+
+            has_compressed = "compressed" in doc.lower()
+            has_decompress = "decompress" in doc.lower() or "gzip" in doc.lower()
+            has_fallback = expected_phrase in doc
+
+            if has_compressed and has_decompress and has_fallback:
+                route_note = f"→ {expected_phrase}" if has_route else "→ no HTTP route (scope-reduce guidance present)"
+                ok(f"{func_name}: envelope detection + decompress recipe + fallback guidance {route_note}")
+            else:
+                missing = []
+                if not has_compressed:
+                    missing.append("envelope detection ('compressed')")
+                if not has_decompress:
+                    missing.append("decompress recipe")
+                if not has_fallback:
+                    missing.append(f"fallback phrase ('{expected_phrase}')")
+                fail(f"{func_name} docstring missing: {', '.join(missing)}")
+        except Exception as e:
+            fail(f"{func_name} docstring check failed", str(e))
+
+
 def test_openapi_methods(base_url):
     print("\n── OpenAPI method correctness ──────────────────────────────────────────")
     EXPECTED_POST = [
@@ -562,6 +707,8 @@ def main():
         test_notifications()
         test_compression()
         test_compression_benchmark()
+        test_compression_envelope_limits()
+        test_compression_fallback_docs()
 
     if not args.no_api:
         base_url = args.base_url
