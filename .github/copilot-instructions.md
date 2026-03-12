@@ -1346,7 +1346,7 @@ The `send_gcode()` MCP tool and `POST /api/send_gcode` HTTP route accept multipl
 
 ## H2D Camera-to-Bed Calibration Geometry (Mandatory)
 
-This section documents the verified H2D bed geometry and 9-point perimeter calibration schema established during the corner calibration POC (2026-03-12). Read before generating any calibration GCode or expected-pixel estimates.
+This section documents the verified H2D bed geometry and calibration schema established during the corner calibration POC. Read before generating any calibration GCode or expected-pixel estimates.
 
 **H2D bed boundary points — world coordinates (mm):**
 
@@ -1357,23 +1357,73 @@ This section documents the verified H2D bed geometry and 9-point perimeter calib
 | FR / F345 | (345, 40) | Front-Right — Y=40, **not Y=5**; clip zone at Y=5 may be partially off-camera |
 | FL / F005 | (5, 40) | Front-Left — same Y=40 inset |
 
-**9-point perimeter schema (greedy pixel-space, ≥50px min spacing):**
+**Permanent hard-exclude points (HARD_EXCLUDE):**
 
-Perspective foreshortening: the H2D camera views the bed obliquely from the back/top. The back row (Y=315) spans 625px in the frame; the front row (Y=40) spans only 62px. The right column (X=345) collapses to within 5–35px of front-right corner in pixel space and provides no independent constraints. Greedy selection at ≥50px pixel spacing yields exactly 9 unique usable points:
+These points must never be included in calibration probes. Detection is impossible or produces confirmed false results:
 
-| Name | World (X, Y) | 720p pixel (approx) | Notes |
-|------|-------------|---------------------|-------|
-| B005 | (5, 315) | (54, 203) | ✅ back row |
-| B090 | (90, 315) | (128, 200) | ✅ |
-| B175 | (175, 315) | (234, 197) | ✅ |
-| B260 | (260, 315) | (396, 191) | ✅ |
-| B345 | (345, 315) | (678, 182) | ✅ back row 625px total span |
-| L243 | (5, 243) | (413, 394) | ✅ left col |
-| L175 | (5, 175) | (479, 429) | ✅ ~53px from L243 |
-| F005 | (5, 40) | (523, 452) | ⚠️ ~50px from L175 |
-| F345 | (345, 40) | (584, 468) | ⚠️ ~62px from F005 (max achievable at Y=40) |
+| Name | World (X, Y) | Reason |
+|------|-------------|--------|
+| B345 | (345, 315) | Gantry beam occludes nozzle at back-right; cascade detects bed frame shadow |
+| F005 | (5, 40) | Camera blind zone at front-left; Z-diff dmax<10 even with thermal rescue probe |
+| L108 | (5, 108) | Left-column front blind zone — confirmed false detection (285px RANSAC outlier) |
+| L175 | (5, 175) | Left-column front blind zone — confirmed false detection (292px RANSAC outlier) |
+| L243 | (5, 243) | Left-column front blind zone — confirmed false detection (285px RANSAC outlier) |
 
-Right-column points R108/R175/R243 all fall within 5–35px of F345/F005 in pixel space — excluded as near-degenerate constraints.
+**Left-column blind zone (x=5, y<315):** The camera is mounted at the back-right of the H2D. At x=5 (left edge) for y<315 (any position toward the front), the nozzle tip is occluded by the left frame wall or gantry arm. The detection cascade picks up frame shadow or gantry artifact instead of the nozzle. Pixel positions for L108/L175/L243 (~(440-460, 413-415)) lie in the center-right of the frame — geometrically inconsistent with the back-left anchor B005 at (97, 283) and confirmed as outliers via RANSAC with 285-292px residuals from the 7-point inlier H. B005 (5, 315) is NOT in this blind zone because at y=315 (back row) the nozzle is still visible from the back-right camera position.
+
+**7-point inlier calibration schema (verified — use this):**
+
+RANSAC analysis of the perimeter probe results identified 7 geometrically consistent inliers. This is the authoritative point set for H computation:
+
+| Name | World (X, Y) | 720p pixel (measured) | Reproj err |
+|------|-------------|----------------------|-----------|
+| B005 | (5, 315)   | (96.9, 282.8) | 4.0px |
+| B090 | (90, 315)  | (148.1, 277.3) | 6.8px |
+| B175 | (175, 315) | (239.6, 271.1) | 4.7px |
+| B260 | (260, 315) | (368.1, 274.8) | 6.9px |
+| F345 | (345, 40)  | (513.6, 514.6) | 2.7px |
+| R175 | (345, 175) | (520.7, 421.3) | 9.1px |
+| R243 | (345, 243) | (541.3, 368.4) | 6.3px |
+
+**Mean reproj: 5.79px. Condition number: 100.4. H stored in `~/.bambu-mcp/calibration/H2D.json` under `dlt` key.**
+
+The condition number of 100.4 is the quality benchmark for this H. A re-solve on the same 7 points should produce a condition number in the 14–200 range. A condition number > 10,000 after normalization indicates a degenerate solve (insufficient point spread, bad outlier rejection, or normalization failure).
+
+Right-column points R108/R175/R243: R175 and R243 are valid inliers. R108 projects to approximately (510, 520) at 720p — within 7px of F345 at (513.6, 514.6) — providing no independent geometric constraint. Exclude R108 from probes.
+
+**Perspective foreshortening (empirically measured from 7-point inlier set):**
+
+The H2D camera is mounted obliquely at the back-right. This produces severe non-uniform scaling across the bed:
+
+| Region | World axis | Pixel density | Implication |
+|--------|-----------|--------------|-------------|
+| Back row (Y=315) | X: B005→B260 (255mm → 271px) | **1.06 px/mm** | Most reliable — dense pixel coverage |
+| Right column | Y: F345→R243 (203mm → 146px vertical) | 0.72 px/mm vertical | Good in Y; nearly vertical line in pixel space |
+| Right column | X: F345→R175 (all X=345) | ~0.09 px/mm horizontal | Right edge collapses to near-vertical strip ≈28px wide |
+| Mid-bed (Y=243) | X direction (from H) | **0.39 px/mm** | 2.7× more compressed than back row |
+| Mid-bed (Y=175) | X direction (from H) | **0.24 px/mm** | 4.4× more compressed than back row |
+
+**Right-column geometry:** At X=345, moving from F345 (front) to R243 to R175 (mid), the nozzle pixel position shifts mostly in Y (146px) while X barely changes (≈28px total across Y=40→243). The right edge appears as a nearly-vertical line in pixel space. This is why R108 provides no constraint — it's indistinguishable from F345 in pixel space despite being 68mm away in world Y.
+
+**Search radius world-space equivalent:** The `search_radius=200px` crop means different physical areas at different bed locations:
+- Back row (Y=315): 200px ÷ 1.06px/mm ≈ **189mm radius** — covers most of the bed width
+- Mid-bed (Y=175): 200px ÷ 0.24px/mm ≈ **833mm radius** — larger than the bed itself
+
+This is expected and correct — the large world-space radius at the front/mid means even a coarse expected-pixel estimate will contain the nozzle in the crop. Detection fails not from crop miss but from the nozzle being occluded or indistinguishable from background artifacts.
+
+**Inverse H (pixel→world):** The calibration H maps world(mm)→pixel. To convert a detected pixel position back to bed world coordinates (used in spaghetti detection to locate an anomaly on the bed):
+
+```python
+H_inv = np.linalg.inv(H)
+def pixel_to_world(px, py, H_inv):
+    """Convert 720p pixel (px,py) to bed world mm (wx,wy)."""
+    v = H_inv @ np.array([px, py, 1.0])
+    return v[0]/v[2], v[1]/v[2]
+```
+
+The inverse is well-conditioned (condition number matches H itself, ~100). Any detected anomaly pixel can be projected back to a bed position accurate to ±6mm (matching the mean reproj error).
+
+**H calibration resolution (critical):** The DLT H in H2D.json was fitted directly to **720p (1280×720)** captured frames. Projected pixel coordinates from `H @ [wx, wy, 1]` are in 720p pixel space. Do NOT rescale from 1920×1080 — the H has no knowledge of 1920×1080. If the capture resolution differs from 720p, scale the H output by `(frame_w/1280, frame_h/720)`.
 
 **Expected pixel generation (mandatory — do NOT hardcode):**
 
@@ -1383,33 +1433,46 @@ Expected pixel positions are computed at runtime by projecting each world point 
 with open(cal_json_path) as f:
     cal_data = json.load(f)
 H_prior = np.array(cal_data["dlt"]["H"])
+# H is in 720p (1280×720) pixel space
 for name, wx, wy in PERIMETER_POINTS:
     v = H_prior @ np.array([wx, wy, 1.0])
-    native_px, native_py = v[0] / v[2], v[1] / v[2]
-    # Scale to actual captured frame resolution
-    scaled_px = int(native_px * frame_w / 1920)
-    scaled_py = int(native_py * frame_h / 1080)
+    px_720, py_720 = v[0] / v[2], v[1] / v[2]
+    # Scale to actual captured frame resolution (identity if capturing at 720p)
+    scaled_px = int(px_720 * frame_w / 1280)
+    scaled_py = int(py_720 * frame_h / 720)
     expected_pixels[name] = (scaled_px, scaled_py)
 ```
 
-**4-corner bootstrap pixels (native 1920×1080) — use only when H2D.json absent:**
+**4-corner bootstrap pixels — use ONLY when H2D.json absent (pre-calibration estimates):**
 
-| Corner | Native pixel | 720p pixel |
-|--------|------------|------------|
-| BL (B005) | (122, 456) | (81, 304) |
-| BR (B345) | (1526, 408) | (1017, 272) |
-| FR (F345) | (1313, 1056) | (876, 704) |
-| FL (F005) | (1176, 1017) | (784, 678) |
+These are approximate values from before the DLT calibration run. They are NOT the measured detection positions — use the 7-point inlier table for measured positions. Bootstrap values will project B005 ~90px off from the actual detection; this causes the search crop to be off-center which reduces detection confidence (conf≈0.5 instead of conf≈1.0). After a successful calibration run, H2D.json self-corrects this immediately.
 
-`[VERIFIED: empirical, 2026-03-12]` — all four measured at conf=1.000, Zc=714.5mm.
+| Corner | 720p pixel (estimate) | Actual measured 720p |
+|--------|----------------------|---------------------|
+| BL (B005) | (81, 304) | (96.9, 282.8) — use this |
+| BR (B345) | HARD_EXCLUDE | N/A |
+| FR (F345) | (876, 704) | (513.6, 514.6) — use this |
+| FL (F005) | HARD_EXCLUDE | N/A |
 
 **Timing constants (verified empirically):**
 - `HOME_WAIT_SECONDS = 90` — G28 on H2D takes 60–90s; 8s is dangerously short
 - `SETTLE_SECONDS_XY = 12.0` — cross-bed diagonal ~490mm at F3000 ≈ 10s + buffer
 - `SETTLE_SECONDS_Z = 3.0` — short Z moves; vibration damps quickly
-- `Z_CLEARANCE = 10mm`, `Z_CAPTURE = 2mm`
+- `Z_CLEARANCE = 10mm`, `Z_CAPTURE = 2mm`, `Z_RESCUE = 1.0mm` (used in rescue probe when primary conf<0.3)
 
 **Camera orientation:** Higher Y world (back of bed) → lower pixel row (top of frame). Lower Y world (front of bed) → higher pixel row (bottom of frame). Left X → lower pixel column. Right X → higher pixel column.
+
+**Perimeter walk point order and effective probe set:**
+
+The walk visits points in travel-optimized order to minimize cross-bed moves. After HARD_EXCLUDE, the effective probe list is:
+
+```
+B005 → B090 → B175 → B260 → R243 → R175 → F345
+```
+
+This is exactly the 7-point inlier set. No additional points are needed — 7×2=14 equations vs 8 DOF gives a well-overdetermined system. Adding non-excluded points from the left column (L108/L175/L243) is harmful — they inject false detections that RANSAC must reject and can skew the solve if RANSAC hypothesis luck is bad.
+
+**Front Y offset:** All front-edge probes use Y=40, not Y=0. The bed's printable area starts at Y≈0 but the front clip hardware and camera geometry make Y<40 unreliable. The front-edge world line is Y=40 for all calibration purposes.
 
 ## Visual Frame-Diff Nozzle Detection (Mandatory)
 
@@ -1419,12 +1482,103 @@ The corner calibration approach uses visual image differencing to locate the noz
 1. Capture reference frame at Z_CLEARANCE (nozzle physically above camera view)
 2. Descend to Z_CAPTURE (nozzle physically enters camera view as a dark object)
 3. Diff the two frames — the nozzle appears as the brightest region in the delta image
-4. Weighted centroid of the diff gives sub-pixel nozzle position
+4. Detection cascade (4 techniques on same frame pair) selects the best result
+
+**Detection cascade (in priority order):**
+1. `centroid` — centroid of all pixels above adaptive threshold (15→25→40) in local crop
+2. `top_pct` — centroid of top 5% brightest pixels; cuts toolhead body blob contamination (L243 had 16K diff pixels from body shadow; top_pct isolates nozzle tip)
+3. `weighted` — intensity-weighted centroid; pulls toward bright nozzle tip when diff blob is diffuse
+4. `sparse_bright` — centroid of top-N pixels in inner ½ of crop at 85th-percentile threshold; eliminates border noise, finds sharpest cluster
+
+Each technique operates on the **same pre-computed local diff crop** — no additional GCode required. `_crop_and_diff()` crops `search_radius=100px` around the expected pixel; falls back to full-frame if crop would go near frame edge.
+
+**Confidence scoring:** `confidence = min(1.0, signal_strength * fill_ratio * 50)`, then penalized:
+- If detected centroid offset from expected > `search_radius` → `confidence *= 0.5`
+- If full-frame fallback was used (crop dimension < 20px in either axis) → hard-cap at `0.500`
+
+**Cascade constants:**
+- `CONF_ACCEPT = 0.7` — cascade exits early at this threshold; result is accepted
+- `CONF_RESCUE = 0.4` — threshold below which rescue probe fires
+- `CONF_HEAT = 0.30` — threshold below which heat_halo last-resort technique fires
+
+The cascade selects the technique with the highest confidence. If all four techniques stay below `CONF_RESCUE=0.4` after up to 3 probes, the rescue probe fires. If the rescue probe also stays below `CONF_RESCUE`, the heat_halo technique fires as a last resort. If heat_halo also fails, the point is marked as failed and excluded from the DLT solve.
+
+**Rescue probe:** When best conf < `CONF_RESCUE` after standard probes, re-capture reference at Z_CLEARANCE then descend to Z_RESCUE=1.0mm. Extra descent ≈ 2× stronger diff signal (more angular nozzle movement visible in camera). Uses same 4-technique cascade on the new frame pair.
+
+**heat_halo technique (5th, last resort — Z-independent):** Fires when standard probes + rescue all stay below `CONF_HEAT`. Instead of Z-movement diff, uses **nozzle temperature diff** — completely independent of Z. The thermal glow from a hot nozzle is detectable in the RGB camera even at moderate temperatures.
+
+Protocol:
+1. Set T0=T_HEAT(180°C), T1=38°C → wait `HEAT_WAIT=45s` → capture T0-hot frame
+2. Diff T0-hot vs cold-ref (captured at Z_CLEARANCE, no Z movement) → detect T0 centroid
+3. Set T0=38°C, T1=T_HEAT(180°C) → wait → capture T1-hot frame → detect T1 centroid
+4. Cool both nozzles back to 38°C
+5. Records BOTH T0 and T1 pixel positions → directly enables per-nozzle offset calibration
+
+Constants: `T_HEAT=180`, `HEAT_WAIT=45`, `CONF_HEAT=0.30`. Reuses hotspot centroid logic from `h2d_heatmap.py`.
 
 **Hard requirements:**
-- **Always use a tight local crop** around the expected pixel position (search_radius ≈ 200px). Full-frame diff is unreliable: when Z changes, the entire bed image shifts slightly, producing ~100K changed pixels across the whole frame. The centroid of a full-frame diff is approximately the center of the frame — not the nozzle.
-- When expected pixel is outside the actual frame (scaling mistake), the local crop collapses to zero size. Guard against this: if crop dimension < 20px in either axis, fall back to full-frame diff AND cap confidence at 0.5 as a signal that the result is unreliable.
-- **9-point perimeter schema gives a genuine overdetermined solve.** A 3×3 homography has 8 DOF. 9 pts × 2eq = 18eq >> 8 DOF. With only 4 bed corners the DLT reproj error is always 0.0px (4×2=8eq exactly determined). The 9-point walk produces the first non-zero reproj error, which is a real quality signal. A reproj error > 5px on any single point indicates that point is an outlier (detection noise, bed tilt, or lens distortion).
+- **Always use search_radius=100px crop** around expected pixel. Full-frame diff is unreliable: Z changes cause ~100K changed pixels across the entire frame; full-frame centroid ≈ center of frame, not the nozzle.
+- When crop dimension < 20px in either axis (expected pixel near frame edge), fall back to full-frame diff AND hard-cap confidence at 0.500 — this is a signal the expected pixel estimate is bad, not a detection failure.
+
+**Camera light and firmware idle timeout (both mandatory for calibration runs):**
+- **Light OFF is definitively better for hotspot detection.** R-B median 72 with light off vs 37 with light on. After any light state change, wait ≥6s before capturing; discard the first snapshot (camera AGC needs time to adjust).
+- **Firmware idle nozzle timeout:** If the nozzle is held at a target temperature but no print is active, firmware silently resets the nozzle target back to 38°C after ~170s idle. During calibration runs requiring a hot nozzle, defeat this by sending `M104 T0 S{target}` + `M104 T1 S{target}` re-assert commands every 5s in the temperature poll loop.
+
+**Back-row collinearity property:** Any set of world points at the same Y value (e.g., the entire back row Y=315) must project to a straight line in pixel space — this is a hard mathematical property of homographies. If back-row detections are NOT collinear in pixel space, at least one detection is wrong (bad centroid, shadow artifact, or body blob contamination). Use this as a validity check: fit a line through back-row pixel detections and flag any point more than ~10px from the line as suspect before including it in the DLT solve.
+
+**H2D.json full schema:**
+```json
+{
+  "printer": "H2D",
+  "bed_dimensions_mm": [350, 320],
+  "z_clearance_mm": 10.0,
+  "z_capture_mm": 2.0,
+  "corners": {
+    "B005": {"world_xy": [5, 315], "pixel_xy": [96.9, 282.8], "confidence": 1.0, "expected_pixel": [...]},
+    "...": "..."
+  },
+  "dlt": {
+    "H": [[...], [...], [...]],
+    "reprojection_error_px": 5.79,
+    "n_points": 7,
+    "inlier_points": ["B005","B090","B175","B260","F345","R175","R243"],
+    "method": "hartley_normalized_dlt",
+    "note": "..."
+  },
+  "per_point_errors": {"B005": 4.0, "B090": 6.8, "...": "..."}
+}
+```
+
+**World coordinate system:** X=5 (left edge) to X=345 (right edge); Y=40 (front, inset from physical edge) to Y=315 (back). These are nozzle XY coordinates in the Bambu H2D CoreXY motion system. The bed moves in Z only — the nozzle never changes Z when moving XY. Z_CLEARANCE and Z_CAPTURE are absolute Z heights, not relative moves.
+
+**Probes-per-point:** Reference frame is captured once per point at Z_CLEARANCE. Each probe descends to Z_CAPTURE, captures, ascends. All probes at the same point share the same reference frame — valid because the nozzle re-enters the same pixel position each descent. Early exit at conf ≥ CONF_ACCEPT to avoid unnecessary probes.
+
+- **Hartley normalization is mandatory.** Raw DLT condition numbers reach 7,000,000+ on H2D pixel coordinates (back row spans ~500px; front row spans ~60px). Hartley normalization reduces condition number to ~14 (from millions), making the SVD numerically stable. Any DLT solve without normalization will produce a degenerate H with 200-250px mean reprojection error.
+- **RANSAC outlier rejection is mandatory for any solve with N>5 points.** Individual false detections (shadow artifacts, wrong feature) cannot be distinguished visually from correct detections. RANSAC with a 15px inlier threshold and minimum 4-point hypotheses correctly identifies outliers. The 7-point inlier set is the result of this process.
+- **7-point solve gives mean reproj 5.79px.** This is the verified result. Any re-solve should use the same 7 inlier points (B005/B090/B175/B260/F345/R175/R243) unless new probes are collected.
+- **Overdetermined solve quality signal.** A 3×3 homography has 8 DOF. 7 pts × 2eq = 14eq >> 8 DOF. Any reproj error > 10px on a given point after RANSAC is a strong signal that point is a false detection — not DLT numerical instability.
+
+```python
+def solve_H_hartley(world_pts, pixel_pts):
+    """Solve H with mandatory Hartley normalization."""
+    def norm_T(pts):
+        c = pts.mean(axis=0)
+        d = np.linalg.norm(pts - c, axis=1).mean()
+        s = np.sqrt(2) / max(d, 1e-9)
+        T = np.array([[s,0,-s*c[0]],[0,s,-s*c[1]],[0,0,1.]])
+        return T
+    Tw, Tp = norm_T(world_pts), norm_T(pixel_pts)
+    wn = (Tw @ np.column_stack([world_pts, np.ones(len(world_pts))]).T).T[:, :2]
+    pn = (Tp @ np.column_stack([pixel_pts, np.ones(len(pixel_pts))]).T).T[:, :2]
+    A = []
+    for i in range(len(world_pts)):
+        X,Y = wn[i]; u,v = pn[i]
+        A += [[X,Y,1,0,0,0,-u*X,-u*Y,-u],[0,0,0,X,Y,1,-v*X,-v*Y,-v]]
+    _,_,Vt = np.linalg.svd(np.array(A))
+    h = Vt[-1].reshape(3,3); h /= h[2,2]
+    H = np.linalg.inv(Tp) @ h @ Tw
+    return H / H[2,2]
+```
 
 ## Proactive Bed Preheat Suggestion (Mandatory)
 
