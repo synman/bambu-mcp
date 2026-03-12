@@ -25,6 +25,7 @@ _KNOWN_TOPICS: dict[str, tuple[str, str]] = {
     "behavioral_rules/mcp_patterns":("knowledge.behavioral_rules_mcp_patterns","BEHAVIORAL_RULES_MCP_PATTERNS_TEXT"),
     "behavioral_rules/alerts":      ("knowledge.behavioral_rules_alerts",       "BEHAVIORAL_RULES_ALERTS_TEXT"),
     "behavioral_rules/session":     ("knowledge.behavioral_rules_session",      "BEHAVIORAL_RULES_SESSION_TEXT"),
+    "behavioral_rules/camera_calibration": ("knowledge.behavioral_rules_camera_calibration", "BEHAVIORAL_RULES_CAMERA_CALIBRATION_TEXT"),
     # api_reference sub-topics
     "api_reference/session":        ("knowledge.api_reference_session",        "API_REFERENCE_SESSION_TEXT"),
     "api_reference/files":          ("knowledge.api_reference_files",          "API_REFERENCE_FILES_TEXT"),
@@ -134,6 +135,7 @@ def get_knowledge_topic(topic: str) -> dict | str:
     - behavioral_rules/mcp_patterns — array param pattern, multi-level hierarchy, compressed responses
     - behavioral_rules/alerts — push alert types, semantics, severity, recommended agent actions
     - behavioral_rules/session — printer name verification, post-reload checklist
+    - behavioral_rules/camera_calibration — H2D plate boundary calibration: reference frame, corner naming, Z-lift rule, SHELL/SYNBOT corners, is_on_plate, normalize_to_plate
     - api_reference/session — BambuPrinter session management and raw command methods
     - api_reference/files — FTPS file management methods
     - api_reference/print — print control, temperature, and fan methods

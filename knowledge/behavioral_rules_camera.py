@@ -237,4 +237,14 @@ state is not already confirmed.
 assuming — use `get_chamber_light()` rather than inferring state from print status.
 `set_chamber_light` requires `user_permission=True`; if the auto-manage pattern reaches
 step 2 during an autonomous operation, use `ask_user` to confirm before proceeding.
+
+---
+
+## Plate boundary calibration
+
+For H2D plate boundary coordinates (PLATE_BOUNDARY), corner naming convention,
+CoreXY Z-lift rule (one calibration frame = valid for entire print), SHELL vs SYNBOT
+corner sets, and vision pipeline integration (is_on_plate, normalize_to_plate):
+
+  get_knowledge_topic('behavioral_rules/camera_calibration')
 """
