@@ -627,6 +627,10 @@ def print_file(
     ⚠️ CONFIRMATION REQUIRED — DO NOT CALL THIS TOOL until all steps below are done
     IN A SINGLE TURN. This tool starts an irreversible physical print.
 
+    STEP 0 — Active-print guard:
+      This tool is ⛔ BLOCKED when gcode_state is RUNNING or PREPARE (defense-in-depth;
+      firmware also rejects with "printer busy"). Check get_print_progress() first if unsure.
+
     STEP 1 — Gather everything first (no user interaction yet):
       Call get_project_info(), get_ams_units(), get_spool_info() to collect all data
       needed to build the complete summary before asking the user anything.
@@ -669,6 +673,10 @@ def print_file(
     if printer is None:
         log.warning("print_file: printer not connected: %s", name)
         return _no_printer(name)
+    from tools._guards import check_active_print_guard
+    blocked = check_active_print_guard(printer, name, "print_file")
+    if blocked:
+        return blocked
     try:
         from bpm.bambutools import PlateType
         bed_enum = (

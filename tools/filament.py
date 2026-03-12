@@ -200,6 +200,10 @@ def load_filament(
     - AMS 2 Pro (chip_id 0, unit_id 0) → RIGHT extruder (extruder 0).
     - AMS HT (chip_id 128, unit_id 1) → LEFT extruder (extruder 1).
     Loading from a given AMS unit automatically targets its paired extruder.
+
+    ⛔ BLOCKED during active prints (gcode_state RUNNING or PREPARE).
+    Defense-in-depth: AMS locks slots during prints and firmware rejects the
+    command, but the gate prevents a wasted round-trip and confusing error.
     """
     log.debug("load_filament: called for name=%s unit_id=%s slot_id=%s user_permission=%s", name, unit_id, slot_id, user_permission)
     if not user_permission:
@@ -209,6 +213,10 @@ def load_filament(
     if printer is None:
         log.warning("load_filament: printer not connected: %s", name)
         return _no_printer(name)
+    from tools._guards import check_active_print_guard
+    blocked = check_active_print_guard(printer, name, "load_filament")
+    if blocked:
+        return blocked.get("error", "Blocked: active print in progress.")
     ams_id = _resolve_ams_id(name, unit_id)
     if ams_id is None:
         return f"Error: AMS unit {unit_id} not found on '{name}'."
@@ -230,6 +238,10 @@ def unload_filament(
     Unload the currently loaded filament from the extruder back into the AMS.
 
     Requires user_permission=True.
+
+    ⛔ BLOCKED during active prints (gcode_state RUNNING or PREPARE).
+    Defense-in-depth: AMS locks slots during prints and firmware rejects the
+    command, but the gate prevents a wasted round-trip and confusing error.
     """
     log.debug("unload_filament: called for name=%s user_permission=%s", name, user_permission)
     if not user_permission:
@@ -239,6 +251,10 @@ def unload_filament(
     if printer is None:
         log.warning("unload_filament: printer not connected: %s", name)
         return _no_printer(name)
+    from tools._guards import check_active_print_guard
+    blocked = check_active_print_guard(printer, name, "unload_filament")
+    if blocked:
+        return blocked.get("error", "Blocked: active print in progress.")
     try:
         log.debug("unload_filament: calling printer.unload_filament() for %s", name)
         printer.unload_filament()

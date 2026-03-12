@@ -136,6 +136,10 @@ def set_nozzle_config(
     When extruder differs from the current active tool, set_active_tool() is called
     first to select the target extruder. Side effect: active extruder may change.
     For extruder=-1, the active extruder is left on extruder 1 after the call.
+
+    ⛔ BLOCKED during active prints (gcode_state RUNNING or PREPARE).
+    This tool calls set_active_tool() internally to switch extruders before
+    applying nozzle settings — a tool swap mid-print is catastrophic on H2D.
     """
     log.debug("set_nozzle_config: called for name=%s diameter=%s nozzle_type=%s extruder=%s user_permission=%s", name, diameter, nozzle_type, extruder, user_permission)
     if not user_permission:
@@ -145,6 +149,10 @@ def set_nozzle_config(
     if printer is None:
         log.warning("set_nozzle_config: printer not connected: %s", name)
         return _no_printer(name)
+    from tools._guards import check_active_print_guard
+    blocked = check_active_print_guard(printer, name, "set_nozzle_config")
+    if blocked:
+        return blocked.get("error", "Blocked: active print in progress.")
     state = session_manager.get_state(name)
     try:
         from bpm.bambutools import NozzleDiameter, NozzleType
@@ -192,6 +200,11 @@ def swap_tool(name: str, extruder_id: int | None = None, user_permission: bool =
     toggling — use this when you need to ensure a specific extruder is active
     regardless of the current state. Has no effect on single-extruder printers.
     Requires user_permission=True.
+
+    ⛔ BLOCKED during active prints (gcode_state RUNNING or PREPARE).
+    On H2D, swapping the active extruder mid-print crashes the inactive nozzle
+    into the active print. Firmware provides NO protection against this —
+    low-level command injection bypasses all print-job safety checks.
     """
     log.debug("swap_tool: called for name=%s extruder_id=%s user_permission=%s", name, extruder_id, user_permission)
     if not user_permission:
@@ -201,6 +214,10 @@ def swap_tool(name: str, extruder_id: int | None = None, user_permission: bool =
     if printer is None:
         log.warning("swap_tool: printer not connected: %s", name)
         return _no_printer(name)
+    from tools._guards import check_active_print_guard
+    blocked = check_active_print_guard(printer, name, "swap_tool")
+    if blocked:
+        return blocked.get("error", "Blocked: active print in progress.")
     state = session_manager.get_state(name)
     try:
         from bpm.bambutools import ActiveTool

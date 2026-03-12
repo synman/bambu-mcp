@@ -335,6 +335,10 @@ def send_gcode(
     G-code. For standard print operations (pause, speed, fan), prefer the
     dedicated tools instead.
     Requires user_permission=True.
+
+    ⛔ BLOCKED during active prints (gcode_state RUNNING or PREPARE).
+    Firmware does NOT reject injected G-code — commands execute immediately
+    and can crash the toolhead into the print or trigger hardware faults.
     """
     log.debug("send_gcode: called for name=%s gcode=%r user_permission=%s", name, gcode, user_permission)
     if not user_permission:
@@ -342,6 +346,10 @@ def send_gcode(
     printer = session_manager.get_printer(name)
     if printer is None:
         return _no_printer(name)
+    from tools._guards import check_active_print_guard
+    blocked = check_active_print_guard(printer, name, "send_gcode")
+    if blocked:
+        return blocked.get("error", "Blocked: active print in progress.")
     try:
         printer.send_gcode(gcode)
         log.debug("send_gcode: sent gcode to %s: %r", name, gcode)
@@ -376,6 +384,10 @@ def select_extrusion_calibration(
     loaded filament. Use get_spool_info() to see currently loaded filaments
     and their tray_ids before calling this.
     Requires user_permission=True.
+
+    ⚠️ CAUTION: Using this tool while a print is active (gcode_state RUNNING/PREPARE)
+    may interfere with the active job's flow settings. Prefer calling this only
+    when the printer is idle.
     """
     log.debug("select_extrusion_calibration: called for name=%s tray_id=%s cali_idx=%s user_permission=%s", name, tray_id, cali_idx, user_permission)
     if not user_permission:

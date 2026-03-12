@@ -19,6 +19,9 @@ All routes accept `?printer=<name>` (or `printer` in POST body) to select the ta
 
 ⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
+⛔ **BLOCKED during active prints** — returns HTTP 409 (Conflict) when `gcode_state` is
+`RUNNING` or `PREPARE`. Defense-in-depth: firmware also rejects with "printer busy".
+
 Start printing a .3mf file from SD card.
 
 Query parameters:
@@ -99,6 +102,10 @@ Returns `{"success": true}`.
 ## POST /api/send_gcode
 
 ⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
+
+⛔ **BLOCKED during active prints** — returns HTTP 409 (Conflict) when `gcode_state` is
+`RUNNING` or `PREPARE`. Firmware does NOT reject injected G-code; commands execute
+immediately and can crash the toolhead or damage the active print.
 
 Send raw G-code commands to the printer.
 

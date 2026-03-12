@@ -236,6 +236,28 @@ Restarting `server.py` is required after any code change to `bambu-mcp`. The pro
 
 ---
 
+## Active-Print Disruptive Write Gate (Mandatory)
+
+MCP tools and HTTP routes that send disruptive commands MUST check `gcode_state` and
+**block** when the printer is in `RUNNING` or `PREPARE` state.
+
+**Implementation:** `tools/_guards.py:check_active_print_guard(printer, name, operation)` —
+shared helper returning an error dict if blocked, `None` if safe. Used by all gated tools
+and both gated HTTP routes.
+
+**Gated tools (runtime block):**
+- **Tier 1** (firmware has NO protection): `send_gcode()`, `swap_tool()`, `set_nozzle_config()`
+- **Tier 2** (defense-in-depth — firmware also rejects): `print_file()`, `load_filament()`, `unload_filament()`
+
+**Gated HTTP routes** (return 409 Conflict): `POST /api/send_gcode`, `POST /api/print_3mf`
+
+**Ungated (docstring warning only):** `send_mqtt_command()` (bypass-by-design), `select_extrusion_calibration()` (low risk)
+
+**Behavioral rule:** The agent MUST NOT use `send_mqtt_command()` to circumvent the
+active-print guard on any gated tool.
+
+---
+
 ## Ephemeral Port Pool
 
 All TCP listener components (REST API server + MJPEG camera stream servers) draw ports from a shared singleton `PortPool` (`port_pool.py`). No component uses a hardcoded port.

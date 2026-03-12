@@ -150,4 +150,54 @@ that has no container API endpoint (e.g. `send_anything()`).
 `session_manager.get_printer(name)` which is only initialized when the MCP server
 process is running. Test tool logic by running the full MCP server and calling tools
 through the MCP client.
+
+---
+
+## Active-Print Disruptive Write Gate (Mandatory)
+
+MCP tools and HTTP routes that send disruptive commands to the printer are **blocked**
+when `gcode_state` is `RUNNING` or `PREPARE`. The gate is implemented via
+`tools/_guards.py:check_active_print_guard()` — a shared helper used by all gated
+tools and HTTP routes.
+
+### Gated tools (runtime block — returns error immediately)
+
+| Tool | Tier | Reason |
+|------|------|--------|
+| `send_gcode()` | 1 — firmware has NO protection | G-code executes immediately mid-print; can crash toolhead |
+| `swap_tool()` | 1 — firmware has NO protection | Tool swap crashes inactive nozzle into active print on H2D |
+| `set_nozzle_config()` | 1 — firmware has NO protection | Internally calls `set_active_tool()` — same crash risk as `swap_tool()` |
+| `print_file()` | 2 — defense-in-depth | Firmware rejects with "printer busy" but gate gives clear error |
+| `load_filament()` | 2 — defense-in-depth | AMS locks slots during prints; gate prevents wasted round-trip |
+| `unload_filament()` | 2 — defense-in-depth | AMS locks slots during prints; gate prevents wasted round-trip |
+
+### Ungated tools (docstring warning only)
+
+| Tool | Reason for no gate |
+|------|-------------------|
+| `send_mqtt_command()` | Last-resort bypass tool by design; gating defeats its purpose |
+| `select_extrusion_calibration()` | Low risk; may interfere with flow settings but not catastrophic |
+
+### Gated HTTP routes (return 409 Conflict)
+
+| Route | Reason |
+|-------|--------|
+| `POST /api/send_gcode` | Calls `p.send_gcode()` directly on BPM — bypasses MCP tool gate |
+| `POST /api/print_3mf` | Calls `p.print_3mf_file()` directly on BPM — bypasses MCP tool gate |
+
+### Blocked states
+
+- `RUNNING` — printer is actively executing toolpath moves
+- `PREPARE` — printer is preparing to print (heating, leveling, calibrating)
+
+### Safe states (not blocked)
+
+- `IDLE`, `FINISH`, `FAILED` — printer is not executing a job
+- `PAUSE` — job is paused; some operations (e.g., filament change) are valid while paused
+
+### Agent behavioral rule
+
+The agent MUST NOT use `send_mqtt_command()` to circumvent the active-print guard on
+any gated tool. The guard exists to prevent hardware damage — bypassing it via the
+raw MQTT tool is equivalent to removing a safety interlock.
 """

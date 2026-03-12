@@ -1368,11 +1368,16 @@ def _build_app():
         """⚠️ Start printing a .3mf file from SD card. ?filename=&platenum=&plate=AUTO|COOL_PLATE|ENG_PLATE|HOT_PLATE|TEXTURED_PLATE&use_ams=true|false&ams_mapping=&bl=true|false&flow=true|false&tl=true|false
 
         ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        ⛔ BLOCKED during active prints (gcode_state RUNNING or PREPARE) — returns 409.
         """
         log.debug("print_3mf: called")
-        p, _ = _get_printer(_rargs())
+        p, pname = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
+        from tools._guards import check_active_print_guard
+        blocked = check_active_print_guard(p, pname or "unknown", "print_3mf")
+        if blocked:
+            return _err(blocked["error"], code=HTTPStatus.CONFLICT)
         try:
             from bpm.bambutools import PlateType
             filename = _rargs().get("filename", "")
@@ -1902,11 +1907,16 @@ def _build_app():
         """⚠️ Send raw G-code commands. ?gcode=<commands> (use | as newline separator)
 
         ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+        ⛔ BLOCKED during active prints (gcode_state RUNNING or PREPARE) — returns 409.
         """
         log.debug("send_gcode: called")
-        p, _ = _get_printer(_rargs())
+        p, pname = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
+        from tools._guards import check_active_print_guard
+        blocked = check_active_print_guard(p, pname or "unknown", "send_gcode")
+        if blocked:
+            return _err(blocked["error"], code=HTTPStatus.CONFLICT)
         try:
             gcode = _rargs().get("gcode", "").replace("|", "\n")
             log.debug("send_gcode: gcode=%s", repr(gcode[:80]))

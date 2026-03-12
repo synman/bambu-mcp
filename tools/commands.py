@@ -33,6 +33,13 @@ def send_mqtt_command(
     validation and safety guardrails are bypassed. Incorrect commands can damage
     prints, trigger hardware faults, or put the printer into an unrecoverable state.
 
+    ⚠️ CAUTION: This tool is intentionally NOT gated by the active-print guard because
+    it exists as a bypass mechanism. However, sending gcode_line or set_active_tool
+    commands via this tool while a print is active (gcode_state RUNNING/PREPARE) is
+    EXTREMELY DANGEROUS — firmware does NOT reject injected G-code or tool swaps
+    mid-print. The agent MUST NOT use this tool to circumvent the active-print guard
+    on send_gcode(), swap_tool(), or any other gated tool.
+
     user_permission must be explicitly True — this is a mandatory write-protection gate.
     command_json must be a valid JSON string. It is parsed and re-serialised before
     publishing to device/{serial}/request via printer.send_anything().
