@@ -7,20 +7,17 @@ cross between the two calibration reference frames.
 
 Corner assignments (current, after all name swaps):
   FL = far-left    NL = near-left    NR = near-right    FR = far-right
-  ORIGIN = shell NL = (1185, 1905) — below camera frame
+  ORIGIN = shell NL = (1480, 1256) — below camera frame
 
-Per-corner offsets (synbot − shell):
-  FL  dx=+2    dy=0     dist=2px      ← shared anchor, near-perfect
-  NL  dx=+647  dy=-335  dist=729px
-  NR  dx=+181  dy=+566  dist=594px
-  FR  dx=+819  dy=+160  dist=835px
+SHELL corners calibrated 2026-03-12 at Z=2, chamber light OFF, N=30 snaps, TRIM_COUNT=7.
+NL is extrapolated via hotspot offset — physically below the camera frame.
 """
 import numpy as np, math
 
 # ── Control points (raw camera pixel coords) ──────────────────────────────────
-SHELL  = {"FL": (96,414),  "NL": (1185,1905), "NR": (1339,446),  "FR": (694,292)}
-SYNBOT = {"FL": (98,414),  "NL": (1832,1570), "NR": (1520,1012), "FR": (1513,452)}
-ORIGIN = SHELL["NL"]   # (1185, 1905) — physical bed origin
+SHELL  = {"FL": (695,616),   "NL": (1480,1256), "NR": (1187,299),  "FR": (860,205)}
+SYNBOT = {"FL": (98,414),   "NL": (1832,1570), "NR": (1520,1012), "FR": (1513,452)}
+ORIGIN = SHELL["NL"]   # (1480, 1256) — physical bed origin
 
 # ── Per-corner offset vectors ─────────────────────────────────────────────────
 OFFSETS = {k: {
@@ -72,10 +69,10 @@ if __name__ == "__main__":
 # All vision / spaghetti / object-in-frame checks should use this polygon.
 
 PLATE_BOUNDARY = {
-    "FL": SHELL["FL"],   # (96,  414)   far-left
-    "FR": SHELL["FR"],   # (694, 292)   far-right
-    "NR": SHELL["NR"],   # (1339,446)   near-right
-    "NL": SHELL["NL"],   # (1185,1905)  near-left  ← ORIGIN
+    "FL": SHELL["FL"],   # (695,  616)  far-left
+    "FR": SHELL["FR"],   # (860,  205)  far-right
+    "NR": SHELL["NR"],   # (1187, 299)  near-right
+    "NL": SHELL["NL"],   # (1480, 1256) near-left  ← ORIGIN (extrapolated below frame)
 }
 PLATE_ORDER = ["FL","FR","NR","NL"]  # convex hull quad, clockwise from FL
 
