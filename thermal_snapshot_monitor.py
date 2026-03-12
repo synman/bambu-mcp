@@ -54,6 +54,10 @@ PRINTER_PROFILES = {
         "plate_right":   0.78,
         "plate_top_det": 0.36,   # detection crop top
         "plate_top_dsp": 0.28,   # display crop top (adds headroom for path overlay)
+        "min_cov_cliff": 0.25,   # H2D inner gradient is smaller; lower threshold needed
+        "cliff_thresh":  0.05,
+        "max_cov_valid": 0.88,
+        "jump_thresh":   0.08,
     },
     "A1": {
         "secret_pfx":    "bambu-a1-printer",
@@ -77,6 +81,10 @@ PRINTER_PROFILES = {
         "plate_ymax_right": 0.42,  # plate right edge when bed is at Y=256
         "plate_ymax_top":   0.52,  # plate top   edge when bed is at Y=256
         "plate_bottom":    0.98,   # plate bottom edge (consistent across Y positions)
+        "min_cov_cliff": 0.45,   # A1 needs higher threshold to skip inner-gradient cliff
+        "cliff_thresh":  0.05,
+        "max_cov_valid": 0.88,
+        "jump_thresh":   0.08,
     },
 }
 # Set by _parse_args() at startup; all functions read these module-level globals.
@@ -309,9 +317,9 @@ def detect_plate_thermal(arr, floor_temp, bed_temp):
         temp_map   = (lum_n - lum_floor) / max(lum_anchor - lum_floor, 1e-4) * 100.0
 
     MIN_PX        = int(0.05 * H * W)
-    CLIFF_THRESH  = 0.05
-    MIN_COV_CLIFF = 0.45   # raised: skip early inner-gradient cliff (was 0.25)
-    MAX_COV_VALID = 0.88   # reject boundaries covering >88% of crop (too large)
+    CLIFF_THRESH  = PROFILE.get("cliff_thresh", 0.05)
+    MIN_COV_CLIFF = PROFILE.get("min_cov_cliff", 0.25)
+    MAX_COV_VALID = PROFILE.get("max_cov_valid", 0.88)
     N_STEPS       = 80     # finer sweep resolution (was 60)
     thresholds    = np.linspace(lum_anchor, lum_floor + 0.02, N_STEPS)  # sweep lower (was +0.05)
     sweep = []
@@ -332,7 +340,7 @@ def detect_plate_thermal(arr, floor_temp, bed_temp):
     if len(sweep) >= 2:
         # Pass 1: detect coverage JUMP (plate-edge transition often shows as big coverage
         # increase, NOT solidity drop, as the background floods in at a specific threshold)
-        JUMP_THRESH = 0.08  # 8% per-step coverage jump = major boundary transition
+        JUMP_THRESH = PROFILE.get("jump_thresh", 0.08)
         jump_i = -1
         for i in range(1, len(sweep)):
             pre_cov = sweep[i-1][1] / (H * W)
