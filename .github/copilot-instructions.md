@@ -1330,6 +1330,83 @@ M400         ; confirmed at clearance
 
 This section is the Bambu-specific extension of the global "GCode Calibration Motion Safety" rule. The global rule governs structure and safety; this section governs the exact command syntax for Bambu printers.
 
+## send_gcode Multi-Command Separator (Mandatory)
+
+The `send_gcode()` MCP tool and `POST /api/send_gcode` HTTP route accept multiple GCode commands in a single call. The separator depends on the call path:
+
+| Path | Separator | Notes |
+|------|-----------|-------|
+| MCP tool `send_gcode(gcode=...)` | `\n` (newline) | BPM `bambuprinter.py:975` uses `\n` natively |
+| HTTP `POST /api/send_gcode` JSON body | `\n` (newline) | Sent directly to BPM |
+| HTTP `GET /api/send_gcode` query param | `\|` (pipe) | `api_server.py:1921` substitutes `\|`→`\n` before forwarding |
+
+**Hard requirement: comma is NEVER a valid separator in any path.** Using `,` as a separator produces malformed GCode that either errors or silently does nothing.
+
+**Source:** `[VERIFIED: bambu-mcp source]` — `api_server.py` line ~1921 performs `gcode.replace("|", "\n")`; `bambuprinter.py` line ~975 joins with `\n`.
+
+## H2D Camera-to-Bed Corner Calibration Geometry (Mandatory)
+
+This section documents the verified H2D bed corner positions and camera frame geometry established during the corner calibration POC (2026-03-12). Read before generating any corner calibration GCode or expected-pixel estimates.
+
+**H2D bed corners — world coordinates (mm), 5mm inset from edges:**
+
+| Corner | World (X, Y) | Notes |
+|--------|-------------|-------|
+| BL | (5, 315) | Back-Left |
+| BR | (345, 315) | Back-Right |
+| FR | (345, 5) | Front-Right |
+| FL | (5, 40) | Front-Left — use Y=40, **not Y=5**; Y=5 is at the clip zone and may be partially off-camera |
+
+**Verified pixel positions at 720p (1280×720), confidence=1.000 — `[VERIFIED: empirical, 2026-03-12]`:**
+
+| Corner | Pixel (u, v) at 720p |
+|--------|--------------------|
+| BL | (81.1, 304.2) |
+| BR | (1015.7, 271.7) |
+| FR | (875.6, 704.8) |
+| FL | not yet measured |
+
+**Expected pixel hints (native 1920×1080 — scale to actual frame at runtime):**
+
+| Corner | Native expected pixel |
+|--------|--------------------|
+| BL | (36, 374) |
+| BR | (1552, 416) |
+| FR | (1402, 1068) |
+| FL | (1179, 990) |
+
+**Runtime scaling (mandatory):** EXPECTED_PIXELS are expressed in assumed native 1920×1080 resolution. Always scale to the actual captured frame dimensions before passing to any crop/search function:
+```python
+NATIVE_W, NATIVE_H = 1920, 1080
+frame_w, frame_h = snapshot.size
+scale_x, scale_y = frame_w / NATIVE_W, frame_h / NATIVE_H
+expected_scaled = (int(ex * scale_x), int(ey * scale_y))
+```
+Failure to scale causes BR and FR to fall outside the 720p frame, producing full-frame fallback with garbage centroids (~center of frame).
+
+**Timing constants (verified empirically):**
+- `HOME_WAIT_SECONDS = 90` — G28 on H2D takes 60–90s; 8s is dangerously short
+- `SETTLE_SECONDS_XY = 12.0` — cross-bed diagonal ~490mm at F3000 ≈ 10s + buffer
+- `SETTLE_SECONDS_Z = 3.0` — short Z moves; vibration damps quickly
+- `Z_CLEARANCE = 10mm`, `Z_CAPTURE = 2mm`
+
+**Camera orientation:** Higher Y world (back of bed) → lower pixel row (top of frame). Lower Y world (front of bed) → higher pixel row (bottom of frame). Left X → lower pixel column. Right X → higher pixel column.
+
+## Visual Frame-Diff Nozzle Detection (Mandatory)
+
+The corner calibration approach uses visual image differencing to locate the nozzle — **not thermal detection**. Nozzle temperature is irrelevant; detection works equally at 38°C ambient and 300°C printing temperature.
+
+**How it works:**
+1. Capture reference frame at Z_CLEARANCE (nozzle physically above camera view)
+2. Descend to Z_CAPTURE (nozzle physically enters camera view as a dark object)
+3. Diff the two frames — the nozzle appears as the brightest region in the delta image
+4. Weighted centroid of the diff gives sub-pixel nozzle position
+
+**Hard requirements:**
+- **Always use a tight local crop** around the expected pixel position (search_radius ≈ 200px). Full-frame diff is unreliable: when Z changes, the entire bed image shifts slightly, producing ~100K changed pixels across the whole frame. The centroid of a full-frame diff is approximately the center of the frame — not the nozzle.
+- When expected pixel is outside the actual frame (scaling mistake), the local crop collapses to zero size. Guard against this: if crop dimension < 20px in either axis, fall back to full-frame diff AND cap confidence at 0.5 as a signal that the result is unreliable.
+- **4 corners minimum for a meaningful reprojection error.** With exactly 3 correspondences, the 3×3 homography (8 DOF) is exactly determined — reprojection error is 0.0px by construction and carries no diagnostic value. A 4th point produces a genuine overdetermined least-squares fit with a real reprojection error.
+
 ## Proactive Bed Preheat Suggestion (Mandatory)
 
 When the user asks about a print job's plate or a specific 3MF file (e.g. viewing plate thumbnails, checking filament, asking "what does plate N look like", reviewing a file on the SD card), assess whether preheating is appropriate and, if so, offer it proactively.
