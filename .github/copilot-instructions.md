@@ -1405,7 +1405,7 @@ The corner calibration approach uses visual image differencing to locate the noz
 **Hard requirements:**
 - **Always use a tight local crop** around the expected pixel position (search_radius ≈ 200px). Full-frame diff is unreliable: when Z changes, the entire bed image shifts slightly, producing ~100K changed pixels across the whole frame. The centroid of a full-frame diff is approximately the center of the frame — not the nozzle.
 - When expected pixel is outside the actual frame (scaling mistake), the local crop collapses to zero size. Guard against this: if crop dimension < 20px in either axis, fall back to full-frame diff AND cap confidence at 0.5 as a signal that the result is unreliable.
-- **4 corners minimum for a meaningful reprojection error.** With exactly 3 correspondences, the 3×3 homography (8 DOF) is exactly determined — reprojection error is 0.0px by construction and carries no diagnostic value. A 4th point produces a genuine overdetermined least-squares fit with a real reprojection error.
+- **5+ points required for a meaningful reprojection error.** A 3×3 homography has 8 DOF (defined up to scale). Each correspondence gives 2 equations. 3 pts = 6 eq (underdetermined), 4 pts = 8 eq (exactly determined), 5+ pts = 10+ eq (overdetermined, nonzero reproj error). With only 4 bed corners the DLT reproj error is always 0.0px — not a quality signal. A center-bed or mid-edge 5th point is required if reproj error diagnostics are needed.
 
 ## Proactive Bed Preheat Suggestion (Mandatory)
 
