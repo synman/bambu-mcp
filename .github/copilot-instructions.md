@@ -1344,45 +1344,64 @@ The `send_gcode()` MCP tool and `POST /api/send_gcode` HTTP route accept multipl
 
 **Source:** `[VERIFIED: bambu-mcp source]` — `api_server.py` line ~1921 performs `gcode.replace("|", "\n")`; `bambuprinter.py` line ~975 joins with `\n`.
 
-## H2D Camera-to-Bed Corner Calibration Geometry (Mandatory)
+## H2D Camera-to-Bed Calibration Geometry (Mandatory)
 
-This section documents the verified H2D bed corner positions and camera frame geometry established during the corner calibration POC (2026-03-12). Read before generating any corner calibration GCode or expected-pixel estimates.
+This section documents the verified H2D bed geometry and 9-point perimeter calibration schema established during the corner calibration POC (2026-03-12). Read before generating any calibration GCode or expected-pixel estimates.
 
-**H2D bed corners — world coordinates (mm), 5mm inset from edges:**
+**H2D bed boundary points — world coordinates (mm):**
 
-| Corner | World (X, Y) | Notes |
-|--------|-------------|-------|
-| BL | (5, 315) | Back-Left |
-| BR | (345, 315) | Back-Right |
-| FR | (345, 5) | Front-Right |
-| FL | (5, 40) | Front-Left — use Y=40, **not Y=5**; Y=5 is at the clip zone and may be partially off-camera |
+| Name | World (X, Y) | Notes |
+|------|-------------|-------|
+| BL / B005 | (5, 315) | Back-Left corner |
+| BR / B345 | (345, 315) | Back-Right corner |
+| FR / F345 | (345, 40) | Front-Right — Y=40, **not Y=5**; clip zone at Y=5 may be partially off-camera |
+| FL / F005 | (5, 40) | Front-Left — same Y=40 inset |
 
-**Verified pixel positions at 720p (1280×720), confidence=1.000 — `[VERIFIED: empirical, 2026-03-12]`:**
+**9-point perimeter schema (greedy pixel-space, ≥50px min spacing):**
 
-| Corner | Pixel (u, v) at 720p |
-|--------|--------------------|
-| BL | (81.1, 304.2) |
-| BR | (1015.7, 271.7) |
-| FR | (875.6, 704.8) |
-| FL | not yet measured |
+Perspective foreshortening: the H2D camera views the bed obliquely from the back/top. The back row (Y=315) spans 625px in the frame; the front row (Y=40) spans only 62px. The right column (X=345) collapses to within 5–35px of front-right corner in pixel space and provides no independent constraints. Greedy selection at ≥50px pixel spacing yields exactly 9 unique usable points:
 
-**Expected pixel hints (native 1920×1080 — scale to actual frame at runtime):**
+| Name | World (X, Y) | 720p pixel (approx) | Notes |
+|------|-------------|---------------------|-------|
+| B005 | (5, 315) | (54, 203) | ✅ back row |
+| B090 | (90, 315) | (128, 200) | ✅ |
+| B175 | (175, 315) | (234, 197) | ✅ |
+| B260 | (260, 315) | (396, 191) | ✅ |
+| B345 | (345, 315) | (678, 182) | ✅ back row 625px total span |
+| L243 | (5, 243) | (413, 394) | ✅ left col |
+| L175 | (5, 175) | (479, 429) | ✅ ~53px from L243 |
+| F005 | (5, 40) | (523, 452) | ⚠️ ~50px from L175 |
+| F345 | (345, 40) | (584, 468) | ⚠️ ~62px from F005 (max achievable at Y=40) |
 
-| Corner | Native expected pixel |
-|--------|--------------------|
-| BL | (36, 374) |
-| BR | (1552, 416) |
-| FR | (1402, 1068) |
-| FL | (1179, 990) |
+Right-column points R108/R175/R243 all fall within 5–35px of F345/F005 in pixel space — excluded as near-degenerate constraints.
 
-**Runtime scaling (mandatory):** EXPECTED_PIXELS are expressed in assumed native 1920×1080 resolution. Always scale to the actual captured frame dimensions before passing to any crop/search function:
+**Expected pixel generation (mandatory — do NOT hardcode):**
+
+Expected pixel positions are computed at runtime by projecting each world point through the prior calibration H stored in `~/.bambu-mcp/calibration/H2D.json`. Never hardcode expected pixel values; they change if the camera view changes.
+
 ```python
-NATIVE_W, NATIVE_H = 1920, 1080
-frame_w, frame_h = snapshot.size
-scale_x, scale_y = frame_w / NATIVE_W, frame_h / NATIVE_H
-expected_scaled = (int(ex * scale_x), int(ey * scale_y))
+with open(cal_json_path) as f:
+    cal_data = json.load(f)
+H_prior = np.array(cal_data["dlt"]["H"])
+for name, wx, wy in PERIMETER_POINTS:
+    v = H_prior @ np.array([wx, wy, 1.0])
+    native_px, native_py = v[0] / v[2], v[1] / v[2]
+    # Scale to actual captured frame resolution
+    scaled_px = int(native_px * frame_w / 1920)
+    scaled_py = int(native_py * frame_h / 1080)
+    expected_pixels[name] = (scaled_px, scaled_py)
 ```
-Failure to scale causes BR and FR to fall outside the 720p frame, producing full-frame fallback with garbage centroids (~center of frame).
+
+**4-corner bootstrap pixels (native 1920×1080) — use only when H2D.json absent:**
+
+| Corner | Native pixel | 720p pixel |
+|--------|------------|------------|
+| BL (B005) | (122, 456) | (81, 304) |
+| BR (B345) | (1526, 408) | (1017, 272) |
+| FR (F345) | (1313, 1056) | (876, 704) |
+| FL (F005) | (1176, 1017) | (784, 678) |
+
+`[VERIFIED: empirical, 2026-03-12]` — all four measured at conf=1.000, Zc=714.5mm.
 
 **Timing constants (verified empirically):**
 - `HOME_WAIT_SECONDS = 90` — G28 on H2D takes 60–90s; 8s is dangerously short
@@ -1405,7 +1424,7 @@ The corner calibration approach uses visual image differencing to locate the noz
 **Hard requirements:**
 - **Always use a tight local crop** around the expected pixel position (search_radius ≈ 200px). Full-frame diff is unreliable: when Z changes, the entire bed image shifts slightly, producing ~100K changed pixels across the whole frame. The centroid of a full-frame diff is approximately the center of the frame — not the nozzle.
 - When expected pixel is outside the actual frame (scaling mistake), the local crop collapses to zero size. Guard against this: if crop dimension < 20px in either axis, fall back to full-frame diff AND cap confidence at 0.5 as a signal that the result is unreliable.
-- **5+ points required for a meaningful reprojection error.** A 3×3 homography has 8 DOF (defined up to scale). Each correspondence gives 2 equations. 3 pts = 6 eq (underdetermined), 4 pts = 8 eq (exactly determined), 5+ pts = 10+ eq (overdetermined, nonzero reproj error). With only 4 bed corners the DLT reproj error is always 0.0px — not a quality signal. A center-bed or mid-edge 5th point is required if reproj error diagnostics are needed.
+- **9-point perimeter schema gives a genuine overdetermined solve.** A 3×3 homography has 8 DOF. 9 pts × 2eq = 18eq >> 8 DOF. With only 4 bed corners the DLT reproj error is always 0.0px (4×2=8eq exactly determined). The 9-point walk produces the first non-zero reproj error, which is a real quality signal. A reproj error > 5px on any single point indicates that point is an outlier (detection noise, bed tilt, or lens distortion).
 
 ## Proactive Bed Preheat Suggestion (Mandatory)
 
