@@ -174,6 +174,84 @@ See GCode Calibration Motion Safety rules in global copilot-instructions.md.
 
 ---
 
+## H2D Dual-Extruder Calibration Mechanics
+
+The H2D has two physically separate nozzles mounted on a single carriage:
+  T0 = right extruder (default active at power-on and after G28)
+  T1 = left extruder
+
+Inter-nozzle offset: T1's tip is physically offset from T0's tip in X (approximately 18mm
+based on H2D hardware). The firmware applies this offset automatically when the active tool
+is selected — when T1 is active, `G0 X175 Y160` positions T1's tip at (175, 160), carriage
+shifted accordingly.
+
+### Critical rule: active tool selection determines which tip is at the commanded XY
+
+Heating a nozzle (M104 Tn S180 or set_nozzle_temp()) does NOT move the carriage.
+Only active tool selection (swap_tool() / PATCH /api/toggle_active_tool) moves the
+carriage so that the selected nozzle is at the commanded world position.
+
+Consequence for calibration:
+  WRONG: heat T1 → capture frame → detect T1 halo at commanded XY
+    → T1's halo appears near T0's pixel (T1 is physically offset when T0 is active at WXY)
+    → recorded pixel is near T0's position, not T1's true projected position
+  RIGHT: swap_tool() to T1 → move to (wx,wy) → T1 is now at (wx,wy) → heat T1 → detect
+
+### Tool switching — always use toggle_active_tool() or PATCH /api/toggle_active_tool
+
+Never use raw gcode T0 / T1 for tool switching in calibration. Always use:
+  - HTTP route: PATCH /api/toggle_active_tool?printer=H2D
+
+The HTTP route reads the current active tool from printer state and toggles to the other.
+It calls bpm's set_active_tool() which handles H2D-specific firmware requirements correctly.
+Since the calibration sequence is always T0→T1→T0, exactly two toggle calls suffice.
+
+### Per-nozzle idle baseline is mandatory after every tool change + re-position
+
+After PATCH /api/toggle_active_tool + G0 to (wx,wy), the camera scene shifts (carriage
+shifted to position the new nozzle at WXY). The idle baseline captured at T0's position is
+invalid as a thermal reference for T1 measurements. Must re-capture idle baseline after each
+tool change + re-position before heating the new nozzle.
+
+### State invariant: T0 active on entry and exit of heat_halo
+
+The calibration loop expects T0 to be the active tool at the start of each point and
+when the loop resumes after heat_halo completes. The heat_halo routine must:
+  1. Enter with T0 active (caller's invariant)
+  2. Test T0 (already active — no toggle needed)
+  3. Toggle T0→T1 via PATCH /api/toggle_active_tool
+  4. wait_for_tool_change_complete() — visual settle detection
+  5. Move to world_xy (carriage shifts so T1 tip is at wx,wy)
+  6. Re-capture idle baseline at T1 position
+  7. Test T1
+  8. Toggle T1→T0 via PATCH /api/toggle_active_tool
+  9. wait_for_tool_change_complete()
+  10. Move to world_xy (carriage shifts so T0 tip is back at wx,wy)
+  11. Exit with T0 active (restores caller's invariant)
+
+### T0-T1 guard semantics after tool-change fix
+
+With the tool-change fix applied, T0 and T1 are BOTH moved to (wx,wy) for their respective
+tests. The H matrix maps (wx,wy) to the same pixel regardless of which nozzle is active.
+Therefore T0 and T1 halos appear at approximately the same pixel — distance ≈ 0–15px.
+
+  CORRECT guard: T0-T1 distance < 30px → ACCEPT (conf × 1.2); both confirmed at same world point
+  DISCARD guard: T0-T1 distance ≥ 30px → one detection is on artifact; discard heat_halo
+
+### expected_px applies to whichever nozzle is active at (wx,wy)
+
+The H matrix maps world (wx,wy) to a pixel. That pixel is correct for whichever nozzle
+is physically at (wx,wy). If T1 is active at (wx,wy), the expected pixel is the same as
+for T0 — both nozzles produce the same world→pixel projection when each is at (wx,wy).
+
+### On the H2D, calibration references "nozzles" (plural), not "the nozzle" (singular)
+
+Each calibration point must specify which nozzle is being measured. T0 is the default.
+To measure T1's pixel position at a world point, T1 must be the active tool before the move.
+See "H2D Dual-Extruder Calibration Mechanics" above.
+
+---
+
 ## G28 Homing Duration (H2D — Verified Empirical)
 
 [VERIFIED: empirical — 3 trials, 2026-03-12]
@@ -211,4 +289,45 @@ Prior value (retired): HOME_WAIT_SECONDS = 90 (anecdotal "60–90s" comment). Re
 Code references:
   camera/corner_calibration.py line ~172 — HOME_TIMEOUT_SECONDS, HOME_NOISE_FLOOR_PX constants
   camera/corner_calibration.py line ~240 — wait_for_home_complete() implementation
+
+---
+
+## Tool-Change Settle Duration (H2D — Calibration Required)
+
+[PROVISIONAL — constants not yet measured empirically. Run camera/calibrate_tool_change_settle.py
+ before treating TOOL_CHANGE_NOISE_FLOOR_PX or TOOL_CHANGE_TIMEOUT_S as authoritative.]
+
+Visual detection method (analogous to G28 homing detection, tuned for shorter event):
+- Resolution: 360p (lower than calibration 720p — tool change is <5s; speed matters)
+- Poll interval: 0.3s (vs 2.0s for homing — finer resolution of a shorter event)
+- Stable criterion: 3 consecutive frames with avg-diff ≤ TOOL_CHANGE_NOISE_FLOOR_PX × 1.5
+- Hard timeout: TOOL_CHANGE_TIMEOUT_S = 15s (conservative until measured)
+
+| Constant | Value | Status |
+|----------|-------|--------|
+| TOOL_CHANGE_POLL_S | 0.3s | Fixed (design choice) |
+| TOOL_CHANGE_SNAPSHOT_RES | "360p" | Fixed (design choice) |
+| TOOL_CHANGE_STABLE_N | 3 | Fixed (design choice) |
+| TOOL_CHANGE_NOISE_MULT | 1.5 | Fixed (same as homing) |
+| TOOL_CHANGE_NOISE_FLOOR_PX | [PROVISIONAL 1.5px] | MUST be measured at 360p |
+| TOOL_CHANGE_TIMEOUT_S | 15.0s | Conservative until measured |
+
+IMPORTANT: TOOL_CHANGE_NOISE_FLOOR_PX is NOT the same as HOME_NOISE_FLOOR_PX (2.2px).
+HOME_NOISE_FLOOR_PX is measured at 720p. 360p noise floor is lower in absolute px — lower
+resolution compresses vibration-driven pixel changes into fewer pixels → smaller diffs.
+Do NOT substitute 2.2px. Use calibrate_tool_change_settle.py to measure.
+
+Measurement process (run if H2D is serviced, replaced, or noise floor value is suspect):
+  1. Establish 360p noise floor: 5 baseline frame pairs at rest → mean avg-abs-diff.
+  2. Toggle T0→T1 via PATCH /api/toggle_active_tool; record t=0.
+  3. Poll 0.3s / 360p; compute avg-abs-diff vs prior frame.
+  4. Declare done when 3 consecutive diffs ≤ noise_floor × 1.5; record t_settle.
+  5. Toggle T1→T0; repeat steps 2–4.
+  6. Run 3 trials for each direction (T0→T1 and T1→T0 may differ in carriage travel).
+  7. Update: TOOL_CHANGE_NOISE_FLOOR_PX = mean(all noise_floor measurements).
+             TOOL_CHANGE_TIMEOUT_S = max(all t_settle across both directions) + 5s.
+
+Code references:
+  camera/corner_calibration.py — TOOL_CHANGE_* constants, wait_for_tool_change_complete()
+  camera/calibrate_tool_change_settle.py — standalone calibration script
 """

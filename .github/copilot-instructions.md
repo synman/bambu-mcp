@@ -1469,6 +1469,32 @@ These are approximate values from before the DLT calibration run. They are NOT t
 - `SETTLE_SECONDS_Z = 3.0` — short Z moves; vibration damps quickly
 - `Z_CLEARANCE = 10mm`, `Z_CAPTURE = 2mm`, `Z_RESCUE = 1.0mm` (used in rescue probe when primary conf<0.3)
 
+### Tool-Change Settle Detection
+
+After any `toggle_active_tool()` call in `corner_calibration.py`, the H2D carriage physically
+moves to position the newly active nozzle at the commanded world position. This takes 1–3s.
+**Never use a fixed sleep** — use `wait_for_tool_change_complete()`.
+
+**Detection method (analogous to `wait_for_home_complete()` but faster):**
+- Resolution: `360p` — lower res for speed; tool change is <5s vs 47s for G28
+- Poll interval: `0.3s` — finer temporal resolution for the shorter event
+- Stable criterion: 3 consecutive frames with avg-diff ≤ `TOOL_CHANGE_NOISE_FLOOR_PX × 1.5`
+- Hard timeout: `TOOL_CHANGE_TIMEOUT_S = 15s`
+- Implementation: `wait_for_tool_change_complete()` in `corner_calibration.py`
+
+**CRITICAL: `TOOL_CHANGE_NOISE_FLOOR_PX ≠ HOME_NOISE_FLOOR_PX`**
+`HOME_NOISE_FLOOR_PX = 2.2px` is measured at 720p. At 360p, lower resolution compresses
+vibration-driven pixel changes into fewer pixels → lower absolute avg-diff. Substituting 2.2px
+will produce a threshold that is too high and `wait_for_tool_change_complete()` will return
+immediately without waiting for the carriage to actually settle. Always use the 360p value.
+
+**Constants (update when `calibrate_tool_change_settle.py` is run):**
+- `TOOL_CHANGE_NOISE_FLOOR_PX = 1.5` — [PROVISIONAL] estimated at 360p; must be measured
+- `TOOL_CHANGE_TIMEOUT_S = 15.0` — conservative until measured
+- Run `camera/calibrate_tool_change_settle.py` to measure (printer IDLE + explicit user auth)
+- After running: mark `[PROVISIONAL]` → `[VERIFIED: empirical]` in `corner_calibration.py`
+  and update `TOOL_CHANGE_NOISE_FLOOR_PX` in `behavioral_rules_camera_calibration.py`
+
 **Camera orientation:** Higher Y world (back of bed) → lower pixel row (top of frame). Lower Y world (front of bed) → higher pixel row (bottom of frame). Left X → lower pixel column. Right X → higher pixel column.
 
 **Perimeter walk point order and effective probe set:**

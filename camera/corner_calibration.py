@@ -154,14 +154,10 @@ HARD_EXCLUDE = {
     "R243",
 }
 
-# Fixed-point database: points where heat_halo T0-T1 separation < 15px (front-right zone
-# perspective compression) — thermal toggle is unreliable. Authoritative positions derived
-# from old carriage-body H (confirmed ~0px residual vs old H; 2026-03-12).
-# [VERIFIED: empirical] Old H prediction confirmed accurate at B005★ within 6px.
-FIXED_POINTS = {
-    "R175": (527, 427),  # (345,175): T0-T1=13px — heat_halo fails; old-H projection confirmed
-    "F345": (511, 513),  # (345, 40): T0-T1=10px — heat_halo fails; old-H projection confirmed
-}
+# FIXED_POINTS intentionally empty after tool-change fix + guard flip (2026-03-13).
+# R175 (527,427) and F345 (511,513) were hardcoded from buggy runs where T1 was never
+# made the active tool. After fix: heat_halo with guard < 30px ACCEPT now handles these.
+FIXED_POINTS: dict = {}
 
 CAL_JSON_PATH = os.path.expanduser("~/.bambu-mcp/calibration/H2D.json")
 
@@ -176,6 +172,16 @@ SETTLE_SECONDS_XY = 12.0       # after XY corner move (up to 490mm at F3000 ≈ 
 # Timeout = max(46.9s) + 18s safety margin = 65s.
 HOME_TIMEOUT_SECONDS = 65
 PROBES_PER_POINT = 3           # capture attempts per point; keep highest-confidence result
+
+# Tool-change settle detection constants (analogous to homing constants, tuned for ~1-3s event)
+# [PROVISIONAL] TOOL_CHANGE_NOISE_FLOOR_PX until calibrate_tool_change_settle.py runs.
+# 360p noise floor ≠ 720p noise floor (HOME_NOISE_FLOOR_PX=2.2px) — do not substitute.
+TOOL_CHANGE_POLL_S = 0.3          # 0.3s interval — tool change is < 5s normally
+TOOL_CHANGE_SNAPSHOT_RES = "360p" # lower res for speed; noise floor differs from 720p
+TOOL_CHANGE_STABLE_N = 3          # 3 consecutive stable frames (shorter event than G28)
+TOOL_CHANGE_NOISE_MULT = 1.5      # same multiplier as wait_for_home_complete
+TOOL_CHANGE_TIMEOUT_S = 15.0      # hard timeout; tool change never takes > ~5s normally
+TOOL_CHANGE_NOISE_FLOOR_PX = 1.5  # [PROVISIONAL] estimated at 360p; measure empirically
 
 OUTPUT_DIR = "/tmp/h2d_corner_calibration"
 
@@ -195,19 +201,18 @@ def send_gcode(gcode: str) -> dict:
     with urllib.request.urlopen(req) as resp:
         return json.loads(resp.read())
 
-def get_snapshot() -> Image.Image:
-    """Capture a snapshot from H2D camera, return as PIL Image.
+def _snapshot_at_res(resolution: str) -> Image.Image:
+    """Capture snapshot at specified resolution (e.g. '360p', '720p'), return PIL Image.
 
     Retries up to 3 times on transient HTTP errors (BadStatusLine, ConnectionResetError).
-    These occur after long heat_halo waits when the urllib keep-alive connection goes stale.
     """
     params = urllib.parse.urlencode({
         "printer": PRINTER_NAME,
-        "resolution": SNAPSHOT_RESOLUTION,
+        "resolution": resolution,
         "quality": SNAPSHOT_QUALITY,
     })
     url = f"{API_BASE}/snapshot?{params}"
-    last_exc: Exception = RuntimeError("get_snapshot: no attempts made")
+    last_exc: Exception = RuntimeError("_snapshot_at_res: no attempts made")
     for attempt in range(3):
         try:
             with urllib.request.urlopen(url) as resp:
@@ -221,6 +226,11 @@ def get_snapshot() -> Image.Image:
             if attempt < 2:
                 time.sleep(2.0)
     raise last_exc
+
+
+def get_snapshot() -> Image.Image:
+    """Capture a snapshot from H2D camera at calibration resolution, return as PIL Image."""
+    return _snapshot_at_res(SNAPSHOT_RESOLUTION)
 
 def get_printer_state() -> str:
     """Get current gcode_state."""
@@ -277,6 +287,65 @@ def wait_for_home_complete(timeout: float = HOME_TIMEOUT_SECONDS,
             if stable_count >= STABLE_N:
                 t_done = elapsed - (STABLE_N - 1) * POLL_S
                 print(f"    Homing complete at t≈{t_done:.1f}s "
+                      f"(thresh={threshold:.2f}px, diff={diff:.2f}px)")
+                return
+        else:
+            stable_count = 0
+
+
+def toggle_active_tool() -> None:
+    """Switch active tool via MCP API (T0→T1 or T1→T0).
+
+    Uses PATCH /api/toggle_active_tool which calls bpm set_active_tool() — handles
+    H2D firmware requirements correctly. Do NOT use raw G-code T0/T1 for tool switching.
+    The route reads current active tool from printer state and toggles to the other,
+    so two calls always produce T0→T1→T0 without needing to track current tool state.
+    """
+    params = urllib.parse.urlencode({"printer": PRINTER_NAME})
+    req = urllib.request.Request(
+        f"{API_BASE}/toggle_active_tool?{params}",
+        method="PATCH",
+    )
+    with urllib.request.urlopen(req) as resp:
+        resp.read()
+
+
+def wait_for_tool_change_complete(
+    timeout: float = TOOL_CHANGE_TIMEOUT_S,
+    noise_floor: float = TOOL_CHANGE_NOISE_FLOOR_PX,
+) -> None:
+    """Block until tool-change carriage motion settles, detected by visual frame stability.
+
+    Analogous to wait_for_home_complete() but uses 360p at 0.3s interval — tool change
+    is a 1–3s event vs ~47s for G28, so lower res + faster polling is appropriate.
+
+    [PROVISIONAL] TOOL_CHANGE_NOISE_FLOOR_PX = 1.5px until calibrate_tool_change_settle.py
+    runs. 360p noise floor ≠ HOME_NOISE_FLOOR_PX (2.2px, measured at 720p). Do not substitute.
+
+    Args:
+        timeout: Hard timeout in seconds. Default TOOL_CHANGE_TIMEOUT_S (15s).
+        noise_floor: Stability baseline in px avg diff. Default TOOL_CHANGE_NOISE_FLOOR_PX.
+    """
+    threshold = noise_floor * TOOL_CHANGE_NOISE_MULT
+    prev = np.array(_snapshot_at_res(TOOL_CHANGE_SNAPSHOT_RES).convert("L"), dtype=np.float32)
+    stable_count = 0
+    t_start = time.time()
+
+    while True:
+        elapsed = time.time() - t_start
+        if elapsed > timeout:
+            raise TimeoutError(
+                f"wait_for_tool_change_complete: carriage did not settle within {timeout:.0f}s"
+            )
+        time.sleep(TOOL_CHANGE_POLL_S)
+        cur = np.array(_snapshot_at_res(TOOL_CHANGE_SNAPSHOT_RES).convert("L"), dtype=np.float32)
+        diff = float(np.mean(np.abs(cur - prev)))
+        prev = cur
+        if diff <= threshold:
+            stable_count += 1
+            if stable_count >= TOOL_CHANGE_STABLE_N:
+                t_done = elapsed - (TOOL_CHANGE_STABLE_N - 1) * TOOL_CHANGE_POLL_S
+                print(f"    Tool-change settled at t≈{t_done:.2f}s "
                       f"(thresh={threshold:.2f}px, diff={diff:.2f}px)")
                 return
         else:
@@ -596,76 +665,117 @@ def detect_nozzle_best(ref_img: Image.Image, nozzle_img: Image.Image,
 
 def detect_nozzle_heat_toggle(expected_px: tuple,
                                name: str,
-                               output_dir: str) -> dict:
+                               output_dir: str,
+                               world_xy: tuple) -> dict:
     """
     Last-resort nozzle detection via thermal toggle between T0 and T1.
 
-    Heats each nozzle in turn while the other stays at idle. The resulting
-    per-nozzle thermal halo is differenced against the shared idle baseline
-    and analyzed with the full technique cascade.
+    Heats each nozzle in turn while the other stays at idle. T0 is tested
+    first (already active on entry — no toggle needed). T1 requires an explicit
+    tool change: toggle_active_tool() moves carriage so T1 tip is at world_xy,
+    then idle baseline is re-captured (camera scene shifts), then T1 is heated.
+    After T1 test, toggle back to T0 and re-position to restore state invariant.
+
+    State invariant: T0 is the active tool on entry and on exit.
+    Per-nozzle idle baseline is mandatory after each tool change + re-position:
+    the camera scene shifts when the active tool changes (carriage shifts).
 
     Args:
         expected_px: (x, y) approximate nozzle pixel position (used for crop)
         name:        point name (e.g. "F005") — used for image filenames
         output_dir:  directory for saved frames
+        world_xy:    (wx, wy) world coordinates of this calibration point in mm
 
     Returns:
         dict with keys "T0" and "T1", each containing:
           {"cx": float, "cy": float, "conf": float, "technique": str}
         or {"cx": 0, "cy": 0, "conf": 0.0, "technique": "none"} if failed
     """
+    wx, wy = world_xy
     results = {}
 
-    # Capture shared idle baseline at current Z position
-    print(f"  [heat_halo] Capturing idle baseline (both nozzles at {T_IDLE}°C)...")
+    # --- T0 test (T0 is already active on entry — no toggle needed) ---
+    print(f"  [heat_halo] Capturing T0 idle baseline (both nozzles at {T_IDLE}°C)...")
     send_gcode(gcode_set_nozzle_temps(T_IDLE, T_IDLE))
     time.sleep(2)  # brief settle after any prior temp change
-    idle_frame = get_snapshot()
-    idle_path = os.path.join(output_dir, f"{name}_heat_idle.png")
-    idle_frame.save(idle_path)
+    t0_idle_frame = get_snapshot()
+    t0_idle_frame.save(os.path.join(output_dir, f"{name}_heat_t0_idle.png"))
 
-    for nozzle_id, t0_target, t1_target in [
-        ("T0", T_HEAT, T_IDLE),   # heat T0, keep T1 cool
-        ("T1", T_IDLE, T_HEAT),   # heat T1, keep T0 cool
-    ]:
-        print(f"  [heat_halo] Heating {nozzle_id} to {T_HEAT}°C "
-              f"(T0={t0_target}°C, T1={t1_target}°C)...")
-        send_gcode(gcode_set_nozzle_temps(t0_target, t1_target))
-        print(f"  [heat_halo] Waiting {HEAT_WAIT}s for stable thermal halo...")
+    print(f"  [heat_halo] Heating T0 to {T_HEAT}°C (T1 at {T_IDLE}°C)...")
+    send_gcode(gcode_set_nozzle_temps(T_HEAT, T_IDLE))
+    print(f"  [heat_halo] Waiting {HEAT_WAIT}s for stable thermal halo...")
+    time.sleep(HEAT_WAIT)
+
+    t0_hot = get_snapshot()
+    t0_hot.save(os.path.join(output_dir, f"{name}_heat_t0.png"))
+
+    cx, cy, conf, tech = detect_nozzle_best(
+        t0_idle_frame, t0_hot, expected_px=expected_px, search_radius=150,
+        heat_halo_mode=True)
+    print(f"  [heat_halo] T0: ({cx:.1f},{cy:.1f}) conf={conf:.3f} [{tech}]")
+    results["T0"] = {"cx": cx, "cy": cy, "conf": conf, "technique": tech}
+
+    # Temperature escalation: if T0 halo is still weak, retry at T_HEAT_ESCALATE.
+    # Fixes weak-zone points (B260, R243, F345 region) where dmax < 40 at 180°C.
+    if conf < CONF_RESCUE and T_HEAT_ESCALATE > T_HEAT:
+        print(f"  [heat_halo] T0 weak (conf={conf:.3f} < {CONF_RESCUE}); "
+              f"escalating to {T_HEAT_ESCALATE}°C...")
+        send_gcode(gcode_set_nozzle_temps(T_HEAT_ESCALATE, T_IDLE))
         time.sleep(HEAT_WAIT)
-
-        hot_frame = get_snapshot()
-        hot_path = os.path.join(output_dir, f"{name}_heat_{nozzle_id.lower()}.png")
-        hot_frame.save(hot_path)
-
-        cx, cy, conf, tech = detect_nozzle_best(
-            idle_frame, hot_frame, expected_px=expected_px, search_radius=150,
+        hot2 = get_snapshot()
+        hot2.save(os.path.join(output_dir, f"{name}_heat_t0_escalated.png"))
+        cx2, cy2, conf2, tech2 = detect_nozzle_best(
+            t0_idle_frame, hot2, expected_px=expected_px, search_radius=150,
             heat_halo_mode=True)
-        print(f"  [heat_halo] {nozzle_id}: ({cx:.1f},{cy:.1f}) conf={conf:.3f} [{tech}]")
-        results[nozzle_id] = {"cx": cx, "cy": cy, "conf": conf, "technique": tech}
+        print(f"  [heat_halo] T0 escalated: ({cx2:.1f},{cy2:.1f}) conf={conf2:.3f} [{tech2}]")
+        if conf2 > conf:
+            results["T0"] = {"cx": cx2, "cy": cy2, "conf": conf2,
+                             "technique": tech2 + "_escalated"}
+            print(f"  [heat_halo] ✓ Escalated T0 accepted (conf {conf:.3f} → {conf2:.3f})")
 
-        # Temperature escalation: if T0 halo is still weak, retry at T_HEAT_ESCALATE.
-        # Fixes weak-zone points (B260, R243, F345 region) where dmax < 40 at 180°C.
-        if nozzle_id == "T0" and conf < CONF_RESCUE and T_HEAT_ESCALATE > T_HEAT:
-            print(f"  [heat_halo] T0 weak (conf={conf:.3f} < {CONF_RESCUE}); "
-                  f"escalating to {T_HEAT_ESCALATE}°C...")
-            send_gcode(gcode_set_nozzle_temps(T_HEAT_ESCALATE, T_IDLE))
-            time.sleep(HEAT_WAIT)
-            hot2 = get_snapshot()
-            hot2.save(os.path.join(output_dir, f"{name}_heat_t0_escalated.png"))
-            cx2, cy2, conf2, tech2 = detect_nozzle_best(
-                idle_frame, hot2, expected_px=expected_px, search_radius=150,
-                heat_halo_mode=True)
-            print(f"  [heat_halo] T0 escalated: ({cx2:.1f},{cy2:.1f}) conf={conf2:.3f} [{tech2}]")
-            if conf2 > conf:
-                results["T0"] = {"cx": cx2, "cy": cy2, "conf": conf2,
-                                 "technique": tech2 + "_escalated"}
-                print(f"  [heat_halo] ✓ Escalated T0 accepted (conf {conf:.3f} → {conf2:.3f})")
+    # Cool T0 before tool change
+    print(f"  [heat_halo] Cooling T0 back to {T_IDLE}°C...")
+    send_gcode(gcode_set_nozzle_temps(T_IDLE, T_IDLE))
+    time.sleep(5)  # brief cool-down gap before tool change
 
-        # Cool nozzle back before next toggle
-        print(f"  [heat_halo] Cooling {nozzle_id} back to {T_IDLE}°C...")
-        send_gcode(gcode_set_nozzle_temps(T_IDLE, T_IDLE))
-        time.sleep(5)  # brief cool-down gap before next heat cycle
+    # --- T1 test: toggle T0→T1, move to world_xy (T1 tip now at wx,wy), re-capture idle ---
+    # T1 must be physically at (wx,wy) before heating — firmware applies extruder offset
+    # automatically when T1 is active (carriage shifts so T1 tip is at commanded position).
+    print(f"  [heat_halo] Toggling T0→T1; T1 tip will position at ({wx},{wy})...")
+    toggle_active_tool()
+    wait_for_tool_change_complete()
+    send_gcode(f"G0 X{wx} Y{wy} F{F_XY}")
+    time.sleep(SETTLE_SECONDS_XY)
+
+    # Mandatory re-capture: camera scene shifted (carriage shifted to T1 position).
+    print(f"  [heat_halo] Capturing T1 idle baseline at T1 position (both at {T_IDLE}°C)...")
+    t1_idle_frame = get_snapshot()
+    t1_idle_frame.save(os.path.join(output_dir, f"{name}_heat_t1_idle.png"))
+
+    print(f"  [heat_halo] Heating T1 to {T_HEAT}°C (T0 at {T_IDLE}°C)...")
+    send_gcode(gcode_set_nozzle_temps(T_IDLE, T_HEAT))
+    print(f"  [heat_halo] Waiting {HEAT_WAIT}s for stable thermal halo...")
+    time.sleep(HEAT_WAIT)
+
+    t1_hot = get_snapshot()
+    t1_hot.save(os.path.join(output_dir, f"{name}_heat_t1.png"))
+
+    cx, cy, conf, tech = detect_nozzle_best(
+        t1_idle_frame, t1_hot, expected_px=expected_px, search_radius=150,
+        heat_halo_mode=True)
+    print(f"  [heat_halo] T1: ({cx:.1f},{cy:.1f}) conf={conf:.3f} [{tech}]")
+    results["T1"] = {"cx": cx, "cy": cy, "conf": conf, "technique": tech}
+
+    # Cool T1 and restore T0 as active tool + restore carriage position
+    print(f"  [heat_halo] Cooling T1 back to {T_IDLE}°C...")
+    send_gcode(gcode_set_nozzle_temps(T_IDLE, T_IDLE))
+    time.sleep(5)
+
+    print(f"  [heat_halo] Toggling T1→T0; restoring T0 tip to ({wx},{wy})...")
+    toggle_active_tool()
+    wait_for_tool_change_complete()
+    send_gcode(f"G0 X{wx} Y{wy} F{F_XY}")
+    time.sleep(SETTLE_SECONDS_XY)
 
     return results
 
@@ -979,12 +1089,11 @@ def run_calibration(supplement: bool = False):
 
         expected = expected_pixels.get(name)
 
-        # Fixed-point bypass: skip detection for points where heat_halo is unreliable.
-        # Front-right zone compression makes T0-T1 pixel separation < 15px → always discarded.
+        # FIXED_POINTS dict is empty (see comment at definition). This block is a no-op
+        # but retained as a safety net in case entries are re-added in future.
         if name in FIXED_POINTS:
             fpx, fpy = FIXED_POINTS[name]
-            print(f"  *** FIXED_POINT {name}: authoritative ({fpx},{fpy}) — "
-                  f"T0-T1 < 15px in front-right zone, stored position used (no probe)")
+            print(f"  *** FIXED_POINT {name}: authoritative ({fpx},{fpy})")
             results[name] = {
                 "world_xy": [wx, wy],
                 "pixel_xy": [float(fpx), float(fpy)],
@@ -1113,10 +1222,12 @@ def run_calibration(supplement: bool = False):
                 expected_px=expected,
                 name=name,
                 output_dir=OUTPUT_DIR,
+                world_xy=(wx, wy),
             )
-            # Consistency check: T0-T1 pixel distance must be ≥15px.
-            # If both nozzles produce nearly identical detections, both are
-            # finding the same carriage body artifact (not distinct nozzle tips).
+            # Consistency check: after tool-change fix, T0 and T1 are both positioned at
+            # (wx,wy). The H matrix maps (wx,wy) to the same pixel for both nozzles.
+            # Expected: T0-T1 distance ≈ 0–15px (both at same world point — ACCEPT).
+            # Unexpected: T0-T1 distance ≥ 30px → one detection is on an artifact (DISCARD).
             t0 = heat_results.get("T0", {})
             t1_check = heat_results.get("T1", {})
             t0_t1_dist = 0.0
@@ -1125,15 +1236,21 @@ def run_calibration(supplement: bool = False):
                 dy = t0["cy"] - t1_check["cy"]
                 t0_t1_dist = (dx*dx + dy*dy) ** 0.5
                 print(f"      [heat_halo] T0-T1 offset distance: {t0_t1_dist:.1f}px")
-                if t0_t1_dist < 15.0:
-                    print(f"      [heat_halo] ⚠️  T0≈T1 ({t0_t1_dist:.1f}px < 15px) — "
-                          f"both nozzles detected same artifact; discarding heat_halo")
+                if t0_t1_dist < 30.0:
+                    # Both confirmed at same world point — boost confidence
+                    t0["conf"] = min(t0["conf"] * 1.2, 1.0)
+                    print(f"      [heat_halo] ✓ T0≈T1 ({t0_t1_dist:.1f}px < 30px) — "
+                          f"both nozzles confirmed same world point; T0 conf boosted "
+                          f"→ {t0['conf']:.3f}")
+                else:
+                    print(f"      [heat_halo] ⚠️  T0-T1 diverged ({t0_t1_dist:.1f}px ≥ 30px) — "
+                          f"one detection on artifact; discarding heat_halo")
                     t0 = {}  # invalidate — fall through to keep frame-diff result
 
             # Use T0 result if it improves conf — or unconditionally when Y guard fired.
             # When force_heat_halo=True (back-row Y consistency guard triggered), the
             # pre-guard best result is a known carriage artifact.  heat_halo with valid
-            # T0-T1 separation (> 15px — already checked above) is authoritative
+            # T0-T1 agreement (< 30px — already checked above) is authoritative
             # regardless of its absolute confidence score.
             t0_conf = t0.get("conf", 0)
             heat_halo_wins = (t0_conf > best_conf) or (force_heat_halo and t0_conf > 0.1)
