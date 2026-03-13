@@ -64,11 +64,21 @@ _ALPHA_OUTLINE = 230
 _ALPHA_HEATMAP = 160
 
 # Zone definitions (fraction of frame dimensions)
+# [VERIFIED: empirical] Camera at (X=0, Y=5, Z=+75) front-left. At 720p the back row
+# of the bed (Y=315) projects to pixel rows 273–304 ≈ 38–42% from top (confirmed via
+# heatmap PNGs: hot 90°C bed surface occupies upper frame, gantry diagonal runs
+# upper-left to center-right). _AIR_BOTTOM=0.40 aligns precisely with the back-bed
+# edge — the air zone (rows 0–40%) captures space above the bed where spaghetti
+# strands float. Front edge (Y=40) foreshortens to rows 678–703 (94–98%), well
+# below the plate bottom — correctly excluded. Left/right insets (0.10/0.90) exclude
+# machine frame hardware visible at the frame edges.
+# _PLATE_* constants are used only for annotated-PNG visualization (green overlay),
+# NOT for any detection math. Plate zone (35–80%) bounds the visible bed surface.
 _AIR_TOP    = 0.00
-_AIR_BOTTOM = 0.40
-_AIR_LEFT   = 0.10
-_AIR_RIGHT  = 0.90
-_PLATE_TOP    = 0.35
+_AIR_BOTTOM = 0.40   # back bed row ≈ 38–42% from top; aligns with back-bed boundary
+_AIR_LEFT   = 0.10   # inset to exclude left machine frame hardware
+_AIR_RIGHT  = 0.90   # inset to exclude right machine frame hardware
+_PLATE_TOP    = 0.35  # visualization only (annotated PNG green overlay) — not detection
 _PLATE_BOTTOM = 0.80
 _PLATE_LEFT   = 0.20
 _PLATE_RIGHT  = 0.80
