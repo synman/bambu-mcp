@@ -101,7 +101,7 @@ REPROB_STDDEV_THRESH = 8.0    # px — positional std_dev threshold for repeatab
 
 # Back-row Y consistency guard: back-row points (world Y = BACK_ROW_WORLD_Y) should all
 # project to similar pixel Y. Deviations signal carriage-body false detection (B175-class).
-BACK_ROW_WORLD_Y     = 260    # mm — world Y for all back-row perimeter points
+BACK_ROW_WORLD_Y     = 230    # mm — world Y for all back-row perimeter points
 BACK_ROW_Y_TOL       = 20.0   # px — max allowed deviation from running back-row pixel-Y mean
 
 # PREFER_CLOSE_APPROACH disabled (was 0.25): the 80-110px Z-offset claim was wrong.
@@ -121,11 +121,11 @@ T_IDLE               = 38     # °C — idle/standby nozzle target (firmware def
 # Format: (name, world_x_mm, world_y_mm)
 # Ordering: back-to-front traversal (homing reference at back; minimize travel).
 PERIMETER_POINTS = [
-    ("B005",  5, 260),   # Back-Left  (Y=260 not 315: camera too face-on at Y=315)
-    ("B090", 90, 260),   # Back row
-    ("B175",175, 260),   # Back row
-    ("B260",260, 260),   # Back row
-    ("B345",345, 260),   # Back-Right — extends back row; better H conditioning for right side
+    ("B005",  5, 230),   # Back-Left  (Y=230: heater-block parallax at Y=260 confirmed; Y=243 works)
+    ("B090", 90, 230),   # Back row
+    ("B175",175, 230),   # Back row
+    ("B260",260, 230),   # Back row
+    ("B345",345, 230),   # Back-Right — extends back row; better H conditioning for right side
     ("R243",345, 243),   # Right col — back-side anchor for right coverage
     ("R175",345, 175),   # Right col — mid anchor
     ("L243",  5, 243),   # Left col
@@ -434,6 +434,41 @@ def _technique_sparse_bright(diff, x_lo, y_lo):
     return cx, cy, count, f"sparse_bright(inner85pct thresh={thresh:.0f} count={count})"
 
 
+def _technique_bottom_pct(diff, x_lo, y_lo, thresh_fraction=0.40, bottom_frac=0.25):
+    """
+    Centroid of the bottom (highest Y) portion of significant thermal pixels.
+
+    Specifically targets the nozzle TIP — the lowest visible thermal feature in
+    the heat_halo differential frame. The heater block body (Z≈25-30mm) appears
+    near the TOP of the thermal region (lower Y pixel) due to camera parallax.
+    The nozzle tip (Z≈2mm) is at the BOTTOM of the carriage (higher Y pixel).
+
+    Taking the bottom 25% of pixels above 40% dmax isolates the tip rather
+    than the heater block body that top_pct finds.
+
+    Use only in heat_halo mode (thermal diff frames). Not appropriate for
+    Z-descent frames where there is no persistent thermal gradient by height.
+    """
+    dmax = float(diff.max())
+    thresh = max(5.0, dmax * thresh_fraction)
+    mask = diff >= thresh
+    ys, xs = np.where(mask)
+    count = int(mask.sum())
+    if count < 5:
+        return 0.0, 0.0, 0, f"bottom_pct: count={count}"
+    # Take highest-Y values (nozzle tip = lowest on carriage = highest Y in image)
+    y_cutoff = np.percentile(ys, (1.0 - bottom_frac) * 100)
+    tip_mask = ys >= y_cutoff
+    by = ys[tip_mask]
+    bx = xs[tip_mask]
+    if len(bx) < 3:
+        return 0.0, 0.0, 0, f"bottom_pct: tip count={len(bx)}"
+    cx = float(np.mean(bx)) + x_lo
+    cy = float(np.mean(by)) + y_lo
+    return cx, cy, len(bx), (
+        f"bottom_pct(thresh={thresh:.0f} bot{int(bottom_frac*100)}pct count={len(bx)})")
+
+
 def _score_result(cx, cy, count, dmax, crop_area, use_full_frame, expected_px, search_radius):
     """Compute confidence for a (cx, cy, count) detection result."""
     if count == 0:
@@ -455,20 +490,28 @@ def _score_result(cx, cy, count, dmax, crop_area, use_full_frame, expected_px, s
 
 def detect_nozzle_best(ref_img: Image.Image, nozzle_img: Image.Image,
                        expected_px: tuple,
-                       search_radius: int = 100) -> tuple:
+                       search_radius: int = 100,
+                       heat_halo_mode: bool = False) -> tuple:
     """
     Detect nozzle centroid using a technique cascade.
 
-    Tries centroid → top_pct → weighted → sparse_bright on the same pre-computed
-    local-crop diff.  No extra GCode or captures — each technique re-analyses the
-    same pair of frames from a different angle.  Stops as soon as confidence
-    reaches CONF_ACCEPT.
+    Standard mode (heat_halo_mode=False):
+        Tries top_pct → weighted → centroid → sparse_bright on the same
+        pre-computed local-crop diff. No extra GCode or captures.
+        Stops as soon as confidence reaches CONF_ACCEPT.
+
+    heat_halo_mode=True:
+        Uses bottom_pct → top_pct → sparse_bright → centroid cascade instead.
+        bottom_pct targets the nozzle TIP (lowest thermal feature = highest Y)
+        rather than the heater block body (highest brightness = lower Y).
+        Use when the diff is a thermal halo frame (T0-hot minus idle).
 
     Args:
-        ref_img:      frame at Z_CLEARANCE (nozzle far from bed)
-        nozzle_img:   frame at capture height (nozzle close to bed)
-        expected_px:  (x, y) approximate nozzle pixel location (REQUIRED)
-        search_radius: half-width of local crop (default 100px)
+        ref_img:         frame at Z_CLEARANCE or idle thermal baseline
+        nozzle_img:      frame at capture height or T0/T1 hot
+        expected_px:     (x, y) approximate nozzle pixel location (REQUIRED)
+        search_radius:   half-width of local crop (default 100px)
+        heat_halo_mode:  if True, use bottom_pct-first cascade for thermal frames
 
     Returns:
         (cx, cy, confidence, technique_name) — centroid in full-frame pixel
@@ -492,12 +535,22 @@ def detect_nozzle_best(ref_img: Image.Image, nozzle_img: Image.Image,
     if use_full_frame:
         print(f"  WARNING: expected_px {expected_px} near edge — full-frame fallback")
 
-    techniques = [
-        ("top_pct",       lambda: _technique_top_pct(diff, x_lo, y_lo)),
-        ("weighted",      lambda: _technique_weighted(diff, x_lo, y_lo)),
-        ("centroid",      lambda: _technique_centroid(diff, x_lo, y_lo)),
-        ("sparse_bright", lambda: _technique_sparse_bright(diff, x_lo, y_lo)),
-    ]
+    if heat_halo_mode:
+        # bottom_pct first: finds nozzle tip (highest Y = lowest Z feature) rather
+        # than the heater block body (highest brightness = higher Z, lower Y pixel).
+        techniques = [
+            ("bottom_pct",    lambda: _technique_bottom_pct(diff, x_lo, y_lo)),
+            ("top_pct",       lambda: _technique_top_pct(diff, x_lo, y_lo)),
+            ("sparse_bright", lambda: _technique_sparse_bright(diff, x_lo, y_lo)),
+            ("centroid",      lambda: _technique_centroid(diff, x_lo, y_lo)),
+        ]
+    else:
+        techniques = [
+            ("top_pct",       lambda: _technique_top_pct(diff, x_lo, y_lo)),
+            ("weighted",      lambda: _technique_weighted(diff, x_lo, y_lo)),
+            ("centroid",      lambda: _technique_centroid(diff, x_lo, y_lo)),
+            ("sparse_bright", lambda: _technique_sparse_bright(diff, x_lo, y_lo)),
+        ]
 
     best_cx, best_cy, best_conf, best_name = 0.0, 0.0, 0.0, "none"
     ex, ey = int(expected_px[0]), int(expected_px[1])
@@ -586,7 +639,8 @@ def detect_nozzle_heat_toggle(expected_px: tuple,
         hot_frame.save(hot_path)
 
         cx, cy, conf, tech = detect_nozzle_best(
-            idle_frame, hot_frame, expected_px=expected_px, search_radius=150)
+            idle_frame, hot_frame, expected_px=expected_px, search_radius=150,
+            heat_halo_mode=True)
         print(f"  [heat_halo] {nozzle_id}: ({cx:.1f},{cy:.1f}) conf={conf:.3f} [{tech}]")
         results[nozzle_id] = {"cx": cx, "cy": cy, "conf": conf, "technique": tech}
 
@@ -600,7 +654,8 @@ def detect_nozzle_heat_toggle(expected_px: tuple,
             hot2 = get_snapshot()
             hot2.save(os.path.join(output_dir, f"{name}_heat_t0_escalated.png"))
             cx2, cy2, conf2, tech2 = detect_nozzle_best(
-                idle_frame, hot2, expected_px=expected_px, search_radius=150)
+                idle_frame, hot2, expected_px=expected_px, search_radius=150,
+                heat_halo_mode=True)
             print(f"  [heat_halo] T0 escalated: ({cx2:.1f},{cy2:.1f}) conf={conf2:.3f} [{tech2}]")
             if conf2 > conf:
                 results["T0"] = {"cx": cx2, "cy": cy2, "conf": conf2,
@@ -1075,19 +1130,26 @@ def run_calibration(supplement: bool = False):
                           f"both nozzles detected same artifact; discarding heat_halo")
                     t0 = {}  # invalidate — fall through to keep frame-diff result
 
-            # Use T0 result if it improves conf — heat_halo always wins over close-approach.
-            # (PREFER_CLOSE_APPROACH disabled: sparse_bright was detecting shaft/body, not tip.)
-            if t0.get("conf", 0) > best_conf:
+            # Use T0 result if it improves conf — or unconditionally when Y guard fired.
+            # When force_heat_halo=True (back-row Y consistency guard triggered), the
+            # pre-guard best result is a known carriage artifact.  heat_halo with valid
+            # T0-T1 separation (> 15px — already checked above) is authoritative
+            # regardless of its absolute confidence score.
+            t0_conf = t0.get("conf", 0)
+            heat_halo_wins = (t0_conf > best_conf) or (force_heat_halo and t0_conf > 0.1)
+            if heat_halo_wins:
                 best_cx  = t0["cx"]
                 best_cy  = t0["cy"]
-                best_conf = t0["conf"]
+                best_conf = t0_conf
                 best_technique = f"heat_halo_T0/{t0['technique']}"
                 best_probe_idx = "heat_halo"
-                print(f"      [heat_halo] T0 result accepted: "
+                reason = "Y guard override" if force_heat_halo and not (t0_conf > best_conf) else "conf improved"
+                print(f"      [heat_halo] T0 result accepted ({reason}): "
                       f"({best_cx:.1f},{best_cy:.1f}) conf={best_conf:.3f}")
             else:
-                print(f"      [heat_halo] T0 conf={t0.get('conf',0):.3f} "
-                      f"did not improve on best={best_conf:.3f}")
+                print(f"      [heat_halo] T0 conf={t0_conf:.3f} "
+                      f"did not improve on best={best_conf:.3f}"
+                      + (" (force_heat_halo=True but conf<0.1 — keeping pre-guard)" if force_heat_halo else ""))
 
             # Always store T1 result in results for per-nozzle calibration
             t1 = heat_results.get("T1", {})
