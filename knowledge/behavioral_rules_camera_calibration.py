@@ -179,7 +179,7 @@ Use this color for plate overlay blends and boundary visualisations.
 
   camera/coord_transform.py    — PLATE_BOUNDARY, H matrices, is_on_plate,
                                   normalize_to_plate, synbot_to_shell
-  camera/corner_calibration.py — GCode calibration sequence generator, piecewise
+  calibration/corner_calibration.py — GCode calibration sequence generator, piecewise
                                   affine coefficients, Phase 1 calibration pipeline
 
 ---
@@ -317,8 +317,8 @@ Prior value (retired): HOME_WAIT_SECONDS = 90 (anecdotal "60–90s" comment). Re
   HOME_TIMEOUT_SECONDS = 65, which is authoritative from 2026-03-12 forward.
 
 Code references:
-  camera/corner_calibration.py line ~172 — HOME_TIMEOUT_SECONDS, HOME_NOISE_FLOOR_PX constants
-  camera/corner_calibration.py line ~240 — wait_for_home_complete() implementation
+  calibration/corner_calibration.py line ~172 — HOME_TIMEOUT_SECONDS, HOME_NOISE_FLOOR_PX constants
+  calibration/corner_calibration.py line ~240 — wait_for_home_complete() implementation
 
 ---
 
@@ -378,8 +378,8 @@ Measurement process (run if H2D is serviced, replaced, or noise floor value is s
              TOOL_CHANGE_TIMEOUT_S = max(all t_settle across both directions) + 5s.
 
 Code references:
-  camera/corner_calibration.py — TOOL_CHANGE_* constants, wait_for_tool_change_complete()
-  camera/calibrate_tool_change_settle.py — standalone calibration script
+  calibration/corner_calibration.py — TOOL_CHANGE_* constants, wait_for_tool_change_complete()
+  calibration/calibrate_tool_change_settle.py — standalone calibration script
 
 ## Camera Script Command Escalation — Mandatory
 
@@ -393,7 +393,7 @@ the highest available API tier for each operation.
 | Tier 2 | `POST /api/send_gcode` | Only when no dedicated route covers the operation — legitimate for motion/homing/mode-set |
 | Tier 3 | Direct MQTT / `send_anything` | Never from camera scripts |
 
-**Full command audit — all camera scripts (corner_calibration.py, nozzle_compare.py, calibrate_tool_change_settle.py):**
+**Full command audit — all calibration scripts (corner_calibration.py, nozzle_compare.py, calibrate_tool_change_settle.py):**
 
 | Command | Dedicated Route? | Tier | Verdict |
 |---------|-----------------|------|---------|
@@ -416,44 +416,10 @@ def set_nozzle_temp(temp: int, extruder: int = 0) -> dict:
         return json.loads(r.read())
 ```
 
-## Idle Nozzle Heat Timeout — Firmware Behavior
+## Idle Nozzle Heat Timeout
 
-When `gcode_state` is `IDLE`, `FINISH`, or `FAILED`, the H2D firmware silently resets any
-elevated nozzle target back to **38°C** after a calibrated timeout. Camera calibration scripts
-that heat nozzles while in these states must actively defend against this reset.
-
-**Per-state timeout behavior:**
-
-| gcode_state | Timer fires? | Notes |
-|-------------|-------------|-------|
-| `IDLE` | Yes | Confirmed — no active job; quiescent condition |
-| `FINISH` | Likely yes | Same quiescent condition; unverified empirically |
-| `FAILED` | Likely yes | Same quiescent condition; unverified empirically |
-| `PAUSE` | Likely NO | Active print; firmware keeps nozzle hot for resume |
-| `RUNNING` | No | Firmware maintains requested temp |
-| `PREPARE` | No | Pre-print sequence; firmware maintains requested temp |
-
-**Constants (defined in corner_calibration.py and nozzle_compare.py):**
-```python
-IDLE_NOZZLE_HEAT_TIMEOUT_S  = <measured>                          # [PROVISIONAL until calibration run]
-IDLE_HEAT_KEEPALIVE_S       = IDLE_NOZZLE_HEAT_TIMEOUT_S * 0.75  # proactive fire threshold
-IDLE_HEAT_POLL_INTERVAL_S   = 10.0                               # reactive poll interval
-```
-
-**Dual-layer keepalive pattern — `heat_and_wait(t0, t1, duration_s)`:**
-
-Both checks are independent `if` blocks (NOT `elif`) — both can fire in the same iteration.
-`set_nozzle_temp()` is called only on condition, never speculatively on every tick.
-
-```
-Proactive: elapsed >= IDLE_HEAT_KEEPALIVE_S → set_nozzle_temp() for both nozzles → reset timer
-Reactive:  now >= next_poll → read targets → if target drifted → set_nozzle_temp() + log WARN → reset timer
-```
-
-Both checks share `last_assert`. Reactive re-assert also resets the proactive timer.
-Inner loop cadence: 0.5s. All temperature calls use `set_nozzle_temp()` (Tier 1) — never M104.
-
-Calibration script: `camera/calibrate_idle_nozzle_timeout.py`
-Run while printer is `gcode_state=IDLE` with user auth to heat T0 to 150°C.
-Output: `IDLE_NOZZLE_HEAT_TIMEOUT_S`, `target_restore_resets_timer: bool`, `tested_gcode_state`.
+See **behavioral_rules/print_state** → "Idle Nozzle Heat Timeout — Firmware Behavior" for the
+full pattern, constants, and calibration script. Calibration scripts use `heat_and_wait()` to
+defend against this firmware behavior; that function is defined in `calibration/corner_calibration.py`
+and `calibration/nozzle_compare.py`.
 """

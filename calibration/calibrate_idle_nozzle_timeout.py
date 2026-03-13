@@ -46,7 +46,7 @@ import urllib.request
 
 PRINTER_NAME   = "H2D"
 TARGET_TEMP    = 150        # °C — elevated target to heat; low enough to avoid drool
-POLL_INTERVAL  = 5.0        # s — tight polling to resolve timeout with ±5s accuracy
+POLL_INTERVAL  = 0.5        # s — default poll interval; ±0.5s accuracy
 MAX_WAIT       = 360.0      # s — safety ceiling; if no reset seen in 6 min, abort
 T_IDLE         = 38         # °C — expected reset target (matches corner_calibration.py)
 MAX_TRIALS     = 3          # maximum number of drops to observe
@@ -154,11 +154,21 @@ def preflight_check() -> str:
 
 # ── Calibration loop ───────────────────────────────────────────────────────────
 
-def run_calibration(target_temp: int, num_trials: int) -> dict:
+CONFIRM_TIMEOUT = 15.0  # s — max time to wait for telemetry to reflect a newly set target
+
+
+def run_calibration(target_temp: int, num_trials: int, poll_interval: float = POLL_INTERVAL) -> dict:
     """Run the idle nozzle timeout calibration.
 
+    Two phases per trial:
+      Confirm phase: after set_nozzle_temp(), poll until telemetry shows target == target_temp.
+                     This guards against reading stale telemetry before the printer has
+                     acknowledged the newly set target — which would falsely appear as a reset.
+      Watch phase:   once confirmed, start the timer — poll for target != target_temp.
+                     The elapsed time from confirmation to drift is the true firmware timeout.
+
     Returns a result dict with:
-      - timeout_seconds: measured firmware reset timeout
+      - IDLE_NOZZLE_HEAT_TIMEOUT_S: measured firmware reset timeout
       - target_restore_resets_timer: whether restoring the target resets the countdown
       - trials: list of per-trial observations
       - tested_gcode_state: gcode_state during the run
@@ -169,7 +179,7 @@ def run_calibration(target_temp: int, num_trials: int) -> dict:
     print(f"  Printer:       {PRINTER_NAME}")
     print(f"  Target temp:   {target_temp}°C")
     print(f"  Trials:        {num_trials}")
-    print(f"  Poll interval: {POLL_INTERVAL}s")
+    print(f"  Poll interval: {poll_interval}s")
     print(f"  Max wait:      {MAX_WAIT}s")
     print(f"  gcode_state:   {gcode_state}")
     print()
@@ -190,34 +200,57 @@ def run_calibration(target_temp: int, num_trials: int) -> dict:
         # Set the target
         print(f"  Setting T0 → {target_temp}°C via PATCH /api/set_tool_target_temp ...")
         set_nozzle_temp(target_temp, extruder=0)
-        t_start = time.time()
-        print(f"  Target set. Polling every {POLL_INTERVAL}s for firmware reset...")
+        t_sent = time.time()
 
-        last_target   = target_temp
+        # ── Confirm phase: wait until telemetry reflects the new target ──────────
+        # Without this, a poll read before MQTT propagates gives a stale value that
+        # looks like a firmware reset — producing a falsely short timeout measurement.
+        print(f"  Waiting for telemetry confirmation (max {CONFIRM_TIMEOUT}s)...")
+        t_confirmed = None
+        while time.time() - t_sent < CONFIRM_TIMEOUT:
+            time.sleep(poll_interval)
+            try:
+                current_target = get_nozzle_target(extruder=0)
+            except Exception as e:
+                print(f"  confirm poll error: {e}")
+                continue
+            elapsed_since_send = time.time() - t_sent
+            print(f"  [{elapsed_since_send:5.2f}s] T0 target: {current_target}°C (waiting for {target_temp}°C)")
+            if current_target == target_temp:
+                t_confirmed = time.time()
+                print(f"  Target confirmed in telemetry after {elapsed_since_send:.2f}s ✓")
+                break
+
+        if t_confirmed is None:
+            print(f"  ERROR: telemetry never confirmed {target_temp}°C within {CONFIRM_TIMEOUT}s")
+            print(f"  Possible causes: API error, firmware rejected the target, or propagation >15s")
+            trials.append({"trial": trial + 1, "timeout_s": None, "error": "confirm_timeout"})
+            continue
+
+        # ── Watch phase: time from confirmation until firmware resets the target ──
+        print(f"  Confirmed. Watching for firmware reset (poll every {poll_interval}s)...")
         reset_elapsed = None
-        reset_time    = None
+        reset_target  = None
 
-        while time.time() - t_start < MAX_WAIT:
-            time.sleep(POLL_INTERVAL)
-            elapsed = time.time() - t_start
+        while time.time() - t_confirmed < MAX_WAIT:
+            time.sleep(poll_interval)
+            elapsed = time.time() - t_confirmed
 
             try:
                 current_target = get_nozzle_target(extruder=0)
             except Exception as e:
-                print(f"  [{elapsed:6.1f}s] poll error: {e}")
+                print(f"  [{elapsed:6.2f}s] poll error: {e}")
                 continue
 
-            print(f"  [{elapsed:6.1f}s] T0 target: {current_target}°C", end="")
+            print(f"  [{elapsed:6.2f}s] T0 target: {current_target}°C", end="")
 
             if current_target != target_temp:
                 reset_elapsed = elapsed
-                reset_time    = time.time()
+                reset_target  = current_target
                 print(f"  ← RESET detected (was {target_temp}, now {current_target})")
                 break
             else:
                 print()
-
-            last_target = current_target
 
         if reset_elapsed is None:
             print(f"  No firmware reset observed within {MAX_WAIT}s — aborting trial")
@@ -225,17 +258,18 @@ def run_calibration(target_temp: int, num_trials: int) -> dict:
             continue
 
         timeout_samples.append(reset_elapsed)
-        print(f"  Timeout measured: {reset_elapsed:.1f}s")
+        print(f"  Timeout measured: {reset_elapsed:.2f}s")
 
-        # Restore the target immediately
+        # Restore the target and note whether it re-confirms quickly (resets the countdown)
         print(f"  Restoring target to {target_temp}°C ...")
         set_nozzle_temp(target_temp, extruder=0)
-        t_restore = time.time()
+        t_restore_sent = time.time()
 
         trials.append({
             "trial": trial + 1,
             "timeout_s": reset_elapsed,
-            "t_restore": t_restore - reset_time,
+            "reset_to": reset_target,
+            "t_restore_sent": t_restore_sent - t_confirmed,
         })
 
     # Turn off nozzle heating at end
@@ -282,13 +316,15 @@ def main() -> None:
                         help=f"Target nozzle temperature °C (default {TARGET_TEMP})")
     parser.add_argument("--trials",  type=int, default=2,
                         help=f"Number of timeout drops to observe (default 2, max {MAX_TRIALS})")
+    parser.add_argument("--poll-interval", type=float, default=POLL_INTERVAL,
+                        help=f"Poll interval in seconds for both confirm and watch phases (default {POLL_INTERVAL})")
     args = parser.parse_args()
 
     if args.trials > MAX_TRIALS:
         print(f"ERROR: max trials is {MAX_TRIALS}")
         sys.exit(1)
 
-    result = run_calibration(args.target, args.trials)
+    result = run_calibration(args.target, args.trials, poll_interval=args.poll_interval)
 
     print("\n" + "═" * 60)
     print("CALIBRATION RESULT")

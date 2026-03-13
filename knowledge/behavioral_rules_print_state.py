@@ -62,10 +62,49 @@ is `gcode_state: "FAILED"` + `print_error: 0`.
 | INIT | Initializing | No | No |
 
 **Idle nozzle timeout:** In `IDLE`, `FINISH`, and `FAILED` states, the H2D firmware silently
-resets any elevated nozzle target to **38°C** after a calibrated timeout. Camera calibration
-scripts that heat nozzles in these states must use `heat_and_wait()` (dual-layer keepalive
-using Tier 1 `PATCH /api/set_tool_target_temp`) — never raw `M104` via `send_gcode`.
-See `behavioral_rules/camera_calibration` → "Idle Nozzle Heat Timeout" for the full pattern.
+resets any elevated nozzle target to **38°C** after a calibrated timeout. Calibration scripts
+that heat nozzles in these states must use `heat_and_wait()` (dual-layer keepalive using Tier 1
+`PATCH /api/set_tool_target_temp`) — never raw `M104` via `send_gcode`.
+
+## Idle Nozzle Heat Timeout — Firmware Behavior
+
+When `gcode_state` is `IDLE`, `FINISH`, or `FAILED`, the H2D firmware silently resets any
+elevated nozzle target back to **38°C** after a calibrated timeout.
+
+**Per-state timeout behavior:**
+
+| gcode_state | Timer fires? | Notes |
+|-------------|-------------|-------|
+| `IDLE` | Yes | Confirmed — no active job; quiescent condition |
+| `FINISH` | Likely yes | Same quiescent condition; unverified empirically |
+| `FAILED` | Likely yes | Same quiescent condition; unverified empirically |
+| `PAUSE` | Likely NO | Active print; firmware keeps nozzle hot for resume |
+| `RUNNING` | No | Firmware maintains requested temp |
+| `PREPARE` | No | Pre-print sequence; firmware maintains requested temp |
+
+**Constants (defined in `calibration/corner_calibration.py` and `calibration/nozzle_compare.py`):**
+```python
+IDLE_NOZZLE_HEAT_TIMEOUT_S  = <measured>                          # [PROVISIONAL until calibration run]
+IDLE_HEAT_KEEPALIVE_S       = IDLE_NOZZLE_HEAT_TIMEOUT_S * 0.75  # proactive fire threshold
+IDLE_HEAT_POLL_INTERVAL_S   = 10.0                               # reactive poll interval
+```
+
+**Dual-layer keepalive pattern — `heat_and_wait(t0, t1, duration_s)` in calibration scripts:**
+
+Both checks are independent `if` blocks (NOT `elif`) — both can fire in the same iteration.
+`set_nozzle_temp()` is called only on condition, never speculatively on every tick.
+
+```
+Proactive: elapsed >= IDLE_HEAT_KEEPALIVE_S → set_nozzle_temp() for both nozzles → reset timer
+Reactive:  now >= next_poll → read targets → if target drifted → set_nozzle_temp() + log WARN → reset timer
+```
+
+Both checks share `last_assert`. Reactive re-assert also resets the proactive timer.
+Inner loop cadence: 0.5s. All temperature calls use `set_nozzle_temp()` (Tier 1) — never M104.
+
+**Calibration script:** `calibration/calibrate_idle_nozzle_timeout.py`
+Run while printer is `gcode_state=IDLE` with user auth to heat T0 to 150°C.
+Output: `IDLE_NOZZLE_HEAT_TIMEOUT_S`, `target_restore_resets_timer: bool`, `tested_gcode_state`.
 
 ---
 

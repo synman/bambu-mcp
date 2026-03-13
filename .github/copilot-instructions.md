@@ -125,7 +125,7 @@ Camera scripts under `camera/` run as standalone Python processes outside any MC
 | **Tier 2** | `POST /api/send_gcode` | **Only when no dedicated route covers the operation** — legitimate for motion (`G28`, `G0`, `G90/G91`, `M400`) |
 | **Tier 3** | Direct MQTT / `send_anything` / `send_mqtt_command` | **Never from camera scripts** |
 
-**Full command audit (all camera scripts):**
+**Full command audit (all calibration scripts):**
 
 | Command | Dedicated HTTP Route? | Tier | Action |
 |---------|----------------------|------|--------|
@@ -1516,7 +1516,7 @@ will produce a wrong threshold. Always use the 480p value measured by `calibrate
 - `TOOL_CHANGE_NOISE_FLOOR_PX = 2.70` — mean of 6 measurements; steady-state ~1.89px
 - `TOOL_CHANGE_TIMEOUT_S = 16.2` — max(T1→T0=11.19s) + 5s margin
 - T0→T1 settle: 7.22–7.27s; T1→T0 settle: 11.04–11.19s (asymmetric — T1→T0 two-phase)
-- Re-run `camera/calibrate_tool_change_settle.py` after H2D service (printer IDLE + user auth)
+- Re-run `calibration/calibrate_tool_change_settle.py` after H2D service (printer IDLE + user auth)
 - Script position: (80, 80, Z=2) — front-left quadrant, closest visible area to camera
 
 **Camera orientation:** Higher Y world (back of bed) → lower pixel row (top of frame). Lower Y world (front of bed) → higher pixel row (bottom of frame). Left X → lower pixel column. Right X → higher pixel column.
@@ -1579,13 +1579,10 @@ Constants: `T_HEAT=180`, `HEAT_WAIT=45`, `CONF_HEAT=0.30`. Reuses hotspot centro
 - **Always use search_radius=100px crop** around expected pixel. Full-frame diff is unreliable: Z changes cause ~100K changed pixels across the entire frame; full-frame centroid ≈ center of frame, not the nozzle.
 - When crop dimension < 20px in either axis (expected pixel near frame edge), fall back to full-frame diff AND hard-cap confidence at 0.500 — this is a signal the expected pixel estimate is bad, not a detection failure.
 
-**Camera light and firmware idle timeout (both mandatory for calibration runs):**
+**Camera light (mandatory for hotspot calibration runs):**
 - **Light OFF is definitively better for hotspot detection.** R-B median 72 with light off vs 37 with light on. After any light state change, wait ≥6s before capturing; discard the first snapshot (camera AGC needs time to adjust).
-- **Firmware idle nozzle timeout:** When `gcode_state` is `IDLE`, `FINISH`, or `FAILED`, firmware silently resets any elevated nozzle target back to **38°C** after a calibrated timeout (empirically measured — see `IDLE_NOZZLE_HEAT_TIMEOUT_S` in `corner_calibration.py` and `nozzle_compare.py`). During calibration runs requiring a hot nozzle in these states, defeat this with the dual-layer keepalive in `heat_and_wait()`:
-  - **Proactive timer** (at `IDLE_HEAT_KEEPALIVE_S = IDLE_NOZZLE_HEAT_TIMEOUT_S * 0.75`): re-asserts targets via `set_nozzle_temp()` (Tier 1 — `PATCH /api/set_tool_target_temp`) before the firmware reset window fires.
-  - **Reactive poll** (every `IDLE_HEAT_POLL_INTERVAL_S = 10s`): reads nozzle targets via `GET /api/temperatures`; if any target drifted from expected, re-asserts and logs WARN.
-  - Both checks are independent `if` blocks (not `elif`); both share `last_assert` reset; `set_nozzle_temp()` is called only when a condition fires — never speculatively on every tick.
-  - **Never use `M104` via `send_gcode` for temperature** — `PATCH /api/set_tool_target_temp` is Tier 1 (dedicated route); `send_gcode(M104)` is a Tier 2 escalation violation.
+
+**Firmware idle nozzle timeout:** See the gcode_state Firmware Behavior section in `behavioral_rules/print_state` for the full pattern, constants, and calibration script. Calibration scripts that heat nozzles while `gcode_state` is `IDLE`, `FINISH`, or `FAILED` must use `heat_and_wait()` (defined in `calibration/corner_calibration.py` and `calibration/nozzle_compare.py`). Never `M104` via `send_gcode`.
 
 **Back-row collinearity property:** Any set of world points at the same Y value (e.g., the entire back row Y=315) must project to a straight line in pixel space — this is a hard mathematical property of homographies. If back-row detections are NOT collinear in pixel space, at least one detection is wrong (bad centroid, shadow artifact, or body blob contamination). Use this as a validity check: fit a line through back-row pixel detections and flag any point more than ~10px from the line as suspect before including it in the DLT solve.
 
