@@ -50,16 +50,22 @@ is `gcode_state: "FAILED"` + `print_error: 0`.
 
 ## gcode_state Quick Reference
 
-| Value | Meaning | Ready to print? |
-|---|---|---|
-| IDLE | No active job | Yes |
-| PREPARE | Pre-print setup | No |
-| RUNNING | Actively printing | No |
-| PAUSE | Paused (user or sensor) | No (resume or stop first) |
-| FINISH | Completed successfully | Yes |
-| FAILED | Last job failed | Yes — do NOT withhold new job |
-| SLICING | On-device slicing | No |
-| INIT | Initializing | No |
+| Value | Meaning | Ready to print? | Idle nozzle timeout? |
+|---|---|---|---|
+| IDLE | No active job | Yes | **Yes** — firmware resets nozzle target to 38°C after timeout |
+| PREPARE | Pre-print setup | No | No |
+| RUNNING | Actively printing | No | No |
+| PAUSE | Paused (user or sensor) | No (resume or stop first) | Likely NO — firmware keeps nozzle hot for resume |
+| FINISH | Completed successfully | Yes | Likely yes — same quiescent condition as IDLE |
+| FAILED | Last job failed | Yes — do NOT withhold new job | Likely yes — same quiescent condition as IDLE |
+| SLICING | On-device slicing | No | No |
+| INIT | Initializing | No | No |
+
+**Idle nozzle timeout:** In `IDLE`, `FINISH`, and `FAILED` states, the H2D firmware silently
+resets any elevated nozzle target to **38°C** after a calibrated timeout. Camera calibration
+scripts that heat nozzles in these states must use `heat_and_wait()` (dual-layer keepalive
+using Tier 1 `PATCH /api/set_tool_target_temp`) — never raw `M104` via `send_gcode`.
+See `behavioral_rules/camera_calibration` → "Idle Nozzle Heat Timeout" for the full pattern.
 
 ---
 

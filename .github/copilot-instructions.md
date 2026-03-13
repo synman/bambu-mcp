@@ -115,6 +115,31 @@ The HTTP REST API is **always reachable** via bash — its availability does **n
 
 **Bypass trap:** *"The HTTP API is available so I'll use curl"* — availability is not authorization.
 
+### Operational Access Path Tiers — Camera Scripts (standalone Python, no MCP context)
+
+Camera scripts under `camera/` run as standalone Python processes outside any MCP session. Their access path tiers are:
+
+| Tier | Method | Rule |
+|------|--------|------|
+| **Tier 1** | Dedicated HTTP REST API route (`PATCH/POST /api/<specific-route>`) | **Always first** — if a dedicated route exists for the operation, use it; `send_gcode` is not valid |
+| **Tier 2** | `POST /api/send_gcode` | **Only when no dedicated route covers the operation** — legitimate for motion (`G28`, `G0`, `G90/G91`, `M400`) |
+| **Tier 3** | Direct MQTT / `send_anything` / `send_mqtt_command` | **Never from camera scripts** |
+
+**Full command audit (all camera scripts):**
+
+| Command | Dedicated HTTP Route? | Tier | Action |
+|---------|----------------------|------|--------|
+| Set nozzle temp (`M104 T0/T1`) | `PATCH /api/set_tool_target_temp` ✅ | **Tier 1** | Use `set_nozzle_temp(temp, extruder)` — never `send_gcode("M104 ...")` |
+| Toggle active tool (T0↔T1) | `PATCH /api/toggle_active_tool` ✅ | **Tier 1** | Use `toggle_active_tool()` — ✅ already correct |
+| `G28` (home all axes) | None | **Tier 2** | `send_gcode` is correct |
+| `G90/G91` (mode set) | None | **Tier 2** | `send_gcode` is correct |
+| `G0/G1` (motion) | None | **Tier 2** | `send_gcode` is correct |
+| `M400` (wait for stop) | None | **Tier 2** | `send_gcode` is correct |
+| Snapshot capture | `GET /api/snapshot` ✅ | **Tier 1** | ✅ already correct |
+| Read temperatures | `GET /api/temperatures` ✅ | **Tier 1** | ✅ already correct |
+
+**The ONLY historical violation was `M104` via `send_gcode`.** All other `send_gcode` calls are legitimately Tier 2 (no dedicated route). `set_nozzle_temp()` is the mandatory replacement in all scripts.
+
 ---
 
 ## Tool Self-Sufficiency Standard (Mandatory)
@@ -1556,7 +1581,11 @@ Constants: `T_HEAT=180`, `HEAT_WAIT=45`, `CONF_HEAT=0.30`. Reuses hotspot centro
 
 **Camera light and firmware idle timeout (both mandatory for calibration runs):**
 - **Light OFF is definitively better for hotspot detection.** R-B median 72 with light off vs 37 with light on. After any light state change, wait ≥6s before capturing; discard the first snapshot (camera AGC needs time to adjust).
-- **Firmware idle nozzle timeout:** If the nozzle is held at a target temperature but no print is active, firmware silently resets the nozzle target back to 38°C after ~170s idle. During calibration runs requiring a hot nozzle, defeat this by sending `M104 T0 S{target}` + `M104 T1 S{target}` re-assert commands every 5s in the temperature poll loop.
+- **Firmware idle nozzle timeout:** When `gcode_state` is `IDLE`, `FINISH`, or `FAILED`, firmware silently resets any elevated nozzle target back to **38°C** after a calibrated timeout (empirically measured — see `IDLE_NOZZLE_HEAT_TIMEOUT_S` in `corner_calibration.py` and `nozzle_compare.py`). During calibration runs requiring a hot nozzle in these states, defeat this with the dual-layer keepalive in `heat_and_wait()`:
+  - **Proactive timer** (at `IDLE_HEAT_KEEPALIVE_S = IDLE_NOZZLE_HEAT_TIMEOUT_S * 0.75`): re-asserts targets via `set_nozzle_temp()` (Tier 1 — `PATCH /api/set_tool_target_temp`) before the firmware reset window fires.
+  - **Reactive poll** (every `IDLE_HEAT_POLL_INTERVAL_S = 10s`): reads nozzle targets via `GET /api/temperatures`; if any target drifted from expected, re-asserts and logs WARN.
+  - Both checks are independent `if` blocks (not `elif`); both share `last_assert` reset; `set_nozzle_temp()` is called only when a condition fires — never speculatively on every tick.
+  - **Never use `M104` via `send_gcode` for temperature** — `PATCH /api/set_tool_target_temp` is Tier 1 (dedicated route); `send_gcode(M104)` is a Tier 2 escalation violation.
 
 **Back-row collinearity property:** Any set of world points at the same Y value (e.g., the entire back row Y=315) must project to a straight line in pixel space — this is a hard mathematical property of homographies. If back-row detections are NOT collinear in pixel space, at least one detection is wrong (bad centroid, shadow artifact, or body blob contamination). Use this as a validity check: fit a line through back-row pixel detections and flag any point more than ~10px from the line as suspect before including it in the DLT solve.
 

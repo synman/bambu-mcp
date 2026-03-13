@@ -187,6 +187,7 @@ _ROUTE_PARAM_DESCRIPTIONS: dict[tuple[str, str], str] = {
     ("get_detector_settings",          "printer"):     _PRINTER_DESC,
     # ── Climate ────────────────────────────────────────────────────────────────
     ("set_tool_target_temp",            "temp"):        "Target nozzle temperature in °C. Use 0 to turn off.",
+    ("set_tool_target_temp",            "extruder"):    "Optional. 0=right nozzle, 1=left nozzle. Defaults to active tool if omitted.",
     ("set_bed_target_temp",             "temp"):        "Target bed temperature in °C. Use 0 to turn off.",
     ("set_chamber_target_temp",         "temp"):        "Target chamber temperature in °C. Use 0 to turn off.",
     ("set_aux_fan_speed_target",        "percent"):     "Aux fan speed 0–100%.",
@@ -390,7 +391,7 @@ _ROUTE_EXAMPLES: dict[str, dict] = {
     },
     "set_tool_target_temp": {
         "response": {"status": "success"},
-        "params": {"printer": "H2D", "temp": "220"},
+        "params": {"printer": "H2D", "temp": "220", "extruder": 0},
     },
     "set_bed_target_temp": {
         "response": {"status": "success"},
@@ -1020,7 +1021,15 @@ def _build_app():
 
     @app.route("/api/set_tool_target_temp", methods=["PATCH"])
     def set_tool_target_temp():
-        """Set nozzle temperature for the active tool. ?temp=<°C>
+        """Set nozzle temperature for a specific extruder (or the active tool).
+
+        Body fields:
+          printer  — printer name (required)
+          temp     — target temperature in °C; use 0 to turn off
+          extruder — (optional) 0=right nozzle, 1=left nozzle; defaults to active tool if absent
+
+        Camera scripts must use this route (Tier 1) instead of send_gcode/M104 — a dedicated
+        route exists for this operation; raw gcode is a Tier 2 escalation violation.
 
         ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
         """
@@ -1030,7 +1039,8 @@ def _build_app():
             return _err("no printer")
         try:
             target = int(_rargs().get("temp", 0))
-            ext = p.printer_state.active_tool.value
+            body = request.get_json(silent=True) or {}
+            ext = body.get("extruder", p.printer_state.active_tool.value)
             log.debug("set_tool_target_temp: target=%s ext=%s", target, ext)
             p.set_nozzle_temp_target(target, ext)
             log.debug("set_tool_target_temp: → ok")
@@ -1905,6 +1915,11 @@ def _build_app():
     @app.route("/api/send_gcode", methods=["POST"])
     def send_gcode():
         """⚠️ Send raw G-code commands. ?gcode=<commands> (use | as newline separator)
+
+        Camera script escalation tier: Tier 2 — ONLY valid when no dedicated API route covers
+        the operation. Legitimate uses: G28 (home), G0/G1 (motion), G90/G91 (mode), M400 (wait).
+        NOT valid for temperature: use PATCH /api/set_tool_target_temp instead (M104 via send_gcode
+        is a Tier 1 violation when a dedicated temperature route exists).
 
         ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
         ⛔ BLOCKED during active prints (gcode_state RUNNING or PREPARE) — returns 409.

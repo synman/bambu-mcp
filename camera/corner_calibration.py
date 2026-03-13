@@ -190,6 +190,14 @@ TOOL_CHANGE_NOISE_MULT = 1.5      # same multiplier as wait_for_home_complete
 TOOL_CHANGE_TIMEOUT_S = 16.2      # [VERIFIED: empirical] max(T1→T0=11.19s) + 5s margin
 TOOL_CHANGE_NOISE_FLOOR_PX = 2.70 # [VERIFIED: empirical] 480p/(80,80)/Z=2; mean of 6 measurements
 
+# Idle nozzle heat timeout — firmware silently resets nozzle target to T_IDLE (38°C)
+# after this duration when gcode_state is IDLE, FINISH, or FAILED.
+# [PROVISIONAL ~170s] — update with [VERIFIED: empirical YYYY-MM-DD] after calibration run.
+# Run: python3 camera/calibrate_idle_nozzle_timeout.py
+IDLE_NOZZLE_HEAT_TIMEOUT_S  = 170.0   # [PROVISIONAL] measured via calibrate_idle_nozzle_timeout.py
+IDLE_HEAT_KEEPALIVE_S       = IDLE_NOZZLE_HEAT_TIMEOUT_S * 0.75   # proactive re-assert before reset fires
+IDLE_HEAT_POLL_INTERVAL_S   = 10.0    # reactive poll interval — verify target not drifted
+
 OUTPUT_DIR = "/tmp/h2d_corner_calibration"
 
 # ---------------------------------------------------------------------------
@@ -197,7 +205,12 @@ OUTPUT_DIR = "/tmp/h2d_corner_calibration"
 # ---------------------------------------------------------------------------
 
 def send_gcode(gcode: str) -> dict:
-    """Send GCode to H2D via MCP HTTP API."""
+    """Send GCode to H2D via MCP HTTP API (Tier 2 in camera script context).
+
+    Only valid when no dedicated HTTP route covers the operation.
+    Legitimate: G28 (home), G0/G1 (motion), G90/G91 (mode), M400 (wait for stop).
+    NOT valid for temperature — use set_nozzle_temp() which calls PATCH /api/set_tool_target_temp.
+    """
     data = json.dumps({"printer": PRINTER_NAME, "gcode": gcode}).encode()
     req = urllib.request.Request(
         f"{API_BASE}/send_gcode",
@@ -207,6 +220,78 @@ def send_gcode(gcode: str) -> dict:
     )
     with urllib.request.urlopen(req) as resp:
         return json.loads(resp.read())
+
+
+def set_nozzle_temp(temp: int, extruder: int = 0) -> dict:
+    """Set nozzle temperature via PATCH /api/set_tool_target_temp (Tier 1 — dedicated route).
+
+    NEVER use send_gcode(M104) for temperature — a dedicated HTTP API route exists.
+    M104 via send_gcode is a Tier 1 escalation violation in camera script context.
+    extruder: 0=right (T0), 1=left (T1).
+    """
+    data = json.dumps({"printer": PRINTER_NAME, "temp": temp, "extruder": extruder}).encode()
+    req = urllib.request.Request(
+        f"{API_BASE}/set_tool_target_temp",
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="PATCH",
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return json.loads(resp.read())
+
+
+def _get_nozzle_targets() -> tuple[float, float]:
+    """Read current nozzle temperature targets for T0 and T1 via GET /api/printer."""
+    url = f"{API_BASE}/printer?printer={PRINTER_NAME}"
+    with urllib.request.urlopen(url, timeout=10) as resp:
+        state = json.loads(resp.read())
+    nozzles = state.get("_printer_state", {}).get("nozzle_temps", [])
+    t0 = float(nozzles[0]["target"]) if len(nozzles) > 0 else -1.0
+    t1 = float(nozzles[1]["target"]) if len(nozzles) > 1 else -1.0
+    return t0, t1
+
+
+def heat_and_wait(t0: int, t1: int, duration_s: float) -> None:
+    """Wait duration_s while defending against firmware idle nozzle heat timeout.
+
+    H2D firmware silently resets nozzle targets to T_IDLE (38°C) after
+    IDLE_NOZZLE_HEAT_TIMEOUT_S when gcode_state is IDLE, FINISH, or FAILED.
+
+    Two concurrent independent checks in a 0.5s inner loop:
+      Proactive timer:  elapsed >= IDLE_HEAT_KEEPALIVE_S since last set_nozzle_temp →
+                        re-assert before firmware timeout fires (proactive; no drift needed).
+      Reactive poll:    every IDLE_HEAT_POLL_INTERVAL_S → read targets via GET /api/printer →
+                        re-assert only if target drifted (firmware already reset it; log WARN).
+    Both checks share last_assert. set_nozzle_temp() is never called speculatively on every tick.
+    All temperature commands use PATCH /api/set_tool_target_temp (Tier 1) — never raw gcode/M104.
+    """
+    set_nozzle_temp(t0, extruder=0)
+    set_nozzle_temp(t1, extruder=1)
+    last_assert = time.time()
+    next_poll   = time.time() + IDLE_HEAT_POLL_INTERVAL_S
+    deadline    = time.time() + duration_s
+
+    while time.time() < deadline:
+        now = time.time()
+
+        # Proactive: re-assert at 75% of measured timeout — prevent firmware reset before it fires
+        if now - last_assert >= IDLE_HEAT_KEEPALIVE_S:
+            set_nozzle_temp(t0, extruder=0)
+            set_nozzle_temp(t1, extruder=1)
+            last_assert = now
+
+        # Reactive: verify targets haven't drifted (catches any edge-case proactive miss)
+        if now >= next_poll:
+            actual_t0, actual_t1 = _get_nozzle_targets()
+            if actual_t0 != t0 or actual_t1 != t1:
+                print(f"  [heat_and_wait] WARN: target drifted "
+                      f"(T0:{actual_t0} T1:{actual_t1} expected T0:{t0} T1:{t1}) — re-asserting")
+                set_nozzle_temp(t0, extruder=0)
+                set_nozzle_temp(t1, extruder=1)
+                last_assert = now
+            next_poll = now + IDLE_HEAT_POLL_INTERVAL_S
+
+        time.sleep(0.5)
 
 def _snapshot_at_res(resolution: str) -> Image.Image:
     """Capture snapshot at specified resolution (e.g. '360p', '720p'), return PIL Image.
@@ -388,15 +473,6 @@ def gcode_descend_to_capture() -> str:
     return gcode_descend_to_z(Z_CAPTURE)
 
 def gcode_ascend_to_clearance() -> str:
-    """Ascend from capture to clearance height."""
-    return "\n".join([
-        f"G0 Z{Z_CLEARANCE} F{F_Z}",   # ascend to clearance
-        "M400",                          # full stop before next XY move
-    ])
-
-def gcode_set_nozzle_temps(t0: int, t1: int) -> str:
-    """Set T0 and T1 nozzle targets (non-blocking). Use T_IDLE to cool."""
-    return f"M104 T0 S{t0}\nM104 T1 S{t1}"
 
 # ---------------------------------------------------------------------------
 # Nozzle detection — technique cascade
@@ -703,15 +779,15 @@ def detect_nozzle_heat_toggle(expected_px: tuple,
 
     # --- T0 test (T0 is already active on entry — no toggle needed) ---
     print(f"  [heat_halo] Capturing T0 idle baseline (both nozzles at {T_IDLE}°C)...")
-    send_gcode(gcode_set_nozzle_temps(T_IDLE, T_IDLE))
+    set_nozzle_temp(T_IDLE, extruder=0)
+    set_nozzle_temp(T_IDLE, extruder=1)
     time.sleep(2)  # brief settle after any prior temp change
     t0_idle_frame = get_snapshot()
     t0_idle_frame.save(os.path.join(output_dir, f"{name}_heat_t0_idle.png"))
 
     print(f"  [heat_halo] Heating T0 to {T_HEAT}°C (T1 at {T_IDLE}°C)...")
-    send_gcode(gcode_set_nozzle_temps(T_HEAT, T_IDLE))
     print(f"  [heat_halo] Waiting {HEAT_WAIT}s for stable thermal halo...")
-    time.sleep(HEAT_WAIT)
+    heat_and_wait(T_HEAT, T_IDLE, HEAT_WAIT)
 
     t0_hot = get_snapshot()
     t0_hot.save(os.path.join(output_dir, f"{name}_heat_t0.png"))
@@ -727,8 +803,7 @@ def detect_nozzle_heat_toggle(expected_px: tuple,
     if conf < CONF_RESCUE and T_HEAT_ESCALATE > T_HEAT:
         print(f"  [heat_halo] T0 weak (conf={conf:.3f} < {CONF_RESCUE}); "
               f"escalating to {T_HEAT_ESCALATE}°C...")
-        send_gcode(gcode_set_nozzle_temps(T_HEAT_ESCALATE, T_IDLE))
-        time.sleep(HEAT_WAIT)
+        heat_and_wait(T_HEAT_ESCALATE, T_IDLE, HEAT_WAIT)
         hot2 = get_snapshot()
         hot2.save(os.path.join(output_dir, f"{name}_heat_t0_escalated.png"))
         cx2, cy2, conf2, tech2 = detect_nozzle_best(
@@ -742,7 +817,8 @@ def detect_nozzle_heat_toggle(expected_px: tuple,
 
     # Cool T0 before tool change
     print(f"  [heat_halo] Cooling T0 back to {T_IDLE}°C...")
-    send_gcode(gcode_set_nozzle_temps(T_IDLE, T_IDLE))
+    set_nozzle_temp(T_IDLE, extruder=0)
+    set_nozzle_temp(T_IDLE, extruder=1)
     time.sleep(5)  # brief cool-down gap before tool change
 
     # --- T1 test: toggle T0→T1, move to world_xy (T1 tip now at wx,wy), re-capture idle ---
@@ -760,9 +836,8 @@ def detect_nozzle_heat_toggle(expected_px: tuple,
     t1_idle_frame.save(os.path.join(output_dir, f"{name}_heat_t1_idle.png"))
 
     print(f"  [heat_halo] Heating T1 to {T_HEAT}°C (T0 at {T_IDLE}°C)...")
-    send_gcode(gcode_set_nozzle_temps(T_IDLE, T_HEAT))
     print(f"  [heat_halo] Waiting {HEAT_WAIT}s for stable thermal halo...")
-    time.sleep(HEAT_WAIT)
+    heat_and_wait(T_IDLE, T_HEAT, HEAT_WAIT)
 
     t1_hot = get_snapshot()
     t1_hot.save(os.path.join(output_dir, f"{name}_heat_t1.png"))
@@ -775,7 +850,8 @@ def detect_nozzle_heat_toggle(expected_px: tuple,
 
     # Cool T1 and restore T0 as active tool + restore carriage position
     print(f"  [heat_halo] Cooling T1 back to {T_IDLE}°C...")
-    send_gcode(gcode_set_nozzle_temps(T_IDLE, T_IDLE))
+    set_nozzle_temp(T_IDLE, extruder=0)
+    set_nozzle_temp(T_IDLE, extruder=1)
     time.sleep(5)
 
     print(f"  [heat_halo] Toggling T1→T0; restoring T0 tip to ({wx},{wy})...")

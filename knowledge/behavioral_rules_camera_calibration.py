@@ -380,4 +380,80 @@ Measurement process (run if H2D is serviced, replaced, or noise floor value is s
 Code references:
   camera/corner_calibration.py — TOOL_CHANGE_* constants, wait_for_tool_change_complete()
   camera/calibrate_tool_change_settle.py — standalone calibration script
+
+## Camera Script Command Escalation — Mandatory
+
+All camera scripts run as standalone Python processes outside any MCP session. The access path
+tiers are lower-level than the MCP operational tiers but follow the same principle: always use
+the highest available API tier for each operation.
+
+| Tier | Method | Rule |
+|------|--------|------|
+| Tier 1 | Dedicated HTTP REST API route (`PATCH/POST /api/<route>`) | Always first — if a dedicated route exists, use it; `send_gcode` is NOT valid |
+| Tier 2 | `POST /api/send_gcode` | Only when no dedicated route covers the operation — legitimate for motion/homing/mode-set |
+| Tier 3 | Direct MQTT / `send_anything` | Never from camera scripts |
+
+**Full command audit — all camera scripts (corner_calibration.py, nozzle_compare.py, calibrate_tool_change_settle.py):**
+
+| Command | Dedicated Route? | Tier | Verdict |
+|---------|-----------------|------|---------|
+| Set nozzle temp (`M104`) | `PATCH /api/set_tool_target_temp` ✅ | Tier 1 | `send_gcode("M104 ...")` is a violation — use `set_nozzle_temp(temp, extruder)` |
+| Toggle active tool | `PATCH /api/toggle_active_tool` ✅ | Tier 1 | ✅ correct |
+| `G28`, `G90/G91`, `G0/G1`, `M400` | None | Tier 2 | `send_gcode` is correct |
+| Snapshot capture | `GET /api/snapshot` ✅ | Tier 1 | ✅ correct |
+| Read temperatures | `GET /api/temperatures` ✅ | Tier 1 | ✅ correct |
+
+The mandatory temperature wrapper in all camera scripts:
+```python
+def set_nozzle_temp(temp: int, extruder: int = 0) -> dict:
+    """Set nozzle target via PATCH /api/set_tool_target_temp (Tier 1). Never send_gcode(M104)."""
+    data = json.dumps({"printer": PRINTER_NAME, "temp": temp, "extruder": extruder}).encode()
+    req = urllib.request.Request(
+        f"{API_BASE}/set_tool_target_temp", data=data,
+        headers={"Content-Type": "application/json"}, method="PATCH",
+    )
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return json.loads(r.read())
+```
+
+## Idle Nozzle Heat Timeout — Firmware Behavior
+
+When `gcode_state` is `IDLE`, `FINISH`, or `FAILED`, the H2D firmware silently resets any
+elevated nozzle target back to **38°C** after a calibrated timeout. Camera calibration scripts
+that heat nozzles while in these states must actively defend against this reset.
+
+**Per-state timeout behavior:**
+
+| gcode_state | Timer fires? | Notes |
+|-------------|-------------|-------|
+| `IDLE` | Yes | Confirmed — no active job; quiescent condition |
+| `FINISH` | Likely yes | Same quiescent condition; unverified empirically |
+| `FAILED` | Likely yes | Same quiescent condition; unverified empirically |
+| `PAUSE` | Likely NO | Active print; firmware keeps nozzle hot for resume |
+| `RUNNING` | No | Firmware maintains requested temp |
+| `PREPARE` | No | Pre-print sequence; firmware maintains requested temp |
+
+**Constants (defined in corner_calibration.py and nozzle_compare.py):**
+```python
+IDLE_NOZZLE_HEAT_TIMEOUT_S  = <measured>                          # [PROVISIONAL until calibration run]
+IDLE_HEAT_KEEPALIVE_S       = IDLE_NOZZLE_HEAT_TIMEOUT_S * 0.75  # proactive fire threshold
+IDLE_HEAT_POLL_INTERVAL_S   = 10.0                               # reactive poll interval
+```
+
+**Dual-layer keepalive pattern — `heat_and_wait(t0, t1, duration_s)`:**
+
+Both checks are independent `if` blocks (NOT `elif`) — both can fire in the same iteration.
+`set_nozzle_temp()` is called only on condition, never speculatively on every tick.
+
+```
+Proactive: elapsed >= IDLE_HEAT_KEEPALIVE_S → set_nozzle_temp() for both nozzles → reset timer
+Reactive:  now >= next_poll → read targets → if target drifted → set_nozzle_temp() + log WARN → reset timer
+```
+
+Both checks share `last_assert`. Reactive re-assert also resets the proactive timer.
+Inner loop cadence: 0.5s. All temperature calls use `set_nozzle_temp()` (Tier 1) — never M104.
+
+Calibration script: `camera/calibrate_idle_nozzle_timeout.py`
+Run while printer is `gcode_state=IDLE` with user auth to heat T0 to 150°C.
+Output: `IDLE_NOZZLE_HEAT_TIMEOUT_S`, `target_restore_resets_timer: bool`, `tested_gcode_state`.
 """

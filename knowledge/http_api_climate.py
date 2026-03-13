@@ -48,13 +48,15 @@ Returns `{"success": true}`.
 
 ⚠️ WRITE OPERATION — requires explicit user confirmation before calling (same guard as MCP tools with `user_permission=True`).
 
-Set the nozzle temperature for the active tool.
+Set the nozzle temperature for a specific extruder (or the active tool).
 
-Query parameters:
+Body / query parameters:
 - `temp` (required) — integer °C; use `0` to turn off nozzle heating
+- `extruder` (optional) — `0`=right nozzle, `1`=left nozzle; defaults to the currently active tool if omitted
 
-Applies to the currently active extruder. For H2D dual-extruder, use the MCP
-`set_nozzle_temp(name, temp, extruder=0|1)` tool to target a specific nozzle.
+Camera scripts MUST use this route (Tier 1) instead of `send_gcode`/`M104`. A dedicated route exists
+for temperature control; using `M104` via `/api/send_gcode` is a Tier 2 escalation violation.
+This route is the correct way for scripts to set either nozzle independently on dual-extruder (H2D) printers.
 Returns `{"success": true}`.
 
 ---

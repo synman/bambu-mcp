@@ -67,6 +67,14 @@ def set_nozzle_temp(
     extruder: 0 = the only extruder on single-nozzle printers, or the right nozzle on H2D
     (dual-extruder model). 1 = left nozzle on H2D only. -1 = set all nozzles.
     Requires user_permission=True.
+
+    Idle nozzle timeout warning: in IDLE, FINISH, or FAILED gcode_states, the H2D firmware
+    silently resets the nozzle target to 38°C after a calibrated timeout (~170s, [PROVISIONAL]).
+    Camera scripts that heat nozzles while IDLE must use the heat_and_wait() pattern:
+    two concurrent checks — proactive timer (re-assert at 75% of timeout) and reactive poll
+    (verify target via GET /api/printer every 10s). Both use PATCH /api/set_tool_target_temp
+    (HTTP Tier 1) — never raw send_gcode/M104. See behavioral_rules_camera_calibration
+    knowledge module § "Idle Nozzle Heat Timeout".
     """
     log.debug("set_nozzle_temp: called for name=%s temp=%s extruder=%s user_permission=%s", name, temp, extruder, user_permission)
     if not user_permission:
