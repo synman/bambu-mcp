@@ -375,6 +375,7 @@ def main():
     set_nozzle_temp(NOZZLE_TEMP, extruder=1)
     print("    Waiting for T1 temp...")
     if not wait_for_temp(NOZZLE_TEMP, extruder=1):
+        print("    WARNING: T1 didn't reach target — continuing anyway")
     print(f"    Settling {HEAT_WAIT}s for thermal soak (keepalive active)...")
     heat_and_wait(0, NOZZLE_TEMP, HEAT_WAIT)
 
