@@ -7,10 +7,10 @@ cross between the two calibration reference frames.
 
 Corner assignments (current, after all name swaps):
   FL = far-left    NL = near-left    NR = near-right    FR = far-right
-  ORIGIN = shell NL = (1480, 1256) — below camera frame
+  ORIGIN = shell NL = (406, 517) — in-frame front-left corner
 
-SHELL corners calibrated 2026-03-13 at Z=2, chamber light OFF, N=? points, reproj=8.62px.
-NL is extrapolated via hotspot offset — physically below the camera frame.
+SHELL corners calibrated 2026-03-13 at Z=2, chamber light OFF, N=5 inliers, reproj=8.62px.
+NL is the in-frame front-left corner; FL/FR are extrapolated beyond the camera view (Y=315).
 """
 import numpy as np, math
 
@@ -69,10 +69,10 @@ if __name__ == "__main__":
 # All vision / spaghetti / object-in-frame checks should use this polygon.
 
 PLATE_BOUNDARY = {
-    "FL": SHELL["FL"],   # (695,  616)  far-left
-    "FR": SHELL["FR"],   # (860,  205)  far-right
-    "NR": SHELL["NR"],   # (1187, 299)  near-right
-    "NL": SHELL["NL"],   # (1480, 1256) near-left  ← ORIGIN (extrapolated below frame)
+    "FL": SHELL["FL"],   # (1830, 2226)  far-left (off-screen — Y=315 extrapolated)
+    "FR": SHELL["FR"],   # (1561, -2178) far-right (off-screen — Y=315 extrapolated)
+    "NR": SHELL["NR"],   # (505,  522)   near-right
+    "NL": SHELL["NL"],   # (406,  517)   near-left ← ORIGIN
 }
 PLATE_ORDER = ["FL","FR","NR","NL"]  # convex hull quad, clockwise from FL
 
