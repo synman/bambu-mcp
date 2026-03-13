@@ -38,7 +38,7 @@ from pathlib import Path
 # Configuration
 # ---------------------------------------------------------------------------
 
-API_BASE     = "http://localhost:49152/api"
+API_BASE     = "http://localhost:49152/api"  # updated by _find_api_base() below
 PRINTER_NAME = "H2D"
 
 # Bed center position for comparison capture
@@ -48,8 +48,6 @@ CMP_Z = 2      # mm — nozzle visible above bed surface
 
 NOZZLE_TEMP  = 180   # °C — lower than calibration; enough hotspot without over-stress
 HEAT_WAIT    = 30    # seconds — settle after temp confirmed
-SWAP_SETTLE  = 8     # seconds — after T0↔T1 swap before capture
-
 SNAP_RES     = "720p"
 SNAP_W, SNAP_H = 1280, 720
 
@@ -60,8 +58,23 @@ DIFF_THRESHOLD = 15
 H_JSON_PATH = Path.home() / ".bambu-mcp/calibration/H2D.json"
 
 # ---------------------------------------------------------------------------
-# API helpers
+# API port discovery (matches corner_calibration.py pattern)
 # ---------------------------------------------------------------------------
+
+def _find_api_base() -> str:
+    for port in range(49152, 49252):
+        try:
+            url = f"http://localhost:{port}/api/server_info"
+            with urllib.request.urlopen(url, timeout=0.5) as r:
+                info = json.loads(r.read())
+                if "api_port" in info:
+                    return f"http://localhost:{info['api_port']}/api"
+        except Exception:
+            continue
+    return "http://localhost:49152/api"
+
+
+API_BASE = _find_api_base()
 
 def _request(endpoint: str, payload: dict, method: str = "POST") -> dict:
     data = json.dumps(payload).encode()
@@ -77,6 +90,55 @@ def _request(endpoint: str, payload: dict, method: str = "POST") -> dict:
 
 def send_gcode(gcode: str) -> dict:
     return _request("send_gcode", {"printer": PRINTER_NAME, "gcode": gcode}, method="POST")
+
+
+def toggle_active_tool() -> None:
+    """PATCH /api/toggle_active_tool — T0→T1 or T1→T0."""
+    params = urllib.parse.urlencode({"printer": PRINTER_NAME})
+    req = urllib.request.Request(
+        f"{API_BASE}/toggle_active_tool?{params}",
+        method="PATCH",
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        resp.read()
+
+
+def wait_for_tool_change_settle(timeout: float = 15.0) -> None:
+    """Poll 360p snapshots at 0.3s; return when frame-diff drops to noise floor."""
+    import base64 as _b64, io as _io
+    POLL = 0.3
+    STABLE_N = 3
+    NOISE_MULT = 1.5
+    NOISE_FLOOR = 1.5  # [PROVISIONAL] — update after calibrate_tool_change_settle.py run
+
+    def _snap360() -> np.ndarray:
+        p = urllib.parse.urlencode({"printer": PRINTER_NAME, "resolution": "360p", "quality": 65})
+        with urllib.request.urlopen(f"{API_BASE}/snapshot?{p}", timeout=10) as r:
+            d = json.loads(r.read())
+        if "url" in d:
+            with urllib.request.urlopen(d["url"], timeout=10) as r:
+                d = json.loads(r.read())
+        b64 = d.get("data_uri", "").split(",", 1)[-1]
+        from PIL import Image as _Im
+        img = _Im.open(_io.BytesIO(_b64.b64decode(b64))).convert("L")
+        return np.array(img, dtype=np.float32)
+
+    threshold = NOISE_FLOOR * NOISE_MULT
+    prev = _snap360()
+    stable = 0
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        time.sleep(POLL)
+        cur = _snap360()
+        diff = float(np.mean(np.abs(cur - prev)))
+        prev = cur
+        if diff <= threshold:
+            stable += 1
+            if stable >= STABLE_N:
+                return
+        else:
+            stable = 0
+    print("    ⚠️  wait_for_tool_change_settle: timeout reached")
 
 
 def get_snapshot() -> Image.Image:
@@ -179,9 +241,9 @@ def main():
     time.sleep(3)
 
     # --- Heat T0 ---
-    print(f"\n[2/6] Activating T0, heating to {NOZZLE_TEMP}°C...")
-    send_gcode("T0")
-    time.sleep(2)
+    # T0 is active by default at startup; no toggle needed.
+    # Capture idle baseline at capture position BEFORE heating.
+    print(f"\n[2/6] Activating T0 (default), heating to {NOZZLE_TEMP}°C...")
     send_gcode(f"M104 T0 S{NOZZLE_TEMP}")
     print("    Waiting for T0 temp...")
     if not wait_for_temp(NOZZLE_TEMP):
@@ -198,10 +260,21 @@ def main():
     print(f"    T0 saved: {t0_path}")
     print(f"    T0 R-B centroid: {t0_centroid}")
 
-    # --- Swap to T1 ---
-    print(f"\n[4/6] Swapping to T1, settling {SWAP_SETTLE}s...")
-    send_gcode("T1")
-    time.sleep(SWAP_SETTLE)
+    # --- Cool T0 before swap ---
+    print("    Cooling T0 to idle...")
+    send_gcode("M104 T0 S0")
+    time.sleep(10)
+
+    # --- Swap to T1 using PATCH /api/toggle_active_tool ---
+    # The carriage physically shifts when T1 becomes active.
+    # Must re-position to CMP_X,CMP_Y and wait for settle before capturing.
+    print(f"\n[4/6] Toggling to T1 via API (toggle_active_tool)...")
+    toggle_active_tool()
+    print("    Waiting for carriage settle...")
+    wait_for_tool_change_settle()
+    # Re-position nozzle at capture coordinates (carriage shifted)
+    send_gcode(f"G90\nG0 X{CMP_X} Y{CMP_Y} Z{CMP_Z} F3000\nM400")
+    time.sleep(3)
     send_gcode(f"M104 T1 S{NOZZLE_TEMP}")
     print("    Waiting for T1 temp...")
     if not wait_for_temp(NOZZLE_TEMP):
@@ -277,8 +350,10 @@ def main():
     print("Open with:  open /tmp/nozzle_compare_diff.png")
     print("="*60 + "\n")
 
-    # Restore: cool nozzles, restore T0
-    send_gcode("M104 T0 S0\nM104 T1 S0\nT0")
+    # Restore: cool nozzles, toggle back to T0, wait for settle
+    send_gcode("M104 T0 S0\nM104 T1 S0")
+    toggle_active_tool()   # T1→T0
+    wait_for_tool_change_settle()
 
 
 if __name__ == "__main__":
