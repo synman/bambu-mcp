@@ -171,4 +171,44 @@ Prerequisites (Printer Write Protection gate — mandatory):
 
 Safety: all moves use Z_CLEARANCE=10mm between positions, Z_CAPTURE=2mm at corner.
 See GCode Calibration Motion Safety rules in global copilot-instructions.md.
+
+---
+
+## G28 Homing Duration (H2D — Verified Empirical)
+
+[VERIFIED: empirical — 3 trials, 2026-03-12]
+
+| Fact | Value | Notes |
+|------|-------|-------|
+| G28 completion time | 46.5–46.9s (mean 46.7s) | 3 trials, visual frame-diff |
+| HOME_TIMEOUT_SECONDS | 65s | max(46.9s) + 18s safety margin |
+| HOME_NOISE_FLOOR_PX | 2.2px | stationary-frame avg abs-diff (pre-G28 baseline) |
+| Stability threshold | 3.3px (floor × 1.5) | 4 consecutive frames at/below = homing done |
+| Completion signal | Visual frame-diff only | gcode_state stays IDLE throughout G28 |
+
+Two-phase homing profile:
+- Phase 1 (0–23s): primary XY homing. Brief ~1-frame apparent pause at ~23s — this is NOT
+  done; the toolhead is between phases. Do not declare complete on this pause.
+- Phase 2 (27–42s): Z probe / bed touch sequence.
+- Confirmed stable: t≈46.5–46.9s (4-frame criterion).
+
+Trial raw data (2026-03-12, idle H2D, 20°C ambient):
+  Trial 1: t_done=46.5s, noise_floor=2.12px, threshold=3.17px
+  Trial 2: t_done=46.6s, noise_floor=2.16px, threshold=3.23px
+  Trial 3: t_done=46.9s, noise_floor=2.12px, threshold=3.18px
+
+Measurement process (re-run if H2D is serviced or replaced):
+  1. Establish noise floor: 3 baseline snapshots at rest → compute avg abs-diff per pair.
+  2. Send G28, record t=0.
+  3. Poll snapshot every 2s; compute mean abs diff vs prior frame.
+  4. Declare done when 4 consecutive diffs ≤ noise_floor × 1.5; record t_done.
+  5. Run 3 trials; update HOME_TIMEOUT_SECONDS = max(t_done) + 18s.
+  6. Update HOME_NOISE_FLOOR_PX to the measured mean noise floor.
+
+Prior value (retired): HOME_WAIT_SECONDS = 90 (anecdotal "60–90s" comment). Replaced by
+  HOME_TIMEOUT_SECONDS = 65, which is authoritative from 2026-03-12 forward.
+
+Code references:
+  camera/corner_calibration.py line ~172 — HOME_TIMEOUT_SECONDS, HOME_NOISE_FLOOR_PX constants
+  camera/corner_calibration.py line ~240 — wait_for_home_complete() implementation
 """

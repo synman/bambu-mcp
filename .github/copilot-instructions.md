@@ -1455,7 +1455,16 @@ These are approximate values from before the DLT calibration run. They are NOT t
 | FL (F005) | HARD_EXCLUDE | N/A |
 
 **Timing constants (verified empirically):**
-- `HOME_WAIT_SECONDS = 90` — G28 on H2D takes 60–90s; 8s is dangerously short
+- `HOME_TIMEOUT_SECONDS = 65` — G28 on H2D completes in 46.5–46.9s (mean 46.7s), verified
+  over 3 trials via visual frame-diff (2026-03-12). Two-phase: XY homing (0–23s) + Z probe
+  (27–42s). Timeout = max(46.9s) + 18s safety margin. `HOME_WAIT_SECONDS = 90` is retired —
+  the old "60–90s" figure was anecdotal; the visual poller exits as soon as 4 consecutive
+  stable frames are detected, so actual wait ≈ 47s not 90s. Re-measure by running
+  `wait_for_home_complete()` with `timeout=120` after a G28 and recording `t_done` if the
+  H2D is ever serviced or replaced. `HOME_NOISE_FLOOR_PX = 2.2` (avg abs-diff of stationary
+  frames, 3 trials). `gcode_state` stays IDLE throughout — no MQTT flip; camera frame-diff is
+  the only reliable completion signal. Implementation: `wait_for_home_complete()` in
+  `corner_calibration.py` line ~240.
 - `SETTLE_SECONDS_XY = 12.0` — cross-bed diagonal ~490mm at F3000 ≈ 10s + buffer
 - `SETTLE_SECONDS_Z = 3.0` — short Z moves; vibration damps quickly
 - `Z_CLEARANCE = 10mm`, `Z_CAPTURE = 2mm`, `Z_RESCUE = 1.0mm` (used in rescue probe when primary conf<0.3)
