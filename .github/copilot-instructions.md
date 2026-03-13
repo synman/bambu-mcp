@@ -281,6 +281,18 @@ and both gated HTTP routes.
 **Behavioral rule:** The agent MUST NOT use `send_mqtt_command()` to circumvent the
 active-print guard on any gated tool.
 
+**Authorization basis (global Asimov Three Laws rule):** This gate is a **First Law hard block** — mid-print GCode injection can crash the toolhead at speed, damage hardware, and cause physical injury. `user_permission=True` cannot unlock it because First Law supersedes Second Law. See global rules "Asimov Three Laws — Authorization Model."
+
+**High-consequence GCode consequence-disclosure rule (Second Law gate):** When asked to send any of the following GCode commands in idle state, the agent MUST use `ask_user` to name the command explicitly and describe the irreversible consequence before calling with `user_permission=True`. After confirmation, execute without further resistance — these are Second Law operations, not First Law blocks.
+
+| Command | Consequence to disclose |
+|---------|------------------------|
+| `M997` | Triggers firmware update — printer will restart and may be unresponsive during flash |
+| `M502` | Resets all settings to factory defaults — calibration data, EEPROM values, custom profiles erased |
+| `M500` / `M501` | Writes/reads EEPROM — can corrupt stored calibration |
+| `M999` | Emergency printer restart — any in-progress background work will be lost |
+| `M112` | Emergency stop — heaters and motors cut immediately; requires manual restart |
+
 ---
 
 ## Ephemeral Port Pool
