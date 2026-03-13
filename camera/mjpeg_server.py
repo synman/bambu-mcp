@@ -170,17 +170,11 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
     <span id="hp-conf-val" style="font-size:13px;text-align:right">—</span>
   </div>
   <div id="hp-body" class="hp-body collapsed">
-    <div class="hdr" onclick="hudToggle(this,'hp-sec-score')">Score<span class="hdr-chev open">▲</span></div>
-    <div class="hdr-section" id="hp-sec-score" style="display:none">
-      <img id="hp-gauge-img" src="" alt="Composite health gauge" style="display:block;width:100%;border-radius:4px;opacity:.92;margin-top:4px">
-    </div>
     <div class="hdr" onclick="hudToggle(this,'hp-sec-metrics')">Metrics<span class="hdr-chev open">▲</span></div>
     <div class="hdr-section" id="hp-sec-metrics">
       <div class="hp-metric-row"><span class="hp-lbl">Hot px</span><span id="hp-hot" class="hp-val">—</span></div>
       <div class="hp-metric-row"><span class="hp-lbl">Strand</span><span id="hp-strand" class="hp-val">—</span></div>
       <div class="hp-metric-row"><span class="hp-lbl">Diff</span><span id="hp-diff" class="hp-val">—</span></div>
-      <div class="hp-metric-row"><span class="hp-lbl">Layer</span><span id="hp-layer" class="hp-val">—</span></div>
-      <div class="hp-metric-row"><span class="hp-lbl">Progress</span><span id="hp-progress" class="hp-val">—</span></div>
     </div>
     <div class="hdr" onclick="hudToggle(this,'hp-sec-trends')">Trends<span class="hdr-chev open">▲</span></div>
     <div class="hdr-section" id="hp-sec-trends">
@@ -191,7 +185,7 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
       <div id="hp-trend-status" style="font-size:11px;color:#888;padding:4px 2px 2px;line-height:1.6"></div>
     </div>
     <div id="hp-radar-section" style="display:none">
-      <div class="hdr" onclick="hpAnomalyToggle(this)">Failure Drivers<span class="hdr-chev open">▲</span></div>
+      <div class="hdr" onclick="hpWideToggle(this)">Failure Drivers<span class="hdr-chev open">▲</span></div>
       <div id="hp-sec-anomaly">
         <img id="hp-radar-img" src="" alt="Failure factor radar">
       </div>
@@ -463,12 +457,7 @@ function refreshImages(){
       document.getElementById('hp-radar-section').style.display='';
     } else { document.getElementById('hp-radar-section').style.display='none'; }
   }).catch(function(){document.getElementById('hp-radar-section').style.display='none';});
-  fetch('/health_panel_img?t='+t).then(function(r){
-    if(r.ok&&r.status!==204&&r.headers.get('Content-Type')&&r.headers.get('Content-Type').indexOf('image')>=0){
-      document.getElementById('hp-gauge-img').src='/health_panel_img?t='+t;
-      document.getElementById('hp-sec-score').style.display='';
-    } else { document.getElementById('hp-sec-score').style.display='none'; }
-  }).catch(function(){document.getElementById('hp-sec-score').style.display='none';});
+
 }
 function poll(){_hpPoll();}
 refreshImages();
@@ -484,15 +473,20 @@ function hpToggle(hdr){
   else{body.classList.add('collapsed');chev.classList.remove('open');}
   _hpUserOverride=true;
 }
-function hpAnomalyToggle(hdr){
+function hpWideToggle(hdr){
   var panel=document.getElementById('health-panel');
+  var anomaly=document.getElementById('hp-sec-anomaly');
   var chev=hdr.querySelector('.hdr-chev');
   if(panel.classList.contains('hp-wide')){
-    panel.classList.remove('hp-wide');
-    chev.classList.remove('open');
+    panel.classList.remove('hp-wide');chev.classList.remove('open');
+    anomaly.style.maxHeight='';
   } else {
-    panel.classList.add('hp-wide');
-    chev.classList.add('open');
+    panel.classList.add('hp-wide');chev.classList.add('open');
+    requestAnimationFrame(function(){
+      var hdrBottom=hdr.getBoundingClientRect().bottom;
+      var available=window.innerHeight-hdrBottom-14;
+      anomaly.style.maxHeight=Math.max(80,available)+'px';
+    });
   }
 }
 function hpUpdateSparkline(canvasId,data,color,minV,maxV,valLabel,dashed){
@@ -586,8 +580,6 @@ function hpUpdateFromResult(d){
   document.getElementById('hp-hot').textContent=d.hot_pct!==undefined?(d.hot_pct*100).toFixed(1)+'%':'—';
   document.getElementById('hp-strand').textContent=d.strand_score!==undefined?d.strand_score.toFixed(4):'—';
   document.getElementById('hp-diff').textContent=d.diff_score!==null&&d.diff_score!==undefined?d.diff_score.toFixed(4):'—';
-  document.getElementById('hp-layer').textContent=(d.layer&&d.total_layers)?d.layer+'/'+d.total_layers:'—';
-  document.getElementById('hp-progress').textContent=d.progress_pct!==undefined?d.progress_pct+'%':'—';
   var sp=d.success_probability;
   _hpScores.push(sp!==null&&sp!==undefined?sp:0);
   hpUpdateSparkline('hp-sp-canvas',_hpScores,'#60d080',0,1,(sp!==null&&sp!==undefined?Math.round(sp*100)+'%':'—'));
@@ -778,8 +770,6 @@ class _StreamHandler(BaseHTTPRequestHandler):
             self._serve_annotated()
         elif path == "/factors_radar":
             self._serve_monitor_png("factors_radar_png")
-        elif path == "/health_panel_img":
-            self._serve_monitor_png("health_panel_png")
         elif path in ("/", "/index.html"):
             self._serve_html()
         elif path == "/snapshot":
