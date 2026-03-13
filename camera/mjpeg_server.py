@@ -329,7 +329,7 @@ function update(d){
   var nEl=document.getElementById('nozzles');
   nEl.innerHTML='';
   (d.nozzles||[]).slice().sort(function(a,b){return b.id-a.id;}).forEach(function(n){
-    var lbl=(d.nozzles.length>1)?('Nozzle '+(n.id===0?'R':'L')):'Nozzle';
+    var lbl=(d.nozzles.length>1)?((n.id===0?'Right':'Left')+' Nozzle'):'Nozzle';
     var cls=tCls(n.temp,n.target);
     nEl.innerHTML+='<div class="row"><span class="lbl">'+lbl+'</span><span class="'+cls+htg(n.temp,n.target)+'">'+fmtT(n.temp,n.target)+'</span></div>';
   });
