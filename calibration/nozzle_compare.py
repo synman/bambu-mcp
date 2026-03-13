@@ -117,7 +117,7 @@ def set_nozzle_temp(temp: int, extruder: int = 0) -> dict:
 
 
 def _get_nozzle_targets() -> tuple[float, float]:
-    """Read current T0 and T1 nozzle temperature targets via GET /api/temperatures."""
+    """Read current T0 and T1 nozzle temperature targets via GET /api/printer."""
     d = get_temps()
     nozzles = d.get("nozzles", [])
     t0 = float(nozzles[0]["target"]) if len(nozzles) > 0 else -1.0
@@ -145,7 +145,7 @@ def heat_and_wait(t0: int, t1: int, duration_s: float) -> None:
     Two concurrent independent checks in a 0.5s inner loop:
       Proactive timer:  elapsed >= IDLE_HEAT_KEEPALIVE_S since last set_nozzle_temp →
                         re-assert before firmware timeout fires.
-      Reactive poll:    every IDLE_HEAT_POLL_INTERVAL_S → read targets via GET /api/temperatures →
+      Reactive poll:    every IDLE_HEAT_POLL_INTERVAL_S → read targets via GET /api/printer →
                         re-assert only if target drifted (firmware already reset it; log WARN).
     Both share last_assert. set_nozzle_temp() never called speculatively on every tick.
     All temperature commands use PATCH /api/set_tool_target_temp (Tier 1) — never raw gcode/M104.
@@ -246,20 +246,26 @@ def get_snapshot() -> Image.Image:
 
 
 def get_temps() -> dict:
+    """GET /api/printer → parse _printer_state.extruders → return {"nozzles": [{current, target}, ...]}."""
     params = urllib.parse.urlencode({"printer": PRINTER_NAME})
-    with urllib.request.urlopen(f"{API_BASE}/temperatures?{params}", timeout=10) as resp:
-        return json.loads(resp.read())
+    with urllib.request.urlopen(f"{API_BASE}/printer?{params}", timeout=10) as resp:
+        d = json.loads(resp.read())
+    extruders = d.get("_printer_state", {}).get("extruders", [])
+    nozzles = [{"current": float(e.get("temp", 0)), "target": float(e.get("temp_target", 0))}
+               for e in extruders]
+    return {"nozzles": nozzles}
 
 
-def wait_for_temp(target: float, tolerance: float = 5.0, timeout: float = 120.0) -> bool:
-    """Poll active nozzle temp until within tolerance of target."""
+def wait_for_temp(target: float, tolerance: float = 5.0, timeout: float = 120.0,
+                  extruder: int = 0) -> bool:
+    """Poll nozzle temp for the given extruder until within tolerance of target."""
     t_start = time.time()
     while time.time() - t_start < timeout:
         try:
             d = get_temps()
             nozzles = d.get("nozzles", [])
-            if nozzles:
-                current = nozzles[0].get("current", 0.0)
+            if len(nozzles) > extruder:
+                current = nozzles[extruder].get("current", 0.0)
                 print(f"\r    temp={current:.0f}°C / {target:.0f}°C  ", end="", flush=True)
                 if abs(current - target) <= tolerance:
                     print()
@@ -368,8 +374,7 @@ def main():
     time.sleep(3)
     set_nozzle_temp(NOZZLE_TEMP, extruder=1)
     print("    Waiting for T1 temp...")
-    if not wait_for_temp(NOZZLE_TEMP):
-        print("    WARNING: T1 didn't reach target — continuing anyway")
+    if not wait_for_temp(NOZZLE_TEMP, extruder=1):
     print(f"    Settling {HEAT_WAIT}s for thermal soak (keepalive active)...")
     heat_and_wait(0, NOZZLE_TEMP, HEAT_WAIT)
 
