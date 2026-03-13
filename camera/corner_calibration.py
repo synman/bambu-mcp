@@ -1233,7 +1233,7 @@ def run_calibration(supplement: bool = False):
             )
             # Consistency check: after tool-change fix, T0 and T1 are both positioned at
             # (wx,wy). The H matrix maps (wx,wy) to the same pixel for both nozzles.
-            # Expected: T0-T1 distance ≈ 0–15px (both at same world point — ACCEPT).
+            # Expected: T0-T1 distance < 30px (both at same world point — ACCEPT).
             # Unexpected: T0-T1 distance ≥ 30px → one detection is on an artifact (DISCARD).
             t0 = heat_results.get("T0", {})
             t1_check = heat_results.get("T1", {})

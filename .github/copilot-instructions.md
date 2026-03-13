@@ -1475,11 +1475,11 @@ After any `toggle_active_tool()` call in `corner_calibration.py`, the H2D carria
 moves to position the newly active nozzle at the commanded world position. This takes 1–3s.
 **Never use a fixed sleep** — use `wait_for_tool_change_complete()`.
 
-**Detection method (analogous to `wait_for_home_complete()` but faster):**
+**Detection method (analogous to `wait_for_home_complete()` but for a 7–11s event):**
 - Resolution: `480p` — better signal at Z=2mm capture position; calibration at front-left (80,80) closest to camera (0,5,75)
-- Poll interval: `0.3s` — finer temporal resolution for the shorter event
+- Poll interval: `0.3s` nominal; effective ~2s/frame due to snapshot HTTP latency
 - Stable criterion: 3 consecutive frames with avg-diff ≤ `TOOL_CHANGE_NOISE_FLOOR_PX × 1.5`
-- Hard timeout: `TOOL_CHANGE_TIMEOUT_S = 15s`
+- Hard timeout: `TOOL_CHANGE_TIMEOUT_S = 16.2s`
 - Implementation: `wait_for_tool_change_complete()` in `corner_calibration.py`
 
 **CRITICAL: `TOOL_CHANGE_NOISE_FLOOR_PX ≠ HOME_NOISE_FLOOR_PX`**
@@ -1487,13 +1487,12 @@ moves to position the newly active nozzle at the commanded world position. This 
 and different camera-to-nozzle geometry produce a different noise floor. Substituting 2.2px
 will produce a wrong threshold. Always use the 480p value measured by `calibrate_tool_change_settle.py`.
 
-**Constants (update when `calibrate_tool_change_settle.py` is run):**
-- `TOOL_CHANGE_NOISE_FLOOR_PX = 1.5` — [PROVISIONAL] estimated at 480p; must be measured
-- `TOOL_CHANGE_TIMEOUT_S = 15.0` — conservative until measured
-- Run `camera/calibrate_tool_change_settle.py` to measure (printer IDLE + explicit user auth)
+**Constants [VERIFIED: empirical, 2026-03-13, 3 trials/direction at (80,80), Z=2mm, 480p]:**
+- `TOOL_CHANGE_NOISE_FLOOR_PX = 2.70` — mean of 6 measurements; steady-state ~1.89px
+- `TOOL_CHANGE_TIMEOUT_S = 16.2` — max(T1→T0=11.19s) + 5s margin
+- T0→T1 settle: 7.22–7.27s; T1→T0 settle: 11.04–11.19s (asymmetric — T1→T0 two-phase)
+- Re-run `camera/calibrate_tool_change_settle.py` after H2D service (printer IDLE + user auth)
 - Script position: (80, 80, Z=2) — front-left quadrant, closest visible area to camera
-- After running: mark `[PROVISIONAL]` → `[VERIFIED: empirical]` in `corner_calibration.py`
-  and update `TOOL_CHANGE_NOISE_FLOOR_PX` in `behavioral_rules_camera_calibration.py`
 
 **Camera orientation:** Higher Y world (back of bed) → lower pixel row (top of frame). Lower Y world (front of bed) → higher pixel row (bottom of frame). Left X → lower pixel column. Right X → higher pixel column.
 
