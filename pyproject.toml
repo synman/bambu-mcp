@@ -11,6 +11,7 @@ name = "bambu-mcp"
 version = "0.8.0"
 requires-python = ">=3.12"
 dependencies = [
+    "keyring",
     "mcp[cli]==1.26.0",
     "cryptography",
     "av>=14.0",

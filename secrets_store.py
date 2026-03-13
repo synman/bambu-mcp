@@ -2,65 +2,157 @@
 Cross-platform encrypted secrets store for bambu-mcp.
 
 Secrets are stored in ~/.bambu-mcp/secrets.enc as a Fernet-encrypted JSON file.
-Key derivation: PBKDF2HMAC(SHA-256, salt=b"bambu-mcp", 100_000 iterations).
-Default password: read from config/settings.toml (default: "changeit").
+
+Master key resolution order:
+  1. BAMBU_MCP_FERNET_KEY env var — raw URL-safe base64 Fernet key (container/CI injection).
+  2. OS keychain via the `keyring` library — macOS Keychain, libsecret (Linux),
+     Windows Credential Manager. Key is generated on first use and stored as
+     service="bambu-mcp", username="master_key". Session-sealed by the OS.
+  3. File fallback — ~/.bambu-mcp/master.key (mode 0o400) for headless servers
+     where no keychain backend is available.
+
+Migration: if the resolved key cannot decrypt an existing store, a one-time
+attempt is made with the legacy PBKDF2("changeit") key. On success the store
+is re-encrypted with the new key automatically.
 """
 
 import json
+import logging
 import os
+import secrets
 import sys
 from pathlib import Path
 
+import base64
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-import base64
+
+log = logging.getLogger(__name__)
 
 _STORE_PATH = Path.home() / ".bambu-mcp" / "secrets.enc"
-_KDF_SALT = b"bambu-mcp"
-_KDF_ITERATIONS = 100_000
-_DEFAULT_PASSWORD = "changeit"
+_KEY_PATH = Path.home() / ".bambu-mcp" / "master.key"
+
+_KEYRING_SERVICE = "bambu-mcp"
+_KEYRING_USERNAME = "master_key"
+
+# Legacy constants — kept only for one-time migration detection.
+_LEGACY_KDF_SALT = b"bambu-mcp"
+_LEGACY_KDF_ITERATIONS = 100_000
 
 
-def _get_password() -> str:
-    """Return the secrets store password from config/settings.toml, env var, or default."""
-    # 1. Environment variable override
-    env = os.environ.get("BAMBU_MCP_SECRETS_PASSWORD")
-    if env:
-        return env
-    # 2. config/settings.toml next to this file's project root
-    settings_path = Path(__file__).parent / "config" / "settings.toml"
-    if settings_path.exists():
-        for line in settings_path.read_text().splitlines():
-            line = line.strip()
-            if line.startswith("password") and "=" in line:
-                return line.split("=", 1)[1].strip().strip('"').strip("'")
-    return _DEFAULT_PASSWORD
-
-
-def _make_fernet(password: str | None = None) -> Fernet:
-    pwd = (password or _get_password()).encode()
+def _legacy_fernet() -> Fernet:
+    """Return the Fernet instance for the legacy "changeit" key (migration only)."""
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
         length=32,
-        salt=_KDF_SALT,
-        iterations=_KDF_ITERATIONS,
+        salt=_LEGACY_KDF_SALT,
+        iterations=_LEGACY_KDF_ITERATIONS,
     )
-    key = base64.urlsafe_b64encode(kdf.derive(pwd))
-    return Fernet(key)
+    return Fernet(base64.urlsafe_b64encode(kdf.derive(b"changeit")))
 
 
-def _load(fernet: Fernet) -> dict:
+def _store_in_keychain(key: bytes) -> bool:
+    """Store *key* in the OS keychain. Returns True on success."""
+    try:
+        import keyring  # type: ignore[import]
+        keyring.set_password(_KEYRING_SERVICE, _KEYRING_USERNAME, key.decode())
+        return True
+    except Exception as exc:  # noqa: BLE001
+        log.debug("keychain store failed: %s", exc)
+        return False
+
+
+def _get_from_keychain() -> bytes | None:
+    """Retrieve master key from the OS keychain. Returns None if unavailable."""
+    try:
+        import keyring  # type: ignore[import]
+        stored = keyring.get_password(_KEYRING_SERVICE, _KEYRING_USERNAME)
+        if stored:
+            return stored.encode()
+        return None
+    except Exception as exc:  # noqa: BLE001
+        log.debug("keychain retrieve failed: %s", exc)
+        return None
+
+
+def _get_or_create_file_key() -> bytes:
+    """Read ~/.bambu-mcp/master.key, creating it (mode 0o400) if absent."""
+    _KEY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if _KEY_PATH.exists():
+        return _KEY_PATH.read_bytes().strip()
+    key = Fernet.generate_key()
+    _KEY_PATH.write_bytes(key)
+    _KEY_PATH.chmod(0o400)
+    log.info("Generated new master key at %s", _KEY_PATH)
+    return key
+
+
+def _get_fernet() -> Fernet:
+    """
+    Resolve the master Fernet key using the priority chain:
+      1. BAMBU_MCP_FERNET_KEY env var (raw base64 Fernet key)
+      2. OS keychain (generate + store on first use)
+      3. File fallback ~/.bambu-mcp/master.key (mode 0o400)
+    """
+    # 1. Environment variable injection (containers / CI)
+    env_key = os.environ.get("BAMBU_MCP_FERNET_KEY")
+    if env_key:
+        return Fernet(env_key.encode() if isinstance(env_key, str) else env_key)
+
+    # 2. OS keychain
+    key = _get_from_keychain()
+    if key is None:
+        # First use or new install — generate and store
+        key = Fernet.generate_key()
+        if _store_in_keychain(key):
+            log.info("Generated and stored new master key in OS keychain")
+        else:
+            # No keychain backend — fall through to file
+            key = None
+
+    if key is not None:
+        return Fernet(key)
+
+    # 3. File fallback (headless servers / no keychain)
+    return Fernet(_get_or_create_file_key())
+
+
+def _load_with_migration(fernet: Fernet) -> dict:
+    """
+    Load and decrypt the store. On InvalidToken, attempt one-time migration
+    from the legacy "changeit" key. If migration succeeds, re-encrypt in-place.
+    """
     if not _STORE_PATH.exists():
         return {}
+
+    ciphertext = _STORE_PATH.read_bytes()
     try:
-        return json.loads(fernet.decrypt(_STORE_PATH.read_bytes()))
+        return json.loads(fernet.decrypt(ciphertext))
+    except InvalidToken:
+        pass
+
+    # Attempt legacy migration
+    log.info("Primary key failed — attempting migration from legacy 'changeit' key")
+    try:
+        legacy = _legacy_fernet()
+        data = json.loads(legacy.decrypt(ciphertext))
+        # Re-encrypt with the new key
+        _STORE_PATH.write_bytes(fernet.encrypt(json.dumps(data).encode()))
+        log.info("Migration complete: store re-encrypted with new master key")
+        return data
     except InvalidToken:
         print(
-            f"ERROR: Failed to decrypt {_STORE_PATH} — wrong password?",
+            f"ERROR: Failed to decrypt {_STORE_PATH} — "
+            "set BAMBU_MCP_FERNET_KEY or delete the store to start fresh.",
             file=sys.stderr,
         )
         return {}
+
+
+def _load() -> tuple[dict, Fernet]:
+    f = _get_fernet()
+    return _load_with_migration(f), f
 
 
 def _save(data: dict, fernet: Fernet) -> None:
@@ -68,24 +160,22 @@ def _save(data: dict, fernet: Fernet) -> None:
     _STORE_PATH.write_bytes(fernet.encrypt(json.dumps(data).encode()))
 
 
-def get(key: str, default=None, password: str | None = None):
+def get(key: str, default=None):
     """Return the value for *key*, or *default* if not found."""
-    f = _make_fernet(password)
-    return _load(f).get(key, default)
+    data, _ = _load()
+    return data.get(key, default)
 
 
-def set(key: str, value, password: str | None = None) -> None:  # noqa: A001
+def set(key: str, value) -> None:  # noqa: A001
     """Store *value* under *key*."""
-    f = _make_fernet(password)
-    data = _load(f)
+    data, f = _load()
     data[key] = value
     _save(data, f)
 
 
-def delete(key: str, password: str | None = None) -> bool:
+def delete(key: str) -> bool:
     """Delete *key*. Returns True if the key existed."""
-    f = _make_fernet(password)
-    data = _load(f)
+    data, f = _load()
     if key not in data:
         return False
     del data[key]
@@ -93,11 +183,13 @@ def delete(key: str, password: str | None = None) -> bool:
     return True
 
 
-def list_keys(password: str | None = None) -> list[str]:
+def list_keys() -> list[str]:
     """Return all stored key names."""
-    return list(_load(_make_fernet(password)).keys())
+    data, _ = _load()
+    return list(data.keys())
 
 
-def get_all(password: str | None = None) -> dict:
+def get_all() -> dict:
     """Return a copy of the full secrets dict."""
-    return dict(_load(_make_fernet(password)))
+    data, _ = _load()
+    return dict(data)
