@@ -298,12 +298,12 @@ def rb_centroid(img: Image.Image, threshold: int = DIFF_THRESHOLD) -> tuple[int,
 # ---------------------------------------------------------------------------
 
 def load_homography() -> np.ndarray | None:
-    """Load H matrix from H2D.json. Returns 3x3 float64 or None."""
+    """Load H matrix from H2D.json (nested under dlt.H). Returns 3x3 float64 or None."""
     if not H_JSON_PATH.exists():
         return None
     try:
         d = json.loads(H_JSON_PATH.read_text())
-        H_list = d.get("H")
+        H_list = d.get("dlt", {}).get("H")
         if H_list:
             return np.array(H_list, dtype=np.float64).reshape(3, 3)
     except Exception:
