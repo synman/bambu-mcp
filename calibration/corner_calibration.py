@@ -192,10 +192,10 @@ TOOL_CHANGE_NOISE_FLOOR_PX = 2.70 # [VERIFIED: empirical] 480p/(80,80)/Z=2; mean
 
 # Idle nozzle heat timeout — firmware silently resets nozzle target to T_IDLE (38°C)
 # after this duration when gcode_state is IDLE, FINISH, or FAILED.
-# [VERIFIED: empirical 2026-03-13] calibrate_idle_nozzle_timeout.py Trial 2: 300.41s (clean cold-start).
-# Trial 1 (126s) was contaminated — timer already running ~175s from prior kill. Use Trial 2 only.
-# Run: python3 calibration/calibrate_idle_nozzle_timeout.py
-IDLE_NOZZLE_HEAT_TIMEOUT_S  = 300     # [VERIFIED: empirical 2026-03-13] Trial 2: 300.41s
+# [VERIFIED: empirical 2026-03-13, 3 trials 2026-03-14] calibrate_idle_nozzle_timeout.py --trials 3
+# Trial 1=300.91s, Trial 2=299.95s, Trial 3=301.19s; mean=300.7s; σ<0.6s. Constant unchanged at 300s.
+# Run: python3 calibration/calibrate_idle_nozzle_timeout.py --trials 3
+IDLE_NOZZLE_HEAT_TIMEOUT_S  = 300     # [VERIFIED: empirical 2026-03-14] 3 trials, mean=300.7s
 IDLE_HEAT_KEEPALIVE_S       = IDLE_NOZZLE_HEAT_TIMEOUT_S * 0.75   # = 225s; proactive check threshold
 IDLE_HEAT_POLL_INTERVAL_S   = 10.0    # reactive poll interval — verify target not drifted
 

@@ -84,16 +84,16 @@ elevated nozzle target back to **38°C** after a calibrated timeout.
 
 **Constants (defined in `calibration/corner_calibration.py` and `calibration/nozzle_compare.py`):**
 ```python
-IDLE_NOZZLE_HEAT_TIMEOUT_S  = 300     # [VERIFIED: empirical 2026-03-13] Trial 2: 300.41s (clean cold-start)
+IDLE_NOZZLE_HEAT_TIMEOUT_S  = 300     # [VERIFIED: empirical 2026-03-14] 3 trials, mean=300.7s (300.91, 299.95, 301.19)
 IDLE_HEAT_KEEPALIVE_S       = IDLE_NOZZLE_HEAT_TIMEOUT_S * 0.75  # = 225s proactive check threshold
 IDLE_HEAT_POLL_INTERVAL_S   = 10.0                               # reactive poll interval
 ```
 
-**Critical calibration finding [VERIFIED: empirical 2026-03-13]:**
+**Critical calibration finding [VERIFIED: empirical 2026-03-14, 3 trials]:**
 Re-asserting the nozzle target temperature while the nozzle is **already at target temp** does NOT
-reset the firmware timer. The timer appears to start from when the nozzle physically reaches the
-target temperature, not from when the set command is sent. Evidence: calibration Trial 1 measured
-only 126s from re-assert (with timer already ~175s elapsed) vs Trial 2's clean 300.4s baseline.
+reset the firmware timer. The timer starts from when the nozzle physically reaches the target
+temperature, not from when the set command is sent. Confirmed via 3 clean cold-start trials:
+300.91s, 299.95s, 301.19s; mean=300.7s, σ<0.6s.
 
 Implication: the **reactive drift check** is the mechanism that prevents indefinite timeout.
 When firmware resets to 38°C, the reactive poll detects the drift, re-asserts the target,
