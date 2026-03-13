@@ -422,7 +422,6 @@ def start_stream(name: str, port: int | None = None) -> dict:
 
     Right-side JOB HEALTH panel (appears when a print is active):
       - Verdict badge: CLEAN / WARNING / CRITICAL / STANDBY (color-coded composite score)
-      - Score section: composite score bar + % + confidence %; driven by /health_panel_img
       - Metrics section: Hot px %, Strand, Diff, Layer, Progress
       - Trends section: 4 rolling sparklines (Success %, Confidence %, Nozzle °C, Bed °C)
       - AI Detection section: annotated anomaly overlay + Air Zone / Plate Zone / Heat Map
@@ -655,6 +654,14 @@ def analyze_active_job(
     Returns {"error": "no_camera"} if this printer has no camera.
     Returns {"error": "not_connected"} if the MQTT session is not active.
     Returns {"error": "no_active_job"} if the printer is idle (gcode_state IDLE/FINISH).
+
+    Background monitor: a health monitor daemon runs automatically during active prints,
+    capturing frames every ~60 seconds and computing anomaly scores, print health verdicts,
+    and temperature trends. The monitor runs without any agent action — its results are
+    cached and merged into this tool's response. Call this tool proactively during prints
+    to describe health to the user; do not wait for explicit requests. The first background
+    result is available ~60 seconds after print start. Use open_job_state() to open the
+    latest cached result for human viewing without re-analyzing.
 
     Note: this tool returns raw base64 image data URIs which may exceed the CLI inline
     display limit. If output is truncated, call get_knowledge_topic('http_api/system')

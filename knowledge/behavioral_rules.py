@@ -175,6 +175,47 @@ stream tab refresh), and HTTP API Write Guard (GET=safe, POST/PATCH/DELETE=requi
 
 ---
 
+## Active Print Workflow
+
+During an active print, a background health monitor daemon runs automatically,
+capturing camera frames every ~60 seconds and computing spaghetti/anomaly scores,
+print health verdicts, and temperature trends. **The monitor runs without any agent
+action** — no polling loop or tool call is needed to keep it alive.
+
+### Proactive monitoring (required — do not wait for the user to ask)
+
+When a `job_started` alert fires, or when the user asks about an active print:
+1. Call `analyze_active_job(name)` — default `categories=["X"]` returns the composite
+   diagnostic view (~25 KB). Describe the verdict, score, and any anomaly regions.
+2. If health is `WARNING` or `CRITICAL`, add `categories=["X","D"]` to include anomaly
+   detection overlays for more detail.
+3. Use `open_job_state(name)` to open the latest cached result for the human to view
+   directly — never embed the raw data URI in chat output.
+
+**First background result is available ~60 seconds after print start.**
+
+### Post-job project info
+
+After a print completes (gcode_state `FINISH` or `FAILED`), `get_current_job_project_info`
+still returns the project metadata for the last job — use it with `open_plate_viewer`
+to show the user which plate ran. Pass the plate number from `get_job_info()` as
+`target_plate` to scroll directly to the printed plate:
+
+```python
+job  = get_job_info(name)
+info = get_current_job_project_info(name)
+open_plate_viewer(name, info["gcode_file"], target_plate=job["plate_num"])
+```
+
+### Agent efficiency shortcuts
+
+- **Plate number from path:** parse `gcode_file` — `/data/Metadata/plate_N.gcode` → N.
+  No extra tool call needed.
+- **Find project file on SD card:** `get_3mf_entry_by_name(name, subtask_name + ".gcode.3mf")`
+  searches the cached file tree by filename — faster than `list_sdcard_files()`.
+
+---
+
 ## HTTP REST API
 
 When an MCP tool cannot fulfill a user request, bambu-mcp also exposes a complete
