@@ -3,7 +3,15 @@
 calibrate_tool_change_settle.py — Empirically measure tool-change carriage settle time.
 
 Analogous to the G28 homing calibration methodology (HOME_NOISE_FLOOR_PX, HOME_TIMEOUT_SECONDS)
-but tuned for the 1–3s tool-change event using 480p snapshots at 0.3s intervals.
+but tuned for the 7–11s tool-change event using 480p snapshots at ~2s effective rate.
+
+[VERIFIED: empirical, 2026-03-13, 3 trials/direction]:
+  TOOL_CHANGE_NOISE_FLOOR_PX = 2.70px  (480p, position (80,80), Z=2mm)
+  TOOL_CHANGE_TIMEOUT_S      = 16.2s   (max T1→T0=11.19s + 5s margin)
+  T0→T1: 7.22–7.27s  |  T1→T0: 11.04–11.19s (asymmetric — T1→T0 has two-phase motion)
+
+Re-run this script if the H2D is serviced, a nozzle is replaced, or the carriage is
+adjusted — the settle profile may change. Output contains ready-to-paste constants.
 
 Calibration position: front-left quadrant (80, 80) at Z=2mm. Camera is at (0,5,75) —
 front-left is closest to camera, giving the strongest 480p frame-diff signal during the
@@ -25,7 +33,8 @@ USAGE:
     cd ~/bambu-mcp
     python -u camera/calibrate_tool_change_settle.py
 
-Mark [PROVISIONAL] → [VERIFIED: empirical] in corner_calibration.py after running.
+After running: update TOOL_CHANGE_* constants in corner_calibration.py and
+behavioral_rules_camera_calibration.py. Mark [VERIFIED: empirical YYYY-MM-DD].
 """
 
 import sys

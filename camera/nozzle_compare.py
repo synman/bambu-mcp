@@ -103,16 +103,22 @@ def toggle_active_tool() -> None:
         resp.read()
 
 
-def wait_for_tool_change_settle(timeout: float = 15.0) -> None:
-    """Poll 360p snapshots at 0.3s; return when frame-diff drops to noise floor."""
+def wait_for_tool_change_settle(timeout: float = 16.2) -> None:
+    """Poll 480p snapshots at ~2s effective rate; return when frame-diff drops to noise floor.
+
+    [VERIFIED: empirical] calibrate_tool_change_settle.py, 3 trials, 2026-03-13.
+    T0→T1 settles in 7.22–7.27s; T1→T0 settles in 11.04–11.19s (asymmetric).
+    timeout=16.2s = max(T1→T0=11.19s) + 5s margin.
+    NOISE_FLOOR=2.70px measured at 480p/(80,80)/Z=2mm.
+    """
     import base64 as _b64, io as _io
     POLL = 0.3
     STABLE_N = 3
     NOISE_MULT = 1.5
-    NOISE_FLOOR = 1.5  # [PROVISIONAL] — update after calibrate_tool_change_settle.py run
+    NOISE_FLOOR = 2.70  # [VERIFIED: empirical 2026-03-13] 480p at (80,80), Z=2mm
 
     def _snap360() -> np.ndarray:
-        p = urllib.parse.urlencode({"printer": PRINTER_NAME, "resolution": "360p", "quality": 65})
+        p = urllib.parse.urlencode({"printer": PRINTER_NAME, "resolution": "480p", "quality": 65})
         with urllib.request.urlopen(f"{API_BASE}/snapshot?{p}", timeout=10) as r:
             d = json.loads(r.read())
         if "url" in d:

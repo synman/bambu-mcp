@@ -322,40 +322,58 @@ Code references:
 
 ---
 
-## Tool-Change Settle Duration (H2D — Calibration Required)
+## Tool-Change Settle Duration (H2D — Verified Empirical)
 
-[PROVISIONAL — constants not yet measured empirically. Run camera/calibrate_tool_change_settle.py
- before treating TOOL_CHANGE_NOISE_FLOOR_PX or TOOL_CHANGE_TIMEOUT_S as authoritative.]
+[VERIFIED: empirical] calibrate_tool_change_settle.py, 3 trials per direction, 2026-03-13.
+Position: (80, 80, Z=2mm), 480p snapshots, STABLE_N=3, NOISE_MULT=1.5.
 
-Visual detection method (analogous to G28 homing detection, tuned for shorter event):
-- Resolution: 480p (better signal than 360p at Z=2mm capture position; calibration position
-  is front-left quadrant (80,80) — closest visible area to camera at (0,5,75))
-- Poll interval: 0.3s (vs 2.0s for homing — finer resolution of a shorter event)
-- Stable criterion: 3 consecutive frames with avg-diff ≤ TOOL_CHANGE_NOISE_FLOOR_PX × 1.5
-- Hard timeout: TOOL_CHANGE_TIMEOUT_S = 15s (conservative until measured)
+Key finding: T0→T1 and T1→T0 are ASYMMETRIC — T1→T0 takes ~4s longer due to two-phase
+carriage motion (initial move then secondary peak at ~4s as T0 re-engages).
 
 | Constant | Value | Status |
 |----------|-------|--------|
-| TOOL_CHANGE_POLL_S | 0.3s | Fixed (design choice) |
+| TOOL_CHANGE_POLL_S | 0.3s (effective ~2s due to snapshot latency) | Fixed (design choice) |
 | TOOL_CHANGE_SNAPSHOT_RES | "480p" | Fixed (design choice) |
 | TOOL_CHANGE_STABLE_N | 3 | Fixed (design choice) |
 | TOOL_CHANGE_NOISE_MULT | 1.5 | Fixed (same as homing) |
-| TOOL_CHANGE_NOISE_FLOOR_PX | [PROVISIONAL 1.5px] | MUST be measured at 480p |
-| TOOL_CHANGE_TIMEOUT_S | 15.0s | Conservative until measured |
+| TOOL_CHANGE_NOISE_FLOOR_PX | **2.70px** | [VERIFIED: empirical 2026-03-13] |
+| TOOL_CHANGE_TIMEOUT_S | **16.2s** | [VERIFIED: empirical 2026-03-13] |
+
+Empirical data — trial raw results:
+
+| Direction | Trial 1 | Trial 2 | Trial 3 | Max |
+|-----------|---------|---------|---------|-----|
+| T0→T1 | 7.22s | 7.27s | 7.21s | 7.27s |
+| T1→T0 | 11.14s | 11.19s | 11.04s | 11.19s |
+
+Noise floor measurements (6 total): 3.723, 1.880, 3.466, 1.886, 3.325, 1.892 → mean=2.695px
+Note: first measurement of each trial is elevated (~9–11px) due to post-positioning
+camera settling; steady-state is ~1.89px. Mean of 2.70px is used for conservative threshold.
+
+T1→T0 per-frame diff pattern (characteristic — same across all 3 trials):
+  t≈2s: ~4.4px (initial motion)
+  t≈4s: ~7.7–8.3px (SECONDARY PEAK — T0 carriage re-engage phase)
+  t≈6s: ~3.0–4.0px (decay)
+  t≈8s: ~1.9px ✓ (stable)
+  t≈10s: ~1.9px ✓
+  t≈12s: ~1.9px ✓ → settle declared at ~11.1s
+
+TIMEOUT derivation: max(T1→T0 settle=11.19s) + 5.0s safety margin = **16.2s**.
+Old value of 15.0s was dangerously close to actual T1→T0 settle time.
 
 IMPORTANT: TOOL_CHANGE_NOISE_FLOOR_PX is NOT the same as HOME_NOISE_FLOOR_PX (2.2px).
 HOME_NOISE_FLOOR_PX is measured at 720p. 480p noise floor differs in absolute px — the
 different resolution and different Z capture height (Z=2mm vs homing at full range) both
-affect the noise floor. Do NOT substitute 2.2px. Use calibrate_tool_change_settle.py to measure.
+affect the noise floor. Do NOT substitute 2.2px.
 
 Measurement process (run if H2D is serviced, replaced, or noise floor value is suspect):
   1. Home + move to (80, 80) at Z_CLEARANCE; descend to Z_CAPTURE=2mm.
   2. Establish 480p noise floor: 5 baseline frame pairs at rest → mean avg-abs-diff.
   3. Toggle T0→T1 via PATCH /api/toggle_active_tool; record t=0.
-  4. Poll 0.3s / 480p; compute avg-abs-diff vs prior frame.
+  4. Poll ~2s effective / 480p; compute avg-abs-diff vs prior frame.
   5. Declare done when 3 consecutive diffs ≤ noise_floor × 1.5; record t_settle.
   6. Toggle T1→T0; repeat steps 3–5.
-  7. Run 3 trials for each direction (T0→T1 and T1→T0 may differ in carriage travel).
+  7. Run 3 trials for each direction.
   8. Update: TOOL_CHANGE_NOISE_FLOOR_PX = mean(all noise_floor measurements).
              TOOL_CHANGE_TIMEOUT_S = max(all t_settle across both directions) + 5s.
 

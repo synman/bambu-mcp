@@ -178,15 +178,17 @@ SETTLE_SECONDS_XY = 12.0       # after XY corner move (up to 490mm at F3000 ≈ 
 HOME_TIMEOUT_SECONDS = 65
 PROBES_PER_POINT = 3           # capture attempts per point; keep highest-confidence result
 
-# Tool-change settle detection constants (analogous to homing constants, tuned for ~1-3s event)
-# [PROVISIONAL] TOOL_CHANGE_NOISE_FLOOR_PX until calibrate_tool_change_settle.py runs.
+# Tool-change settle detection constants (analogous to homing constants, tuned for ~7-11s event)
+# [VERIFIED: empirical] calibrate_tool_change_settle.py, 3 trials each direction, 2026-03-13.
 # 480p noise floor ≠ 720p noise floor (HOME_NOISE_FLOOR_PX=2.2px) — do not substitute.
-TOOL_CHANGE_POLL_S = 0.3          # 0.3s interval — tool change is < 5s normally
+# Asymmetry: T0→T1 settles in 7.22–7.27s; T1→T0 settles in 11.04–11.19s (two-phase motion).
+# Actual poll rate ~2s/frame (snapshot latency dominates 0.3s POLL_S setting).
+TOOL_CHANGE_POLL_S = 0.3          # nominal; actual effective rate ~2s due to snapshot latency
 TOOL_CHANGE_SNAPSHOT_RES = "480p" # 480p — better signal at Z=2mm; noise floor differs from 720p
-TOOL_CHANGE_STABLE_N = 3          # 3 consecutive stable frames (shorter event than G28)
+TOOL_CHANGE_STABLE_N = 3          # 3 consecutive stable frames
 TOOL_CHANGE_NOISE_MULT = 1.5      # same multiplier as wait_for_home_complete
-TOOL_CHANGE_TIMEOUT_S = 15.0      # hard timeout; tool change never takes > ~5s normally
-TOOL_CHANGE_NOISE_FLOOR_PX = 1.5  # [PROVISIONAL] estimated at 480p; measure empirically
+TOOL_CHANGE_TIMEOUT_S = 16.2      # [VERIFIED: empirical] max(T1→T0=11.19s) + 5s margin
+TOOL_CHANGE_NOISE_FLOOR_PX = 2.70 # [VERIFIED: empirical] 480p/(80,80)/Z=2; mean of 6 measurements
 
 OUTPUT_DIR = "/tmp/h2d_corner_calibration"
 
@@ -321,14 +323,14 @@ def wait_for_tool_change_complete(
 ) -> None:
     """Block until tool-change carriage motion settles, detected by visual frame stability.
 
-    Analogous to wait_for_home_complete() but uses 360p at 0.3s interval — tool change
-    is a 1–3s event vs ~47s for G28, so lower res + faster polling is appropriate.
+    Analogous to wait_for_home_complete() but uses 480p at ~2s effective poll rate — tool
+    change is a 7–11s event (T0→T1 ~7.2s, T1→T0 ~11.1s) vs ~47s for G28.
 
-    [PROVISIONAL] TOOL_CHANGE_NOISE_FLOOR_PX = 1.5px until calibrate_tool_change_settle.py
-    runs. 360p noise floor ≠ HOME_NOISE_FLOOR_PX (2.2px, measured at 720p). Do not substitute.
+    [VERIFIED: empirical] TOOL_CHANGE_NOISE_FLOOR_PX = 2.70px, TOOL_CHANGE_TIMEOUT_S = 16.2s
+    measured by calibrate_tool_change_settle.py at (80,80,Z=2), 480p, 3 trials, 2026-03-13.
 
     Args:
-        timeout: Hard timeout in seconds. Default TOOL_CHANGE_TIMEOUT_S (15s).
+        timeout: Hard timeout in seconds. Default TOOL_CHANGE_TIMEOUT_S (16.2s).
         noise_floor: Stability baseline in px avg diff. Default TOOL_CHANGE_NOISE_FLOOR_PX.
     """
     threshold = noise_floor * TOOL_CHANGE_NOISE_MULT
