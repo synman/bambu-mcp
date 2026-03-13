@@ -797,7 +797,7 @@ def _build_layout_uri(topimg_uri: str, objs: list, model_key) -> str:
         return ""
 
 
-def open_plate_viewer(name: str, file_path: str) -> dict:
+def open_plate_viewer(name: str, file_path: str, target_plate: int = None) -> dict:
     """
     Build and open an HTML viewer showing both the isometric thumbnail and
     top-down image for all plates in a 3MF project file on the printer's SD card.
@@ -808,6 +808,11 @@ def open_plate_viewer(name: str, file_path: str) -> dict:
     Fetches project info for every plate via the local cache, embeds the
     base64 images directly in the HTML, writes it to /tmp, and opens it in
     the default browser. Returns the output path and plate count.
+
+    target_plate: optional plate number to scroll directly to on open. If set,
+    the browser opens with the URL fragment #plate-{target_plate}, scrolling to
+    that plate automatically. Useful after a job completes — pass the plate number
+    from get_job_info() to jump straight to the printed plate.
     """
     log.debug("open_plate_viewer: called for name=%s file_path=%s", name, file_path)
     printer = session_manager.get_printer(name)
@@ -862,7 +867,7 @@ def open_plate_viewer(name: str, file_path: str) -> dict:
                 if layout_uri else ""
             )
             plates_html += (
-                f'<div class="plate"><h3>Plate {p}</h3>'
+                f'<div class="plate" id="plate-{p}"><h3>Plate {p}</h3>'
                 f'<p class="parts">{label}</p>'
                 f'<div class="imgs">'
                 f'<div class="imgbox"><div class="imglabel">Isometric</div><img src="{thumbnail}"></div>'
@@ -878,7 +883,7 @@ def open_plate_viewer(name: str, file_path: str) -> dict:
 body{{font-family:sans-serif;background:#111;color:#eee;padding:20px;margin:0}}
 h1{{text-align:center;margin-bottom:24px}}
 .grid{{display:flex;flex-wrap:wrap;gap:16px;justify-content:center}}
-.plate{{background:#222;border-radius:8px;padding:12px;text-align:center}}
+.plate{{background:#222;border-radius:8px;padding:12px;text-align:center;scroll-margin-top:16px}}
 .plate h3{{margin:0 0 4px;font-size:1.1em}}
 .parts{{font-size:.75em;color:#aaa;margin:0 0 8px;min-height:1em}}
 .imgs{{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}}
@@ -893,7 +898,8 @@ h1{{text-align:center;margin-bottom:24px}}
         with open(out_path, "w") as f:
             f.write(html)
 
-        webbrowser.open(f"file://{out_path}")
+        fragment = f"#plate-{target_plate}" if target_plate else ""
+        webbrowser.open(f"file://{out_path}{fragment}")
         log.info("open_plate_viewer: opened viewer for %s, plates=%d", name, total_plates)
         log.debug("open_plate_viewer: → path=%s plates=%d", out_path, total_plates)
         return {"success": True, "path": out_path, "plates": total_plates}
@@ -1111,8 +1117,10 @@ def get_current_job_project_info(name: str, include_images: bool = False) -> dic
     get_project_info() with the active job's file path and plate number — but
     without needing to know the file path in advance.
 
-    Returns {error: "no_active_job"} when gcode_state is IDLE, FINISH, or FAILED
-    (i.e. no print is running or paused). A PAUSED job still returns project info.
+    Returns {error: "no_active_job"} when gcode_state is IDLE (i.e. no print is
+    running, paused, or recently finished). FINISH and FAILED jobs still return
+    project info so agents can identify which plate ran immediately after completion.
+    A PAUSED job still returns project info.
 
     include_images=True embeds base64 thumbnail and top-view data URIs in the
     response (large). See get_project_info() for full field documentation.
@@ -1134,11 +1142,13 @@ def get_current_job_project_info(name: str, include_images: bool = False) -> dic
         gcode_file = getattr(job, "gcode_file", None) or ""
         plate_num = getattr(job, "plate_num", 1) or 1
         log.debug("get_current_job_project_info: gcode_state=%s gcode_file=%s plate_num=%s", gcode_state, gcode_file, plate_num)
-        if not gcode_file or gcode_state.upper() in ("IDLE", "FINISH", "FAILED", ""):
+        if not gcode_file or gcode_state.upper() in ("IDLE", ""):
             log.debug("get_current_job_project_info: no active job for %s (state=%s file=%s)", name, gcode_state, gcode_file)
             return {"error": "no_active_job", "gcode_state": gcode_state, "note": "No print is currently running or paused."}
         log.debug("get_current_job_project_info: delegating to get_project_info for %s file=%s plate=%s", name, gcode_file, plate_num)
-        return get_project_info(name, gcode_file, plate_num=plate_num, include_images=include_images)
+        result = get_project_info(name, gcode_file, plate_num=plate_num, include_images=include_images)
+        result["gcode_state"] = gcode_state
+        return result
     except Exception as e:
         log.error("get_current_job_project_info: error for %s: %s", name, e, exc_info=True)
         return {"error": f"Error retrieving current job project info for '{name}': {e}"}

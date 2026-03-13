@@ -164,6 +164,14 @@ def get_job_info(name: str) -> dict:
         21=paused by heat bed temp malfunction, 255=printing normally.
     Note: gcode_state is NOT a field of ActiveJobInfo and is not returned by this
     tool. Read gcode_state from get_print_progress() or get_printer_state() instead.
+
+    Shortcuts for agent efficiency:
+    - Current plate number: parse gcode_file path — pattern is /data/Metadata/plate_N.gcode
+      where N is the plate number. Example: "/data/Metadata/plate_3.gcode" → plate 3.
+      No extra tool call needed.
+    - Find the project file on the SD card: use get_3mf_entry_by_name(name, subtask_name
+      + ".gcode.3mf") to search the cached file tree by filename directly, instead of
+      calling list_sdcard_files() and scanning the full listing.
     """
     log.debug("get_job_info: called for printer=%s", name)
     job = session_manager.get_job(name)
