@@ -84,10 +84,21 @@ elevated nozzle target back to **38°C** after a calibrated timeout.
 
 **Constants (defined in `calibration/corner_calibration.py` and `calibration/nozzle_compare.py`):**
 ```python
-IDLE_NOZZLE_HEAT_TIMEOUT_S  = <measured>                          # [PROVISIONAL until calibration run]
-IDLE_HEAT_KEEPALIVE_S       = IDLE_NOZZLE_HEAT_TIMEOUT_S * 0.75  # proactive fire threshold
+IDLE_NOZZLE_HEAT_TIMEOUT_S  = 300     # [VERIFIED: empirical 2026-03-13] Trial 2: 300.41s (clean cold-start)
+IDLE_HEAT_KEEPALIVE_S       = IDLE_NOZZLE_HEAT_TIMEOUT_S * 0.75  # = 225s proactive check threshold
 IDLE_HEAT_POLL_INTERVAL_S   = 10.0                               # reactive poll interval
 ```
+
+**Critical calibration finding [VERIFIED: empirical 2026-03-13]:**
+Re-asserting the nozzle target temperature while the nozzle is **already at target temp** does NOT
+reset the firmware timer. The timer appears to start from when the nozzle physically reaches the
+target temperature, not from when the set command is sent. Evidence: calibration Trial 1 measured
+only 126s from re-assert (with timer already ~175s elapsed) vs Trial 2's clean 300.4s baseline.
+
+Implication: the **reactive drift check** is the mechanism that prevents indefinite timeout.
+When firmware resets to 38°C, the reactive poll detects the drift, re-asserts the target,
+the nozzle reheats, and the firmware starts a fresh ~300s countdown. The proactive timer
+(at 75% = 225s) is belt-and-suspenders and does not harm, but does not extend the countdown.
 
 **Dual-layer keepalive pattern — `heat_and_wait(t0, t1, duration_s)` in calibration scripts:**
 
@@ -95,16 +106,14 @@ Both checks are independent `if` blocks (NOT `elif`) — both can fire in the sa
 `set_nozzle_temp()` is called only on condition, never speculatively on every tick.
 
 ```
-Proactive: elapsed >= IDLE_HEAT_KEEPALIVE_S → set_nozzle_temp() for both nozzles → reset timer
-Reactive:  now >= next_poll → read targets → if target drifted → set_nozzle_temp() + log WARN → reset timer
+Proactive: elapsed >= IDLE_HEAT_KEEPALIVE_S → set_nozzle_temp() for both nozzles
+           (harmless no-op re-assert; does NOT extend firmware timer)
+Reactive:  now >= next_poll → read targets → if target drifted → set_nozzle_temp() + log WARN
+           (ACTUAL reset prevention — firmware reset detected; re-assert gives fresh ~300s)
 ```
 
 Both checks share `last_assert`. Reactive re-assert also resets the proactive timer.
 Inner loop cadence: 0.5s. All temperature calls use `set_nozzle_temp()` (Tier 1) — never M104.
-
-**Calibration script:** `calibration/calibrate_idle_nozzle_timeout.py`
-Run while printer is `gcode_state=IDLE` with user auth to heat T0 to 150°C.
-Output: `IDLE_NOZZLE_HEAT_TIMEOUT_S`, `target_restore_resets_timer: bool`, `tested_gcode_state`.
 
 ---
 

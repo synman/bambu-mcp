@@ -192,10 +192,11 @@ TOOL_CHANGE_NOISE_FLOOR_PX = 2.70 # [VERIFIED: empirical] 480p/(80,80)/Z=2; mean
 
 # Idle nozzle heat timeout — firmware silently resets nozzle target to T_IDLE (38°C)
 # after this duration when gcode_state is IDLE, FINISH, or FAILED.
-# [PROVISIONAL ~170s] — update with [VERIFIED: empirical YYYY-MM-DD] after calibration run.
-# Run: python3 camera/calibrate_idle_nozzle_timeout.py
-IDLE_NOZZLE_HEAT_TIMEOUT_S  = 170.0   # [PROVISIONAL] measured via calibrate_idle_nozzle_timeout.py
-IDLE_HEAT_KEEPALIVE_S       = IDLE_NOZZLE_HEAT_TIMEOUT_S * 0.75   # proactive re-assert before reset fires
+# [VERIFIED: empirical 2026-03-13] calibrate_idle_nozzle_timeout.py Trial 2: 300.41s (clean cold-start).
+# Trial 1 (126s) was contaminated — timer already running ~175s from prior kill. Use Trial 2 only.
+# Run: python3 calibration/calibrate_idle_nozzle_timeout.py
+IDLE_NOZZLE_HEAT_TIMEOUT_S  = 300     # [VERIFIED: empirical 2026-03-13] Trial 2: 300.41s
+IDLE_HEAT_KEEPALIVE_S       = IDLE_NOZZLE_HEAT_TIMEOUT_S * 0.75   # = 225s; proactive check threshold
 IDLE_HEAT_POLL_INTERVAL_S   = 10.0    # reactive poll interval — verify target not drifted
 
 OUTPUT_DIR = "/tmp/h2d_corner_calibration"
@@ -245,9 +246,10 @@ def _get_nozzle_targets() -> tuple[float, float]:
     url = f"{API_BASE}/printer?printer={PRINTER_NAME}"
     with urllib.request.urlopen(url, timeout=10) as resp:
         state = json.loads(resp.read())
-    nozzles = state.get("_printer_state", {}).get("nozzle_temps", [])
-    t0 = float(nozzles[0]["target"]) if len(nozzles) > 0 else -1.0
-    t1 = float(nozzles[1]["target"]) if len(nozzles) > 1 else -1.0
+    ps = state.get("_printer_state", {})
+    extruders = ps.get("extruders", [])
+    t0 = float(extruders[0].get("temp_target", -1)) if len(extruders) > 0 else float(ps.get("active_nozzle_temp_target", -1))
+    t1 = float(extruders[1].get("temp_target", -1)) if len(extruders) > 1 else -1.0
     return t0, t1
 
 
@@ -259,9 +261,15 @@ def heat_and_wait(t0: int, t1: int, duration_s: float) -> None:
 
     Two concurrent independent checks in a 0.5s inner loop:
       Proactive timer:  elapsed >= IDLE_HEAT_KEEPALIVE_S since last set_nozzle_temp →
-                        re-assert before firmware timeout fires (proactive; no drift needed).
+                        re-assert at 75% of timeout as belt-and-suspenders check.
+                        NOTE [VERIFIED: empirical 2026-03-13]: re-asserting while the nozzle is
+                        already at target temperature does NOT reset the firmware timer. The timer
+                        appears to start when the nozzle reaches the target temp, not when the
+                        set command is sent. Proactive check is harmless but does not extend the
+                        countdown — reset prevention relies on the reactive drift check.
       Reactive poll:    every IDLE_HEAT_POLL_INTERVAL_S → read targets via GET /api/printer →
-                        re-assert only if target drifted (firmware already reset it; log WARN).
+                        re-assert only if target drifted (firmware already reset to 38°C; log WARN).
+                        After drift: firmware timer resets with fresh ~300s countdown [VERIFIED].
     Both checks share last_assert. set_nozzle_temp() is never called speculatively on every tick.
     All temperature commands use PATCH /api/set_tool_target_temp (Tier 1) — never raw gcode/M104.
     """

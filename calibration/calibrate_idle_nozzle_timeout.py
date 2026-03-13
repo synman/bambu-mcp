@@ -47,7 +47,7 @@ import urllib.request
 PRINTER_NAME   = "H2D"
 TARGET_TEMP    = 150        # °C — elevated target to heat; low enough to avoid drool
 POLL_INTERVAL  = 0.5        # s — default poll interval; ±0.5s accuracy
-MAX_WAIT       = 360.0      # s — safety ceiling; if no reset seen in 6 min, abort
+MAX_WAIT       = 3600.0     # s — safety ceiling; if no reset seen in 1 hour, abort
 T_IDLE         = 38         # °C — expected reset target (matches corner_calibration.py)
 MAX_TRIALS     = 3          # maximum number of drops to observe
 
@@ -105,13 +105,18 @@ def set_nozzle_temp(temp: int, extruder: int = 0) -> dict:
 
 
 def get_nozzle_target(extruder: int = 0) -> float:
-    """Read the current nozzle temperature target via GET /api/printer."""
+    """Read the current nozzle temperature target via GET /api/printer.
+
+    Primary path: _printer_state.extruders[extruder].temp_target
+    Fallback: _printer_state.active_nozzle_temp_target (extruder 0 only)
+    """
     state = _get("printer")
-    nozzles = state.get("_printer_state", {}).get("nozzle_temps", [])
-    if isinstance(nozzles, list) and len(nozzles) > extruder:
-        return float(nozzles[extruder].get("target", -1))
-    # Fallback: try top-level nozzle_temp_target
-    return float(state.get("_printer_state", {}).get("nozzle_temp_target", -1))
+    ps = state.get("_printer_state", {})
+    extruders = ps.get("extruders", [])
+    if isinstance(extruders, list) and len(extruders) > extruder:
+        return float(extruders[extruder].get("temp_target", -1))
+    # Fallback for extruder 0
+    return float(ps.get("active_nozzle_temp_target", -1))
 
 
 def get_gcode_state() -> str:

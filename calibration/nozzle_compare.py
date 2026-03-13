@@ -127,9 +127,11 @@ def _get_nozzle_targets() -> tuple[float, float]:
 
 # Idle nozzle heat timeout constants — firmware silently resets targets to 38°C
 # after IDLE_NOZZLE_HEAT_TIMEOUT_S when gcode_state is IDLE/FINISH/FAILED.
-# [PROVISIONAL ~170s] — update with [VERIFIED: empirical] after calibration run.
-IDLE_NOZZLE_HEAT_TIMEOUT_S  = 170.0
-IDLE_HEAT_KEEPALIVE_S       = IDLE_NOZZLE_HEAT_TIMEOUT_S * 0.75
+# [VERIFIED: empirical 2026-03-13] calibrate_idle_nozzle_timeout.py Trial 2: 300.41s (clean).
+# NOTE: re-asserting target while nozzle is already hot does NOT reset the firmware timer.
+# Reactive drift check (IDLE_HEAT_POLL_INTERVAL_S) is what prevents indefinite timeout.
+IDLE_NOZZLE_HEAT_TIMEOUT_S  = 300     # [VERIFIED: empirical 2026-03-13] Trial 2: 300.41s
+IDLE_HEAT_KEEPALIVE_S       = IDLE_NOZZLE_HEAT_TIMEOUT_S * 0.75  # = 225s
 IDLE_HEAT_POLL_INTERVAL_S   = 10.0
 
 
