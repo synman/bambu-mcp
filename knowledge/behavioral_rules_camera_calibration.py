@@ -205,8 +205,13 @@ The H2D has two physically separate nozzles mounted on a single carriage:
   T0 = right extruder (default active at power-on and after G28)
   T1 = left extruder
 
-Inter-nozzle offset: T1's tip is physically offset from T0's tip in X (approximately 18mm
-based on H2D hardware). The firmware applies this offset automatically when the active tool
+Inter-nozzle offset: T1's tip is physically offset from T0's tip in X by exactly 25mm
+[VERIFIED: BambuStudio fdm_bbl_3dp_002_common.json extruder_printable_area — T0 (right,
+physical E0, logical E1) printable X: 25-350mm; T1 (left, physical E1, logical E0) printable
+X: 0-325mm; difference = 25mm; confirmed 2026-03-13].
+T0 is always 25mm to the RIGHT of T1. When T0 is active at world (wx,wy), T1 tip is at
+(wx-25, wy). When T1 is active at world (wx,wy), T0 tip is at (wx+25, wy).
+The firmware applies this offset automatically when the active tool
 is selected — when T1 is active, `G0 X175 Y160` positions T1's tip at (175, 160), carriage
 shifted accordingly.
 

@@ -336,7 +336,8 @@ def main():
             print(f"    T0 world:    ({w0[0]:.1f}, {w0[1]:.1f}) mm")
             print(f"    T1 world:    ({w1[0]:.1f}, {w1[1]:.1f}) mm")
             print(f"    Delta (T1-T0): dX={wdx:+.1f}mm  dY={wdy:+.1f}mm")
-            print(f"\n  Expected T0-T1 world offset: ~50mm in X (T1 is left nozzle)")
+            print(f"\n  Expected T0-T1 world offset: 25mm in X (T0=right, T1=left)")
+            print(f"  [VERIFIED: BambuStudio fdm_bbl_3dp_002_common.json extruder_printable_area, 2026-03-13]")
         else:
             print("\n  (H2D.json not found — world-space projection skipped)")
     else:

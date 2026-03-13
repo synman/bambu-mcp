@@ -118,7 +118,10 @@ T_HEAT_ESCALATE      = 220    # °C — escalated temp if T0 halo is still weak 
 HEAT_WAIT            = 45     # seconds — wait for stable thermal halo to appear in frame
 T_IDLE               = 38     # °C — idle/standby nozzle target (firmware default)
 
-# H2D bed: 350mm x 320mm (X x Y)
+# H2D printable area: 345mm × 320mm (X × Y) [VERIFIED: BambuStudio fdm_bbl_3dp_002_common.json
+# printable_area + extruder_printable_area. T0 (right) printable X: 25-350; T1 (left): 0-325.
+# Shared printable: 25-325 (300mm), exclusive: T1 only 0-25, T0 only 325-350.
+# Physical machine X travel: 0-350mm; inter-nozzle separation: 25mm.]
 # 11-point sample set.
 # Format: (name, world_x_mm, world_y_mm)
 # Ordering: back-to-front traversal (homing reference at back; minimize travel).
