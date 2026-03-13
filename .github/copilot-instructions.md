@@ -1369,7 +1369,7 @@ These points must never be included in calibration probes. Detection is impossib
 | L175 | (5, 175) | Left-column front blind zone — confirmed false detection (292px RANSAC outlier) |
 | L243 | (5, 243) | Left-column front blind zone — confirmed false detection (285px RANSAC outlier) |
 
-**Left-column blind zone (x=5, y<315):** The camera is mounted at the back-right of the H2D. At x=5 (left edge) for y<315 (any position toward the front), the nozzle tip is occluded by the left frame wall or gantry arm. The detection cascade picks up frame shadow or gantry artifact instead of the nozzle. Pixel positions for L108/L175/L243 (~(440-460, 413-415)) lie in the center-right of the frame — geometrically inconsistent with the back-left anchor B005 at (97, 283) and confirmed as outliers via RANSAC with 285-292px residuals from the 7-point inlier H. B005 (5, 315) is NOT in this blind zone because at y=315 (back row) the nozzle is still visible from the back-right camera position.
+**Left-column blind zone (x=5, y<315):** The camera is mounted at the front-left of the H2D (empirical: X=0, Y=5, Z=+75). At x=5 (left edge) for y<315 (any position toward the front), the nozzle tip is occluded by the carriage arm — the steep sideways viewing angle from the camera at X=0 causes the carriage structure to block the nozzle tip. The detection cascade picks up frame shadow or gantry artifact instead of the nozzle. Pixel positions for L108/L175/L243 (~(440-460, 413-415)) lie in the center-right of the frame — geometrically inconsistent with the back-left anchor B005 at (97, 283) and confirmed as outliers via RANSAC with 285-292px residuals from the 7-point inlier H. B005 (5, 315) is NOT in this blind zone because at y=315 (back row) the more direct sightline from the front-left camera clears the carriage body.
 
 **7-point inlier calibration schema (verified — use this):**
 
@@ -1393,7 +1393,7 @@ Right-column points R108/R175/R243: R175 and R243 are valid inliers. R108 projec
 
 **Perspective foreshortening (empirically measured from 7-point inlier set):**
 
-The H2D camera is mounted obliquely at the back-right. This produces severe non-uniform scaling across the bed:
+The H2D camera is mounted at the front-left (empirical: X=0, Y=5, Z=+75), viewing the bed obliquely. This produces severe non-uniform scaling across the bed:
 
 | Region | World axis | Pixel density | Implication |
 |--------|-----------|--------------|-------------|
@@ -1476,22 +1476,22 @@ moves to position the newly active nozzle at the commanded world position. This 
 **Never use a fixed sleep** — use `wait_for_tool_change_complete()`.
 
 **Detection method (analogous to `wait_for_home_complete()` but faster):**
-- Resolution: `360p` — lower res for speed; tool change is <5s vs 47s for G28
+- Resolution: `480p` — better signal at Z=2mm capture position; calibration at front-left (80,80) closest to camera (0,5,75)
 - Poll interval: `0.3s` — finer temporal resolution for the shorter event
 - Stable criterion: 3 consecutive frames with avg-diff ≤ `TOOL_CHANGE_NOISE_FLOOR_PX × 1.5`
 - Hard timeout: `TOOL_CHANGE_TIMEOUT_S = 15s`
 - Implementation: `wait_for_tool_change_complete()` in `corner_calibration.py`
 
 **CRITICAL: `TOOL_CHANGE_NOISE_FLOOR_PX ≠ HOME_NOISE_FLOOR_PX`**
-`HOME_NOISE_FLOOR_PX = 2.2px` is measured at 720p. At 360p, lower resolution compresses
-vibration-driven pixel changes into fewer pixels → lower absolute avg-diff. Substituting 2.2px
-will produce a threshold that is too high and `wait_for_tool_change_complete()` will return
-immediately without waiting for the carriage to actually settle. Always use the 360p value.
+`HOME_NOISE_FLOOR_PX = 2.2px` is measured at 720p. At 480p and Z=2mm, the different resolution
+and different camera-to-nozzle geometry produce a different noise floor. Substituting 2.2px
+will produce a wrong threshold. Always use the 480p value measured by `calibrate_tool_change_settle.py`.
 
 **Constants (update when `calibrate_tool_change_settle.py` is run):**
-- `TOOL_CHANGE_NOISE_FLOOR_PX = 1.5` — [PROVISIONAL] estimated at 360p; must be measured
+- `TOOL_CHANGE_NOISE_FLOOR_PX = 1.5` — [PROVISIONAL] estimated at 480p; must be measured
 - `TOOL_CHANGE_TIMEOUT_S = 15.0` — conservative until measured
 - Run `camera/calibrate_tool_change_settle.py` to measure (printer IDLE + explicit user auth)
+- Script position: (80, 80, Z=2) — front-left quadrant, closest visible area to camera
 - After running: mark `[PROVISIONAL]` → `[VERIFIED: empirical]` in `corner_calibration.py`
   and update `TOOL_CHANGE_NOISE_FLOOR_PX` in `behavioral_rules_camera_calibration.py`
 

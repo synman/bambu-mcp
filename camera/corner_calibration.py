@@ -28,15 +28,17 @@ Safety: all GCode follows the mandatory safe motion pattern from global rules
   - Every movement path clear (user confirmed bed empty)
 
 Sampling rationale:
-  H2D camera is mounted at back/top, viewing bed obliquely. Back row (Y=260)
+  H2D camera is mounted at front-left (empirical: X=0, Y=5, Z=+75), viewing bed obliquely.
+  Back row (Y=260)
   spans ~936px in frame; right column (X=345) at mid-Y spans center-right of frame.
   Point set covers: back row, left column, right column (mid-Y), front endpoints.
     Back row (5 pts): B005/B090/B175/B260/B345 — wide pixel spread
-    Left col (1 pt): L243 (L108/L175 hard-excluded: frame wall occlusion confirmed)
+    Left col (1 pt): L243 (L108/L175 hard-excluded: steep-angle carriage occlusion confirmed)
     Right col (1 pt): R175 (R243 hard-excluded: near-degenerate with B345)
-    Front endpts (1): F345 (F005 hard-excluded: camera blind zone at front-left)
-  B345 re-enabled at Y=260 (was excluded at Y=315 for gantry occlusion at back-right).
-  F005 (5,40) is a permanent hard-exclude: camera blind zone at front-left.
+    Front endpts (1): F345 (F005 hard-excluded: nearly below camera — blind zone)
+  B345 re-enabled at Y=260 (was excluded at Y=315 — gantry Y-beam crosses line-of-sight
+  from front-left camera to far back-right corner at Y=315).
+  F005 (5,40) is a permanent hard-exclude: nearly directly below camera (0,5,75).
 
 Usage:
   python3 corner_calibration.py                # full run (home + probe all points)
@@ -138,9 +140,9 @@ PERIMETER_POINTS = [
 # Points permanently excluded due to known camera blindspots / false detections.
 # These are skipped regardless of run mode.
 HARD_EXCLUDE = {
-    # (5,40) camera blind zone at front-left; Z-diff and thermal both yield dmax<10
+    # (5,40) nearly directly below camera (0,5,75) — steep angle occludes nozzle tip; dmax<10
     "F005",
-    # (5,108) and (5,175): left-column blind zone — frame wall occlusion confirmed;
+    # (5,108) and (5,175): left-column blind zone — steep-angle carriage occlusion confirmed;
     # RANSAC outliers by 285-292px from 7-inlier H in all prior runs.
     "L108",
     "L175",
@@ -175,13 +177,13 @@ PROBES_PER_POINT = 3           # capture attempts per point; keep highest-confid
 
 # Tool-change settle detection constants (analogous to homing constants, tuned for ~1-3s event)
 # [PROVISIONAL] TOOL_CHANGE_NOISE_FLOOR_PX until calibrate_tool_change_settle.py runs.
-# 360p noise floor ≠ 720p noise floor (HOME_NOISE_FLOOR_PX=2.2px) — do not substitute.
+# 480p noise floor ≠ 720p noise floor (HOME_NOISE_FLOOR_PX=2.2px) — do not substitute.
 TOOL_CHANGE_POLL_S = 0.3          # 0.3s interval — tool change is < 5s normally
-TOOL_CHANGE_SNAPSHOT_RES = "360p" # lower res for speed; noise floor differs from 720p
+TOOL_CHANGE_SNAPSHOT_RES = "480p" # 480p — better signal at Z=2mm; noise floor differs from 720p
 TOOL_CHANGE_STABLE_N = 3          # 3 consecutive stable frames (shorter event than G28)
 TOOL_CHANGE_NOISE_MULT = 1.5      # same multiplier as wait_for_home_complete
 TOOL_CHANGE_TIMEOUT_S = 15.0      # hard timeout; tool change never takes > ~5s normally
-TOOL_CHANGE_NOISE_FLOOR_PX = 1.5  # [PROVISIONAL] estimated at 360p; measure empirically
+TOOL_CHANGE_NOISE_FLOOR_PX = 1.5  # [PROVISIONAL] estimated at 480p; measure empirically
 
 OUTPUT_DIR = "/tmp/h2d_corner_calibration"
 
@@ -878,7 +880,7 @@ def solve_projection_3point(world_pts: np.ndarray, pixel_pts: np.ndarray,
 # World-space coordinates of the 4 canonical plate corners (mm).
 # These match the FL/FR/NR/NL keys used in coord_transform.py SHELL dict.
 #   FL = far-left  = back-left  = (5,   315)
-#   FR = far-right = back-right = (345, 315)
+#   FR = far-right = back-right = (345, 315)  ← corner of the PLATE (camera is front-left)
 #   NR = near-right= front-right= (345, 5)
 #   NL = near-left = front-left = (5,   5)   ← typically below camera frame
 _CORNER_WORLD = {

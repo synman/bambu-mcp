@@ -9,15 +9,15 @@ Corner assignments (current, after all name swaps):
   FL = far-left    NL = near-left    NR = near-right    FR = far-right
   ORIGIN = shell NL = (1480, 1256) — below camera frame
 
-SHELL corners calibrated 2026-03-12 at Z=2, chamber light OFF, N=30 snaps, TRIM_COUNT=7.
+SHELL corners calibrated 2026-03-13 at Z=2, chamber light OFF, N=? points, reproj=8.62px.
 NL is extrapolated via hotspot offset — physically below the camera frame.
 """
 import numpy as np, math
 
 # ── Control points (raw camera pixel coords) ──────────────────────────────────
-SHELL  = {"FL": (695,616),   "NL": (1480,1256), "NR": (1187,299),  "FR": (860,205)}
+SHELL  = {"FL": (1830, 2226),   "NL": (406, 517), "NR": (505, 522),  "FR": (1561, -2178)}
 SYNBOT = {"FL": (98,414),   "NL": (1832,1570), "NR": (1520,1012), "FR": (1513,452)}
-ORIGIN = SHELL["NL"]   # (1480, 1256) — physical bed origin
+ORIGIN = SHELL["NL"]   # (406, 517) — physical bed origin
 
 # ── Per-corner offset vectors ─────────────────────────────────────────────────
 OFFSETS = {k: {

@@ -39,6 +39,31 @@ Four named corners:
 
 ---
 
+## Camera location (H2D — empirical)
+
+**Camera optical center: approximately (X=0, Y=5, Z=+75) in H2D world coordinates.**
+  X=0 = left edge of machine frame
+  Y=5 = near front edge of printer
+  Z=+75 = 75mm above bed surface (empirical; user-verified 2026-03-13)
+
+All prior documentation claiming "back/top" or "back-right" mounting is **wrong**. The
+camera is at the **front-left**, which explains the image geometry:
+
+- Back row (FL/FR, Y=315) is FAR from camera → appears near top of frame, wide pixel spread
+- NL corner (5, 5) is nearly DIRECTLY BELOW camera → off-frame at Z≈2 (confirmed)
+- Left-column blind zone (x=5, y<315): steep sideways angle from X=0 camera → carriage arm
+  occludes nozzle tip. NOT "left frame wall" as previously documented.
+- F005 (5, 40) blind zone: nearly directly below camera → steep downward angle, carriage body
+  blocks nozzle tip from above. NOT a generic "camera blind zone" for unknown reasons.
+- B345@Y=315: gantry Y-beam crosses line-of-sight from (0,5,75) to (345,315) — valid exclusion.
+- "Closest to camera" = **small X, small Y** (front-left quadrant), not back-right.
+
+The DLT H matrix, all blind zone exclusion decisions, and all empirically-set thresholds are
+SAFE regardless of this correction — they were derived from pixel measurements, not from
+camera position calculations.
+
+---
+
 ## Reference frame — Z position and light
 
 Calibration MUST be performed at the print-start Z height (bed raised to first-layer
@@ -298,7 +323,8 @@ Code references:
  before treating TOOL_CHANGE_NOISE_FLOOR_PX or TOOL_CHANGE_TIMEOUT_S as authoritative.]
 
 Visual detection method (analogous to G28 homing detection, tuned for shorter event):
-- Resolution: 360p (lower than calibration 720p — tool change is <5s; speed matters)
+- Resolution: 480p (better signal than 360p at Z=2mm capture position; calibration position
+  is front-left quadrant (80,80) — closest visible area to camera at (0,5,75))
 - Poll interval: 0.3s (vs 2.0s for homing — finer resolution of a shorter event)
 - Stable criterion: 3 consecutive frames with avg-diff ≤ TOOL_CHANGE_NOISE_FLOOR_PX × 1.5
 - Hard timeout: TOOL_CHANGE_TIMEOUT_S = 15s (conservative until measured)
@@ -306,25 +332,26 @@ Visual detection method (analogous to G28 homing detection, tuned for shorter ev
 | Constant | Value | Status |
 |----------|-------|--------|
 | TOOL_CHANGE_POLL_S | 0.3s | Fixed (design choice) |
-| TOOL_CHANGE_SNAPSHOT_RES | "360p" | Fixed (design choice) |
+| TOOL_CHANGE_SNAPSHOT_RES | "480p" | Fixed (design choice) |
 | TOOL_CHANGE_STABLE_N | 3 | Fixed (design choice) |
 | TOOL_CHANGE_NOISE_MULT | 1.5 | Fixed (same as homing) |
-| TOOL_CHANGE_NOISE_FLOOR_PX | [PROVISIONAL 1.5px] | MUST be measured at 360p |
+| TOOL_CHANGE_NOISE_FLOOR_PX | [PROVISIONAL 1.5px] | MUST be measured at 480p |
 | TOOL_CHANGE_TIMEOUT_S | 15.0s | Conservative until measured |
 
 IMPORTANT: TOOL_CHANGE_NOISE_FLOOR_PX is NOT the same as HOME_NOISE_FLOOR_PX (2.2px).
-HOME_NOISE_FLOOR_PX is measured at 720p. 360p noise floor is lower in absolute px — lower
-resolution compresses vibration-driven pixel changes into fewer pixels → smaller diffs.
-Do NOT substitute 2.2px. Use calibrate_tool_change_settle.py to measure.
+HOME_NOISE_FLOOR_PX is measured at 720p. 480p noise floor differs in absolute px — the
+different resolution and different Z capture height (Z=2mm vs homing at full range) both
+affect the noise floor. Do NOT substitute 2.2px. Use calibrate_tool_change_settle.py to measure.
 
 Measurement process (run if H2D is serviced, replaced, or noise floor value is suspect):
-  1. Establish 360p noise floor: 5 baseline frame pairs at rest → mean avg-abs-diff.
-  2. Toggle T0→T1 via PATCH /api/toggle_active_tool; record t=0.
-  3. Poll 0.3s / 360p; compute avg-abs-diff vs prior frame.
-  4. Declare done when 3 consecutive diffs ≤ noise_floor × 1.5; record t_settle.
-  5. Toggle T1→T0; repeat steps 2–4.
-  6. Run 3 trials for each direction (T0→T1 and T1→T0 may differ in carriage travel).
-  7. Update: TOOL_CHANGE_NOISE_FLOOR_PX = mean(all noise_floor measurements).
+  1. Home + move to (80, 80) at Z_CLEARANCE; descend to Z_CAPTURE=2mm.
+  2. Establish 480p noise floor: 5 baseline frame pairs at rest → mean avg-abs-diff.
+  3. Toggle T0→T1 via PATCH /api/toggle_active_tool; record t=0.
+  4. Poll 0.3s / 480p; compute avg-abs-diff vs prior frame.
+  5. Declare done when 3 consecutive diffs ≤ noise_floor × 1.5; record t_settle.
+  6. Toggle T1→T0; repeat steps 3–5.
+  7. Run 3 trials for each direction (T0→T1 and T1→T0 may differ in carriage travel).
+  8. Update: TOOL_CHANGE_NOISE_FLOOR_PX = mean(all noise_floor measurements).
              TOOL_CHANGE_TIMEOUT_S = max(all t_settle across both directions) + 5s.
 
 Code references:
