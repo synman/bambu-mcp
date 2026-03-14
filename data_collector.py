@@ -101,13 +101,11 @@ class PrinterDataCollector:
             try:
                 extruders = state.extruders or []
                 if extruders:
-                    self.collections["tool"].add(
-                        extruders[0].active_nozzle_temp or 0.0
-                    )
+                    self.collections["tool"].add(extruders[0].temp or 0.0)
                     if len(extruders) > 1:
-                        self.collections["tool_1"].add(
-                            extruders[1].active_nozzle_temp or 0.0
-                        )
+                        self.collections["tool_1"].add(extruders[1].temp or 0.0)
+                else:
+                    self.collections["tool"].add(state.active_nozzle_temp or 0.0)
             except Exception:
                 pass
 
@@ -116,17 +114,18 @@ class PrinterDataCollector:
                 if climate:
                     self.collections["bed"].add(climate.bed_temp or 0.0)
                     self.collections["chamber"].add(climate.chamber_temp or 0.0)
-            except Exception:
-                pass
-
-            # Fan collections
-            try:
-                fans = state.fans
-                if fans:
-                    self.collections["part_fan"].add(fans.part_fan_speed or 0.0)
-                    self.collections["aux_fan"].add(fans.aux_fan_speed or 0.0)
-                    self.collections["exhaust_fan"].add(fans.exhaust_fan_speed or 0.0)
-                    self.collections["heatbreak_fan"].add(fans.cooling_fan_speed or 0.0)
+                    self.collections["part_fan"].add(
+                        climate.part_cooling_fan_speed_percent or 0.0
+                    )
+                    self.collections["aux_fan"].add(
+                        climate.aux_fan_speed_percent or 0.0
+                    )
+                    self.collections["exhaust_fan"].add(
+                        climate.exhaust_fan_speed_percent or 0.0
+                    )
+                    self.collections["heatbreak_fan"].add(
+                        climate.heatbreak_fan_speed_percent or 0.0
+                    )
             except Exception:
                 pass
 

@@ -422,7 +422,15 @@ def open_charts(name: str) -> dict:
     """
     log.debug("open_charts: called for name=%s", name)
 
-    # Prefer serving via REST API so the browser can auto-refresh live data.
+    # Always render the static file so output_path is stable across restarts.
+    html = render_charts_html(name)
+    if html.startswith("<html><body style"):
+        return {"error": "not_connected"}
+    out = Path(f"/tmp/bambu-charts-{name}.html")
+    out.write_text(html, encoding="utf-8")
+
+    # Prefer the HTTP URL so the browser auto-refreshes live data every 30s;
+    # fall back to the static file:// URL if the API server is not running.
     try:
         from tools.system import get_server_info
         info = get_server_info()
@@ -433,17 +441,11 @@ def open_charts(name: str) -> dict:
     if api_port:
         url = f"http://localhost:{api_port}/api/charts?printer={name}"
         opened = webbrowser.open(url)
-        log.info("open_charts: opened live URL %s opened=%s", url, opened)
-        return {"output_path": url, "opened": opened}
+        log.info("open_charts: opened live URL %s (static: %s) opened=%s", url, out, opened)
+    else:
+        opened = webbrowser.open(f"file://{out}")
+        log.info("open_charts: opened static file %s opened=%s", out, opened)
 
-    # Fallback: render and write static file
-    html = render_charts_html(name)
-    if html.startswith("<html><body style"):
-        return {"error": "not_connected"}
-    out = Path(f"/tmp/bambu-charts-{name}.html")
-    out.write_text(html, encoding="utf-8")
-    opened = webbrowser.open(f"file://{out}")
-    log.info("open_charts: written %s opened=%s", out, opened)
     return {"output_path": str(out), "opened": opened}
 
 
