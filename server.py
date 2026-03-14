@@ -81,6 +81,7 @@ import tools.knowledge_search as knowledge_tools
 import tools.camera as camera_tools
 import tools.notifications as notification_tools
 import tools.url_factory as url_factory_tools
+import tools.charts as charts_tools
 
 _env_level = os.environ.get("BAMBU_MCP_LOG_LEVEL", "WARNING").upper()
 _log_level = getattr(logging, _env_level, logging.WARNING)
@@ -140,6 +141,7 @@ _TOOL_MODULES = [
     camera_tools,
     notification_tools,
     url_factory_tools,
+    charts_tools,
 ]
 
 # Functions registered from url_factory_tools instead of their original modules.
