@@ -103,9 +103,27 @@ def _apply_time_axis(ax) -> None:
     plt.setp(ax.get_xticklabels(), fontsize=6, color=_MUTED, rotation=0, ha="center")
 
 
+def _draw_events(ax, events: list, dt_range=None) -> None:
+    """Draw vertical event markers on *ax* with a small rotated label."""
+    if not events:
+        return
+    for ev in events:
+        try:
+            dt = datetime.fromtimestamp(ev["t"])
+            if dt_range and not (dt_range[0] <= dt <= dt_range[1]):
+                continue
+            ax.axvline(dt, color=_MUTED, linestyle=":", linewidth=0.5, alpha=0.6)
+            ax.text(dt, 1.01, ev["label"], transform=ax.get_xaxis_transform(),
+                    fontsize=4.5, color=_MUTED, rotation=45, va="bottom",
+                    ha="left", clip_on=True)
+        except Exception:
+            pass
+
+
 # ── Panel renderers ───────────────────────────────────────────────────────────
 
-def _row_temps(data: dict, is_h2d: bool) -> str:
+def _row_temps(data: dict, is_h2d: bool, events: list | None = None) -> str:
+    evs = events or []
     fig, (ax_nozzle, ax_bed) = plt.subplots(1, 2, figsize=(16, 3.2), facecolor=_BG)
     fig.subplots_adjust(wspace=0.12)
 
@@ -119,15 +137,29 @@ def _row_temps(data: dict, is_h2d: bool) -> str:
         label = "Right Nozzle" if is_h2d else "Nozzle"
         ax_nozzle.plot(ts, vs, color=_TEMP_COLORS["tool"], linewidth=1)
         handles.append(mpatches.Patch(color=_TEMP_COLORS["tool"], label=label))
+        # Target line
+        t0_tgt = data.get("tool_target", {}).get("data", [])
+        if t0_tgt:
+            tgt_ts = _to_dt([p["t"] for p in t0_tgt])
+            tgt_vs = [p["v"] for p in t0_tgt]
+            ax_nozzle.plot(tgt_ts, tgt_vs, color=_TEMP_COLORS["tool"],
+                           linewidth=0.7, linestyle="--", alpha=0.55)
     if is_h2d:
         t1 = data.get("tool_1", {}).get("data", [])
         if t1:
             ts1, vs1 = _to_dt([p["t"] for p in t1]), [p["v"] for p in t1]
             ax_nozzle.plot(ts1, vs1, color=_TEMP_COLORS["tool_1"], linewidth=1)
             handles.append(mpatches.Patch(color=_TEMP_COLORS["tool_1"], label="Left Nozzle"))
+            t1_tgt = data.get("tool_1_target", {}).get("data", [])
+            if t1_tgt:
+                tgt_ts1 = _to_dt([p["t"] for p in t1_tgt])
+                tgt_vs1 = [p["v"] for p in t1_tgt]
+                ax_nozzle.plot(tgt_ts1, tgt_vs1, color=_TEMP_COLORS["tool_1"],
+                               linewidth=0.7, linestyle="--", alpha=0.55)
     if handles:
         _legend(ax_nozzle, handles)
         _apply_time_axis(ax_nozzle)
+        _draw_events(ax_nozzle, evs)
     else:
         _no_data(ax_nozzle)
     ax_nozzle.set_ylabel("°C", fontsize=7)
@@ -141,9 +173,16 @@ def _row_temps(data: dict, is_h2d: bool) -> str:
             ax_bed.plot(_to_dt([p["t"] for p in s]), [p["v"] for p in s],
                         color=_TEMP_COLORS[key], linewidth=1)
             handles_bc.append(mpatches.Patch(color=_TEMP_COLORS[key], label=label))
+            # Target dashed line
+            s_tgt = data.get(f"{key}_target", {}).get("data", [])
+            if s_tgt:
+                ax_bed.plot(_to_dt([p["t"] for p in s_tgt]), [p["v"] for p in s_tgt],
+                            color=_TEMP_COLORS[key], linewidth=0.7,
+                            linestyle="--", alpha=0.55)
     if handles_bc:
         _legend(ax_bed, handles_bc)
         _apply_time_axis(ax_bed)
+        _draw_events(ax_bed, evs)
     else:
         _no_data(ax_bed)
     ax_bed.set_ylabel("°C", fontsize=7)
@@ -151,7 +190,8 @@ def _row_temps(data: dict, is_h2d: bool) -> str:
     return _svg(fig)
 
 
-def _row_fans(data: dict) -> str:
+def _row_fans(data: dict, events: list | None = None) -> str:
+    evs = events or []
     fig, ax = plt.subplots(1, 1, figsize=(16, 2.4), facecolor=_BG)
     _style(ax, "Fan Speeds")
     fan_defs = [
@@ -170,6 +210,7 @@ def _row_fans(data: dict) -> str:
     if handles:
         _legend(ax, handles, ncol=4)
         _apply_time_axis(ax)
+        _draw_events(ax, evs)
     else:
         _no_data(ax)
     ax.set_ylabel("%", fontsize=7)
@@ -546,6 +587,7 @@ def render_charts_html(name: str) -> str:
     latest_result  = _jm.get_latest_result(name)
     factors        = (latest_result or {}).get("factor_contributions") or {}
     durations      = raw_data.get("gcode_state_durations") or {}
+    events         = raw_data.get("events") or []
 
     tool_1_data = series_data.get("tool_1", {}).get("data", [])
     is_h2d = any(p.get("v", 0) != 0 for p in tool_1_data)
@@ -555,8 +597,8 @@ def render_charts_html(name: str) -> str:
         "Failure Analysis", "Camera Calibration", "AMS Filament",
     ]
     svgs = [
-        _row_temps(series_data, is_h2d),
-        _row_fans(series_data),
+        _row_temps(series_data, is_h2d, events),
+        _row_fans(series_data, events),
         _row_health(health_history),
         _row_analysis(factors, durations),
         _row_calibration(),
@@ -582,13 +624,14 @@ def render_charts_panels(name: str) -> dict:
     latest_result  = _jm.get_latest_result(name)
     factors        = (latest_result or {}).get("factor_contributions") or {}
     durations      = raw_data.get("gcode_state_durations") or {}
+    events         = raw_data.get("events") or []
 
     tool_1_data = series_data.get("tool_1", {}).get("data", [])
     is_h2d = any(p.get("v", 0) != 0 for p in tool_1_data)
 
     panels = [
-        _row_temps(series_data, is_h2d),
-        _row_fans(series_data),
+        _row_temps(series_data, is_h2d, events),
+        _row_fans(series_data, events),
         _row_health(health_history),
         _row_analysis(factors, durations),
         _row_calibration(),

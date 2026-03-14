@@ -61,19 +61,32 @@ class Collection:
         }
 
 
+@dataclass
+class Event:
+    """A discrete state-change event (target set, fan changed, etc.)."""
+    timestamp: float
+    label: str
+
+
 class PrinterDataCollector:
     """Collects telemetry history for a single printer."""
 
     COLLECTION_NAMES = [
-        "tool",        # nozzle 0 temp
-        "tool_1",      # nozzle 1 temp (H2D dual extruder)
+        "tool",        # nozzle 0 actual temp
+        "tool_1",      # nozzle 1 actual temp (H2D dual extruder)
+        "tool_target",     # nozzle 0 target temp
+        "tool_1_target",   # nozzle 1 target temp
         "bed",
+        "bed_target",
         "chamber",
+        "chamber_target",
         "part_fan",
         "aux_fan",
         "exhaust_fan",
         "heatbreak_fan",
     ]
+
+    _EVENT_RETENTION = 3600  # same as temp data
 
     def __init__(self, name: str):
         self.name = name
@@ -85,6 +98,10 @@ class PrinterDataCollector:
         self._last_job_id: str | None = None
         self._last_tick: float = time.time()
         self._lock = threading.Lock()
+        # Snapshot of last-seen targets to detect changes
+        self._last_targets: dict[str, float] = {}
+        # Event log for annotations (target changes, fan changes)
+        self.events: list[Event] = []
 
     def on_update(self, printer) -> None:
         """Called on every MQTT state update. Reads directly from BambuPrinter."""
@@ -97,15 +114,24 @@ class PrinterDataCollector:
             elapsed = now - self._last_tick
             self._last_tick = now
 
-            # Temperature collections
+            # Temperature collections (actual + target)
             try:
                 extruders = state.extruders or []
                 if extruders:
                     self.collections["tool"].add(extruders[0].temp or 0.0)
+                    t0_tgt = float(getattr(extruders[0], "temp_target", 0) or 0.0)
+                    self.collections["tool_target"].add(t0_tgt)
+                    self._maybe_event("tool_target", t0_tgt, "Nozzle 0 → {:.0f}°C", now)
                     if len(extruders) > 1:
                         self.collections["tool_1"].add(extruders[1].temp or 0.0)
+                        t1_tgt = float(getattr(extruders[1], "temp_target", 0) or 0.0)
+                        self.collections["tool_1_target"].add(t1_tgt)
+                        self._maybe_event("tool_1_target", t1_tgt, "Nozzle 1 → {:.0f}°C", now)
                 else:
                     self.collections["tool"].add(state.active_nozzle_temp or 0.0)
+                    t0_tgt = float(getattr(state, "active_nozzle_temp_target", 0) or 0.0)
+                    self.collections["tool_target"].add(t0_tgt)
+                    self._maybe_event("tool_target", t0_tgt, "Nozzle → {:.0f}°C", now)
             except Exception:
                 pass
 
@@ -113,7 +139,15 @@ class PrinterDataCollector:
                 climate = state.climate
                 if climate:
                     self.collections["bed"].add(climate.bed_temp or 0.0)
+                    bed_tgt = float(climate.bed_temp_target or 0.0)
+                    self.collections["bed_target"].add(bed_tgt)
+                    self._maybe_event("bed_target", bed_tgt, "Bed → {:.0f}°C", now)
+
                     self.collections["chamber"].add(climate.chamber_temp or 0.0)
+                    cham_tgt = float(climate.chamber_temp_target or 0.0)
+                    self.collections["chamber_target"].add(cham_tgt)
+                    self._maybe_event("chamber_target", cham_tgt, "Chamber → {:.0f}°C", now)
+
                     self.collections["part_fan"].add(
                         climate.part_cooling_fan_speed_percent or 0.0
                     )
@@ -149,12 +183,25 @@ class PrinterDataCollector:
             except Exception:
                 pass
 
+            # Prune old events
+            cutoff = now - self._EVENT_RETENTION
+            self.events = [e for e in self.events if e.timestamp >= cutoff]
+
+    def _maybe_event(self, key: str, value: float, fmt: str, now: float) -> None:
+        """Emit an event if this target value changed since last seen."""
+        prev = self._last_targets.get(key)
+        if prev != value:
+            if prev is not None:  # don't emit on first observation
+                self.events.append(Event(now, fmt.format(value)))
+            self._last_targets[key] = value
+
     def get_all_data(self) -> dict:
-        """Return all collections + gcode_state_durations as a serializable dict."""
+        """Return all collections + gcode_state_durations + events as a serializable dict."""
         with self._lock:
             return {
                 "collections": {k: v.to_dict() for k, v in self.collections.items()},
                 "gcode_state_durations": dict(self.gcode_state_durations),
+                "events": [{"t": e.timestamp, "label": e.label} for e in self.events],
             }
 
     def get_summary(self) -> dict:
