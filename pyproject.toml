@@ -8,7 +8,7 @@ exclude = ["bambu_mcp.egg-info*", "*.egg-info"]
 
 [project]
 name = "bambu-mcp"
-version = "0.8.0"
+version = "0.9.0"
 requires-python = ">=3.12"
 dependencies = [
     "keyring",
