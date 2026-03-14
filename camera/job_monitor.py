@@ -237,7 +237,7 @@ class _PrinterMonitor:
         self._last_precheck_time: float = 0.0
         self._last_precheck_hot_pct: Optional[float] = None
         self._confidence_window: deque = deque(maxlen=5)
-        self._fp_history: deque = deque(maxlen=10)        # rolling failure_probability history
+        self._health_history: deque = deque(maxlen=60)    # rolling health-history records
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
 
@@ -246,6 +246,10 @@ class _PrinterMonitor:
     def get_latest_result(self) -> Optional[dict]:
         with self._lock:
             return self._latest_result
+
+    def get_health_history(self) -> list:
+        with self._lock:
+            return list(self._health_history)
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -513,8 +517,18 @@ class _PrinterMonitor:
 
         with self._lock:
             if fp is not None:
-                self._fp_history.append(fp)
-            fp_history_snapshot = list(self._fp_history)
+                self._health_history.append({
+                    "ts":            time.time(),
+                    "success_pct":   ph,
+                    "confidence":    dc,
+                    "hot_pct":       round(report.hot_pct, 4),
+                    "strand_score":  round(report.strand_score, 4),
+                    "diff_score":    round(report.diff_score, 4) if report.diff_score is not None else None,
+                    "remaining_min": printer_context.get("remaining_minutes"),
+                    "factors":       dict(factors) if factors else {},
+                })
+            fp_history_snapshot = [1.0 - r["success_pct"] for r in self._health_history
+                                   if r.get("success_pct") is not None]
 
         fp_trend = _fp_trend(fp_history_snapshot)
         fp_peak  = max(fp_history_snapshot) if fp_history_snapshot else fp
@@ -595,6 +609,18 @@ def get_latest_result(printer_name: str) -> Optional[dict]:
     """Return the most recent cached analysis result, or None if not yet available."""
     m = _monitors.get(printer_name)
     return m.get_latest_result() if m else None
+
+
+def get_health_history(printer_name: str) -> list:
+    """Return the rolling health-history records for a printer, newest last.
+
+    Each record is a dict with keys: ts (epoch float), success_pct, confidence,
+    hot_pct, strand_score, diff_score (may be None), remaining_min (may be None),
+    factors (dict of factor_name → float contribution).
+    Returns an empty list if the printer has no monitor or no records yet.
+    """
+    m = _monitors.get(printer_name)
+    return m.get_health_history() if m else []
 
 
 def stop_all() -> None:

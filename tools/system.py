@@ -183,6 +183,13 @@ def get_monitoring_history(name: str, raw: bool = False) -> dict:
 
     Also includes gcode_state_durations (time spent in each print state per job).
 
+    Also includes a 'health' key with rolling print health records from the background
+    monitor. When raw=False, 'health' contains {min,max,avg,last,count} stats for each
+    of 6 fields: success_pct, confidence, hot_pct, strand_score, diff_score,
+    remaining_min. When raw=True, 'health' is the full list of structured records.
+    Health records are only present when a print job has been active and the background
+    monitor has accumulated data.
+
     Note on gcode_state_durations: a FAILED entry does not mean the current job failed.
     The rolling window captures the prior job's terminal state before the current job
     started. A print that has been RUNNING continuously will show a small FAILED duration
@@ -204,6 +211,26 @@ def get_monitoring_history(name: str, raw: bool = False) -> dict:
     if data is None:
         log.warning("get_monitoring_history: printer %s not connected", name)
         return _no_printer(name)
+    # Append rolling health-history (structured analysis records).
+    from camera import job_monitor as _jm
+    health_history = _jm.get_health_history(name)
+    if health_history:
+        if raw:
+            data["health"] = health_history
+        else:
+            health_stats: dict = {}
+            for field in ("success_pct", "confidence", "hot_pct", "strand_score", "diff_score", "remaining_min"):
+                values = [r[field] for r in health_history if r.get(field) is not None]
+                if values:
+                    health_stats[field] = {
+                        "min":   round(min(values), 4),
+                        "max":   round(max(values), 4),
+                        "avg":   round(sum(values) / len(values), 4),
+                        "last":  round(values[-1], 4),
+                        "count": len(values),
+                    }
+            if health_stats:
+                data["health"] = health_stats
     log.debug("get_monitoring_history: returning data for %s raw=%s", name, raw)
     return compress_if_large(data)
 
@@ -213,7 +240,10 @@ def get_monitoring_series(name: str, field: str) -> dict:
     Return the full time-series for a single telemetry field.
 
     field must be one of: tool, tool_1, bed, chamber, part_fan, aux_fan,
-    exhaust_fan, heatbreak_fan.
+    exhaust_fan, heatbreak_fan (sensor fields), or one of the health fields:
+    success_pct, confidence, hot_pct, strand_score, diff_score, remaining_min.
+    Health fields are sourced from the background print monitor and are only
+    populated during or after an active print job.
 
     Returns the complete rolling 60-minute data for that field only (~1440 points,
     ~22 KB compressed). Use this instead of get_monitoring_history(raw=True) when
@@ -229,15 +259,28 @@ def get_monitoring_series(name: str, field: str) -> dict:
     scope of monitoring data (one field). If the envelope still exceeds the MCP
     limit, the series is unusually large — check data_collector for retention issues.
     """
+    _HEALTH_FIELDS = frozenset({
+        "success_pct", "confidence", "hot_pct", "strand_score", "diff_score", "remaining_min",
+    })
     log.debug("get_monitoring_series: called for name=%s field=%s", name, field)
     from tools._response import compress_if_large
+    if field in _HEALTH_FIELDS:
+        from camera import job_monitor as _jm
+        if data_collector.get_summary(name) is None:
+            log.warning("get_monitoring_series: printer %s not connected (health field)", name)
+            return _no_printer(name)
+        history = _jm.get_health_history(name)
+        series_data = [{"t": r["ts"], "v": r[field]} for r in history if r.get(field) is not None]
+        log.debug("get_monitoring_series: health field %s points=%d for %s", field, len(series_data), name)
+        return compress_if_large({"field": field, "series": {"name": field, "data": series_data}})
     series = data_collector.get_collection(name, field)
     if series is None:
         if data_collector.get_summary(name) is None:
             log.warning("get_monitoring_series: printer %s not connected", name)
             return _no_printer(name)
         valid = list(data_collector._collectors[name].collections.keys()) if name in data_collector._collectors else []
-        return {"error": f"Unknown field '{field}'. Valid fields: {valid}"}
+        health_fields = sorted(_HEALTH_FIELDS)
+        return {"error": f"Unknown field '{field}'. Sensor fields: {valid}. Health fields: {health_fields}"}
     log.debug("get_monitoring_series: returning series for %s field=%s points=%d", name, field, len(series.get("data", [])))
     return compress_if_large({"field": field, "series": series})
 

@@ -2703,6 +2703,25 @@ def _build_app():
             data = data_collector.get_all_data(printer_name) if raw else data_collector.get_summary(printer_name)
             if data is None:
                 return jsonify({"error": "not_connected"}), HTTPStatus.BAD_REQUEST
+            from camera import job_monitor as _jm
+            health_history = _jm.get_health_history(printer_name)
+            if health_history:
+                if raw:
+                    data["health"] = health_history
+                else:
+                    health_stats: dict = {}
+                    for field in ("success_pct", "confidence", "hot_pct", "strand_score", "diff_score", "remaining_min"):
+                        values = [r[field] for r in health_history if r.get(field) is not None]
+                        if values:
+                            health_stats[field] = {
+                                "min":   round(min(values), 4),
+                                "max":   round(max(values), 4),
+                                "avg":   round(sum(values) / len(values), 4),
+                                "last":  round(values[-1], 4),
+                                "count": len(values),
+                            }
+                    if health_stats:
+                        data["health"] = health_stats
             return jsonify(data)
         except Exception as e:
             log.error("monitoring_history: error: %s", e, exc_info=True)
@@ -2718,7 +2737,17 @@ def _build_app():
             field = _rargs().get("field")
             if not field:
                 return jsonify({"error": "field parameter required"}), HTTPStatus.BAD_REQUEST
+            _HEALTH_FIELDS = frozenset({
+                "success_pct", "confidence", "hot_pct", "strand_score", "diff_score", "remaining_min",
+            })
             from data_collector import data_collector
+            if field in _HEALTH_FIELDS:
+                from camera import job_monitor as _jm
+                if data_collector.get_summary(printer_name) is None:
+                    return jsonify({"error": "not_connected"}), HTTPStatus.BAD_REQUEST
+                history = _jm.get_health_history(printer_name)
+                series_data = [{"t": r["ts"], "v": r[field]} for r in history if r.get(field) is not None]
+                return jsonify({"field": field, "series": {"name": field, "data": series_data}})
             series = data_collector.get_collection(printer_name, field)
             if series is None:
                 if data_collector.get_summary(printer_name) is None:
