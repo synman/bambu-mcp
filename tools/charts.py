@@ -452,13 +452,21 @@ def open_charts(name: str) -> dict:
     except Exception:
         api_port = 0
 
-    if api_port:
-        url = f"http://localhost:{api_port}/api/charts?printer={name}"
-        opened = webbrowser.open(url)
-        log.info("open_charts: opened live URL %s (static: %s) opened=%s", url, out, opened)
+    url = f"http://localhost:{api_port}/api/charts?printer={name}" if api_port else f"file://{out}"
+
+    # Reuse an existing browser tab rather than opening a new one each time.
+    try:
+        from tools.camera import _focus_existing_tab
+        focused = _focus_existing_tab(url)
+    except Exception:
+        focused = False
+
+    if focused:
+        opened = True
+        log.info("open_charts: focused existing tab %s", url)
     else:
-        opened = webbrowser.open(f"file://{out}")
-        log.info("open_charts: opened static file %s opened=%s", out, opened)
+        opened = webbrowser.open(url)
+        log.info("open_charts: opened new tab %s opened=%s", url, opened)
 
     return {"output_path": str(out), "opened": opened}
 
