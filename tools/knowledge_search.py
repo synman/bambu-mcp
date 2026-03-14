@@ -26,6 +26,7 @@ _KNOWN_TOPICS: dict[str, tuple[str, str]] = {
     "behavioral_rules/alerts":      ("knowledge.behavioral_rules_alerts",       "BEHAVIORAL_RULES_ALERTS_TEXT"),
     "behavioral_rules/session":     ("knowledge.behavioral_rules_session",      "BEHAVIORAL_RULES_SESSION_TEXT"),
     "behavioral_rules/camera_calibration": ("knowledge.behavioral_rules_camera_calibration", "BEHAVIORAL_RULES_CAMERA_CALIBRATION_TEXT"),
+    "behavioral_rules/climate":            ("knowledge.behavioral_rules_climate",             "BEHAVIORAL_RULES_CLIMATE_TEXT"),
     # api_reference sub-topics
     "api_reference/session":        ("knowledge.api_reference_session",        "API_REFERENCE_SESSION_TEXT"),
     "api_reference/files":          ("knowledge.api_reference_files",          "API_REFERENCE_FILES_TEXT"),

@@ -18,6 +18,7 @@ Sub-topic resources (behavioral_rules):
   bambu://knowledge/behavioral-rules/mcp-patterns  → behavioral_rules_mcp_patterns.py
   bambu://knowledge/behavioral-rules/alerts        → behavioral_rules_alerts.py
   bambu://knowledge/behavioral-rules/session       → behavioral_rules_session.py
+  bambu://knowledge/behavioral-rules/climate       → behavioral_rules_climate.py
 
 Sub-topic resources (protocol):
   bambu://knowledge/protocol/concepts → protocol_concepts.py
@@ -57,6 +58,7 @@ from knowledge.behavioral_rules_methodology import BEHAVIORAL_RULES_METHODOLOGY_
 from knowledge.behavioral_rules_mcp_patterns import BEHAVIORAL_RULES_MCP_PATTERNS_TEXT
 from knowledge.behavioral_rules_alerts import BEHAVIORAL_RULES_ALERTS_TEXT
 from knowledge.behavioral_rules_session import BEHAVIORAL_RULES_SESSION_TEXT
+from knowledge.behavioral_rules_climate import BEHAVIORAL_RULES_CLIMATE_TEXT
 from knowledge.protocol import PROTOCOL_TEXT
 from knowledge.protocol_concepts import PROTOCOL_CONCEPTS_TEXT
 from knowledge.protocol_mqtt import PROTOCOL_MQTT_TEXT
@@ -162,6 +164,11 @@ def get_behavioral_rules_alerts() -> str:
 def get_behavioral_rules_session() -> str:
     """Return session management sub-topic (printer name verification, post-reload checklist)."""
     return BEHAVIORAL_RULES_SESSION_TEXT
+
+
+def get_behavioral_rules_climate() -> str:
+    """Return climate sub-topic (chamber heating model, ETA projection, empirical constants)."""
+    return BEHAVIORAL_RULES_CLIMATE_TEXT
 
 
 def get_protocol() -> str:
