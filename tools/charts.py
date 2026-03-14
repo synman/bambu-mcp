@@ -230,14 +230,64 @@ def _row_health(health_history: list) -> str:
 
 
 def _row_analysis(factors: dict, durations: dict) -> str:
-    fig, (ax_spider, ax_pie) = plt.subplots(1, 2, figsize=(16, 4.6), facecolor=_BG)
-    fig.subplots_adjust(wspace=0.14)
+    # 3-column layout: [radar | legend table | pie]
+    fig = plt.figure(figsize=(16, 4.6), facecolor=_BG)
+    gs = fig.add_gridspec(1, 3, width_ratios=[2.6, 3.8, 3.6], wspace=0.18,
+                          left=0.02, right=0.98, top=0.90, bottom=0.06)
+    ax_radar  = fig.add_subplot(gs[0])
+    ax_legend = fig.add_subplot(gs[1])
+    ax_pie    = fig.add_subplot(gs[2])
 
-    # Spider chart (embedded PNG) + legend table
-    _style(ax_spider, "Failure Driver Analysis")
-    _draw_spider_panel(ax_spider, fig, factors)
+    # ── Radar image ──────────────────────────────────────────────────────────
+    _style(ax_radar, "Failure Driver Analysis")
+    ax_radar.axis("off")
+    try:
+        import PIL.Image
+        from camera.job_analyzer import _build_radar_png
+        radar_factors = factors if factors else {
+            k: 0.5 for k in ("material", "platform", "progress", "anomaly",
+                              "thermal", "humidity", "stability", "settings")
+        }
+        png_bytes = _build_radar_png(radar_factors, size=340)
+        img = PIL.Image.open(io.BytesIO(png_bytes))
+        ax_radar.imshow(img)
+        ax_radar.set_facecolor(_PANEL)
+    except Exception as e:
+        log.debug("open_charts: radar embed failed: %s", e)
+        _no_data(ax_radar, "No radar data")
 
-    # Print state pie
+    # ── Legend table ──────────────────────────────────────────────────────────
+    _style(ax_legend, "")
+    ax_legend.axis("off")
+    legend_rows = [
+        ("MATERIAL",  "Base failure rate by filament type (PLA=low, PC/PA=high)"),
+        ("PLATFORM",  "Printer series risk modifier (H2D=best, A1=worst)"),
+        ("PROGRESS",  "Survival curve — most failures occur before 15% progress"),
+        ("ANOMALY",   "Camera AI signal: spaghetti / air-printing detection score"),
+        ("THERMAL",   "Env risk: door open, nozzle/bed drift, chamber mismatch"),
+        ("HUMIDITY",  "Hygroscopic penalty — filament type × AMS moisture index"),
+        ("STABILITY", "Signal consistency — sustained clean lowers risk score"),
+        ("SETTINGS",  "Slicer config risk: brim, infill density, wall count, supports"),
+    ]
+    tbl = ax_legend.table(
+        cellText=legend_rows,
+        colLabels=["Factor", "What it measures"],
+        cellLoc="left",
+        loc="center",
+        bbox=[0.0, 0.0, 1.0, 1.0],
+    )
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(6.5)
+    for (row, col), cell in tbl.get_celld().items():
+        if row == 0:
+            cell.set_facecolor("#1c2128")
+            cell.set_text_props(color=_BLUE, fontweight="bold")
+        else:
+            cell.set_facecolor(_PANEL)
+            cell.set_text_props(color=_TEXT if col == 1 else _BLUE)
+        cell.set_edgecolor(_BORDER)
+
+    # ── Print state pie ───────────────────────────────────────────────────────
     _style(ax_pie, "Print State Durations")
     if durations:
         labels = list(durations.keys())
@@ -256,57 +306,6 @@ def _row_analysis(factors: dict, durations: dict) -> str:
         _no_data(ax_pie, "No state duration data yet")
 
     return _svg(fig)
-
-
-def _draw_spider_panel(ax, fig, factors: dict) -> None:
-    """Embed the radar PNG (if available) and draw an 8-row legend table."""
-    try:
-        import PIL.Image
-        from camera.job_analyzer import _build_radar_png
-        radar_factors = factors if factors else {
-            k: 0.5 for k in ("material", "platform", "progress", "anomaly",
-                              "thermal", "humidity", "stability", "settings")
-        }
-        png_bytes = _build_radar_png(radar_factors, size=300)
-        img = PIL.Image.open(io.BytesIO(png_bytes))
-        pos = ax.get_position()
-        # Radar occupies left 45% of the axes area
-        radar_ax = fig.add_axes([pos.x0, pos.y0, pos.width * 0.42, pos.height])
-        radar_ax.imshow(img)
-        radar_ax.set_facecolor(_PANEL)
-        radar_ax.axis("off")
-    except Exception as e:
-        log.debug("open_charts: radar embed failed: %s", e)
-
-    # Legend table occupies right portion
-    ax.axis("off")
-    legend_rows = [
-        ("MATERIAL",  "Base failure rate by filament type (PLA=low, PC/PA=high)"),
-        ("PLATFORM",  "Printer series risk modifier (H2D=best, A1=worst)"),
-        ("PROGRESS",  "Survival curve — most failures occur before 15% progress"),
-        ("ANOMALY",   "Camera AI signal: spaghetti / air-printing detection score"),
-        ("THERMAL",   "Env risk: door open, nozzle/bed drift, chamber mismatch"),
-        ("HUMIDITY",  "Hygroscopic penalty — filament type × AMS moisture index"),
-        ("STABILITY", "Signal consistency — sustained clean lowers risk score"),
-        ("SETTINGS",  "Slicer config risk: brim, infill density, wall count, supports"),
-    ]
-    tbl = ax.table(
-        cellText=legend_rows,
-        colLabels=["Factor", "What it measures"],
-        cellLoc="left",
-        loc="right",
-        bbox=[0.44, 0.0, 0.56, 1.0],
-    )
-    tbl.auto_set_font_size(False)
-    tbl.set_fontsize(6.5)
-    for (row, col), cell in tbl.get_celld().items():
-        if row == 0:
-            cell.set_facecolor("#1c2128")
-            cell.set_text_props(color=_BLUE, fontweight="bold")
-        else:
-            cell.set_facecolor(_PANEL)
-            cell.set_text_props(color=_TEXT if col == 1 else _BLUE)
-        cell.set_edgecolor(_BORDER)
 
 
 def _row_calibration() -> str:
