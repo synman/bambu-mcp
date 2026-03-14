@@ -2763,7 +2763,7 @@ def _build_app():
         """Render and return the live telemetry dashboard HTML for a printer.
 
         GET /api/charts?printer=<name>
-        Returns Content-Type: text/html. The page auto-refreshes every 30 s.
+        Returns Content-Type: text/html. SVG panels refresh via AJAX every 30 s.
         """
         try:
             p, printer_name = _get_printer(_rargs())
@@ -2783,6 +2783,24 @@ def _build_app():
                 f"<h2>Error: {e}</h2></body></html>",
                 mimetype="text/html",
             ), HTTPStatus.INTERNAL_SERVER_ERROR
+
+    @app.route("/api/charts_panels", methods=["GET"])
+    def charts_panels_route():
+        """Return refreshed SVG panels as JSON for AJAX updates.
+
+        GET /api/charts_panels?printer=<name>
+        Returns {"panels": [svg, ...], "ts": "<timestamp>"} or {"error": "..."}.
+        """
+        try:
+            p, printer_name = _get_printer(_rargs())
+            if p is None:
+                return jsonify({"error": f"Printer '{_rargs().get('printer', '?')}' not connected"}), HTTPStatus.BAD_REQUEST
+            from tools.charts import render_charts_panels
+            result = render_charts_panels(printer_name)
+            return jsonify(result)
+        except Exception as e:
+            log.error("charts_panels_route: error: %s", e, exc_info=True)
+            return jsonify({"error": str(e)}), HTTPStatus.INTERNAL_SERVER_ERROR
 
     log.debug("_build_app: → app built with %d routes", len(list(app.url_map.iter_rules())))
     return app

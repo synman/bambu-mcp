@@ -174,6 +174,32 @@ Equivalent MCP tool: `get_monitoring_series()` — returns `{"url": "..."}` poin
 
 ---
 
+### GET /api/charts
+
+Render and return the full telemetry dashboard as an HTML page.
+
+Query params:
+- `printer` (required): printer name
+
+Response: `text/html` — dark-themed multi-panel dashboard with 6 SVG chart sections.
+SVG panels are refreshed every 30 s via `fetch()` calls to `/api/charts_panels`
+(no page reload). Equivalent MCP tool: `open_charts()` — opens this URL in the browser.
+
+### GET /api/charts_panels
+
+Return refreshed SVG panels as JSON for AJAX updates.
+
+Query params:
+- `printer` (required): printer name
+
+Response: `{"panels": ["<svg>…</svg>", ...], "ts": "YYYY-MM-DD HH:MM:SS"}`.
+`panels` is a 6-element array in section order:
+  0 Temperature History, 1 Fan Speeds, 2 Anomaly & Health,
+  3 Failure Analysis, 4 Camera Calibration, 5 AMS Filament.
+Used by the `/api/charts` page to swap SVG content without reloading.
+
+---
+
 ## Diagnostics
 
 ### GET /api/dump_log

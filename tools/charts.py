@@ -10,11 +10,13 @@ import io
 import logging
 import time
 import webbrowser
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 import matplotlib
 matplotlib.use("Agg")  # must be set before any other matplotlib imports
+import matplotlib.dates as mdates
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
@@ -88,6 +90,19 @@ def _legend(ax, handles, **kw) -> None:
               edgecolor=_BORDER, **kw)
 
 
+def _to_dt(ts_list: list) -> list:
+    """Convert a list of epoch-float timestamps to datetime objects for matplotlib."""
+    return [datetime.fromtimestamp(t) for t in ts_list]
+
+
+def _apply_time_axis(ax) -> None:
+    """Show a formatted HH:MM time axis on *ax*."""
+    ax.xaxis.set_visible(True)
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+    ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=4, maxticks=8))
+    plt.setp(ax.get_xticklabels(), fontsize=6, color=_MUTED, rotation=0, ha="center")
+
+
 # ── Panel renderers ───────────────────────────────────────────────────────────
 
 def _row_temps(data: dict, is_h2d: bool) -> str:
@@ -100,22 +115,22 @@ def _row_temps(data: dict, is_h2d: bool) -> str:
     handles = []
     t0 = data.get("tool", {}).get("data", [])
     if t0:
-        ts, vs = [p["t"] for p in t0], [p["v"] for p in t0]
+        ts, vs = _to_dt([p["t"] for p in t0]), [p["v"] for p in t0]
         label = "Right Nozzle" if is_h2d else "Nozzle"
         ax_nozzle.plot(ts, vs, color=_TEMP_COLORS["tool"], linewidth=1)
         handles.append(mpatches.Patch(color=_TEMP_COLORS["tool"], label=label))
     if is_h2d:
         t1 = data.get("tool_1", {}).get("data", [])
         if t1:
-            ts1, vs1 = [p["t"] for p in t1], [p["v"] for p in t1]
+            ts1, vs1 = _to_dt([p["t"] for p in t1]), [p["v"] for p in t1]
             ax_nozzle.plot(ts1, vs1, color=_TEMP_COLORS["tool_1"], linewidth=1)
             handles.append(mpatches.Patch(color=_TEMP_COLORS["tool_1"], label="Left Nozzle"))
     if handles:
         _legend(ax_nozzle, handles)
+        _apply_time_axis(ax_nozzle)
     else:
         _no_data(ax_nozzle)
     ax_nozzle.set_ylabel("°C", fontsize=7)
-    ax_nozzle.xaxis.set_visible(False)
 
     # Bed + Chamber
     _style(ax_bed, "Bed & Chamber Temperature")
@@ -123,15 +138,15 @@ def _row_temps(data: dict, is_h2d: bool) -> str:
     for key, label in [("bed", "Bed"), ("chamber", "Chamber")]:
         s = data.get(key, {}).get("data", [])
         if s:
-            ax_bed.plot([p["t"] for p in s], [p["v"] for p in s],
+            ax_bed.plot(_to_dt([p["t"] for p in s]), [p["v"] for p in s],
                         color=_TEMP_COLORS[key], linewidth=1)
             handles_bc.append(mpatches.Patch(color=_TEMP_COLORS[key], label=label))
     if handles_bc:
         _legend(ax_bed, handles_bc)
+        _apply_time_axis(ax_bed)
     else:
         _no_data(ax_bed)
     ax_bed.set_ylabel("°C", fontsize=7)
-    ax_bed.xaxis.set_visible(False)
 
     return _svg(fig)
 
@@ -149,16 +164,16 @@ def _row_fans(data: dict) -> str:
     for (key, label), color in zip(fan_defs, _FAN_COLORS):
         s = data.get(key, {}).get("data", [])
         if s:
-            ax.step([p["t"] for p in s], [p["v"] for p in s],
+            ax.step(_to_dt([p["t"] for p in s]), [p["v"] for p in s],
                     color=color, linewidth=0.9, where="post")
             handles.append(mpatches.Patch(color=color, label=label))
     if handles:
         _legend(ax, handles, ncol=4)
+        _apply_time_axis(ax)
     else:
         _no_data(ax)
     ax.set_ylabel("%", fontsize=7)
     ax.set_ylim(-5, 105)
-    ax.xaxis.set_visible(False)
     return _svg(fig)
 
 
@@ -169,7 +184,7 @@ def _row_health(health_history: list) -> str:
     # Anomaly signals
     _style(ax_sig, "Anomaly Signals")
     if health_history:
-        ts = [r["ts"] for r in health_history]
+        ts = _to_dt([r["ts"] for r in health_history])
         hot  = [r.get("hot_pct") or 0   for r in health_history]
         st   = [r.get("strand_score") or 0 for r in health_history]
         diff = [r.get("diff_score") or 0   for r in health_history]
@@ -179,14 +194,14 @@ def _row_health(health_history: list) -> str:
         ax_sig.set_ylim(-0.02, 1.05)
         _legend(ax_sig, None)
         ax_sig.legend(fontsize=6, facecolor=_PANEL, labelcolor=_TEXT, edgecolor=_BORDER)
+        _apply_time_axis(ax_sig)
     else:
         _no_data(ax_sig, "No health data yet\n(starts after first print cycle)")
-    ax_sig.xaxis.set_visible(False)
 
     # Health timeline
     _style(ax_tl, "Print Health Timeline")
     if health_history:
-        ts   = [r["ts"] for r in health_history]
+        ts   = _to_dt([r["ts"] for r in health_history])
         suc  = [r.get("success_pct") or 0 for r in health_history]
         conf = [r.get("confidence") or 0  for r in health_history]
         ax_tl.plot(ts, suc,  color=_GREEN, linewidth=1.2, label="Success %")
@@ -198,7 +213,7 @@ def _row_health(health_history: list) -> str:
                    if r.get("remaining_min") is not None]
         if rem_pts:
             ax2 = ax_tl.twinx()
-            ax2.plot([x[0] for x in rem_pts], [x[1] for x in rem_pts],
+            ax2.plot(_to_dt([x[0] for x in rem_pts]), [x[1] for x in rem_pts],
                      color=_AMBER, linewidth=0.8, linestyle=":", alpha=0.85)
             ax2.set_ylabel("Remaining (min)", color=_AMBER, fontsize=7)
             ax2.tick_params(colors=_AMBER, labelsize=7)
@@ -207,9 +222,9 @@ def _row_health(health_history: list) -> str:
                 ax2.spines[sp].set_visible(False)
         ax_tl.legend(fontsize=6, facecolor=_PANEL, labelcolor=_TEXT,
                      edgecolor=_BORDER, loc="lower left")
+        _apply_time_axis(ax_tl)
     else:
         _no_data(ax_tl, "No health data yet\n(starts after first print cycle)")
-    ax_tl.xaxis.set_visible(False)
 
     return _svg(fig)
 
@@ -452,11 +467,11 @@ def open_charts(name: str) -> dict:
 def _assemble_html(name: str, svgs: list, section_titles: list) -> str:
     """Assemble chart SVGs into a responsive dark-themed HTML page."""
     sections_html = ""
-    for title, svg in zip(section_titles, svgs):
+    for i, (title, svg) in enumerate(zip(section_titles, svgs)):
         sections_html += f"""
     <section>
       <h2>{title}</h2>
-      <div class="chart-wrap">{svg}</div>
+      <div class="chart-wrap" id="panel-{i}">{svg}</div>
     </section>"""
 
     ts_str = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -466,13 +481,14 @@ def _assemble_html(name: str, svgs: list, section_titles: list) -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="refresh" content="30">
 <title>Bambu MCP — {name} Dashboard</title>
 <style>
 *{{box-sizing:border-box;margin:0;padding:0}}
 body{{background:#0d1117;color:#c9d1d9;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px;line-height:1.5;padding:16px 20px}}
 h1{{color:#58a6ff;font-size:1.25rem;margin-bottom:3px}}
 .sub{{color:#8b949e;font-size:0.78rem;margin-bottom:20px}}
+.status{{display:inline-block;width:8px;height:8px;border-radius:50%;background:#3fb950;margin-right:5px;vertical-align:middle}}
+.status.err{{background:#ff7b72}}
 section{{background:#161b22;border:1px solid #30363d;border-radius:8px;margin-bottom:14px;overflow:hidden}}
 h2{{color:#f0f6fc;font-size:0.82rem;padding:9px 14px;background:#1c2128;border-bottom:1px solid #30363d;margin:0}}
 .chart-wrap{{padding:8px;width:100%;overflow-x:hidden}}
@@ -481,8 +497,30 @@ h2{{color:#f0f6fc;font-size:0.82rem;padding:9px 14px;background:#1c2128;border-b
 </head>
 <body>
 <h1>&#x1F4CA; {name} — Telemetry Dashboard</h1>
-<div class="sub">Generated {ts_str} &nbsp;·&nbsp; auto-refreshes every 30 s</div>
+<div class="sub"><span class="status" id="dot"></span><span id="ts">Generated {ts_str}</span> &nbsp;·&nbsp; live refresh every 30 s</div>
 {sections_html}
+<script>
+(function(){{
+  var printer = (new URLSearchParams(location.search).get('printer')) || {repr(name)};
+  function refresh(){{
+    fetch('/api/charts_panels?printer=' + encodeURIComponent(printer))
+      .then(function(r){{ return r.json(); }})
+      .then(function(d){{
+        d.panels.forEach(function(svg, i){{
+          var el = document.getElementById('panel-' + i);
+          if (el) el.innerHTML = svg;
+        }});
+        document.getElementById('ts').textContent = 'Updated ' + d.ts;
+        document.getElementById('dot').className = 'status';
+      }})
+      .catch(function(e){{
+        console.warn('charts refresh error', e);
+        document.getElementById('dot').className = 'status err';
+      }});
+  }}
+  setInterval(refresh, 30000);
+}})();
+</script>
 </body>
 </html>"""
 
@@ -518,3 +556,35 @@ def render_charts_html(name: str) -> str:
         _row_ams(name),
     ]
     return _assemble_html(name, svgs, section_titles)
+
+
+def render_charts_panels(name: str) -> dict:
+    """Render only the SVG panels for AJAX refresh (used by /api/charts_panels route).
+
+    Returns {"panels": [svg, ...], "ts": "<timestamp string>"} or {"error": "..."}.
+    """
+    from data_collector import data_collector
+    from camera import job_monitor as _jm
+
+    raw_data = data_collector.get_all_data(name)
+    if raw_data is None:
+        return {"error": f"Printer '{name}' not connected"}
+
+    series_data = raw_data.get("collections") or raw_data
+    health_history = _jm.get_health_history(name)
+    latest_result  = _jm.get_latest_result(name)
+    factors        = (latest_result or {}).get("factor_contributions") or {}
+    durations      = raw_data.get("gcode_state_durations") or {}
+
+    tool_1_data = series_data.get("tool_1", {}).get("data", [])
+    is_h2d = any(p.get("v", 0) != 0 for p in tool_1_data)
+
+    panels = [
+        _row_temps(series_data, is_h2d),
+        _row_fans(series_data),
+        _row_health(health_history),
+        _row_analysis(factors, durations),
+        _row_calibration(),
+        _row_ams(name),
+    ]
+    return {"panels": panels, "ts": time.strftime("%Y-%m-%d %H:%M:%S")}
