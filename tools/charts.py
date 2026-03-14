@@ -430,19 +430,22 @@ def open_charts(name: str) -> dict:
         log.warning("open_charts: printer %s not connected", name)
         return {"error": "not_connected"}
 
+    # get_all_data nests time-series under "collections"
+    series_data = raw_data.get("collections") or raw_data
+
     health_history = _jm.get_health_history(name)
     latest_result  = _jm.get_latest_result(name)
     factors        = (latest_result or {}).get("factor_contributions") or {}
     durations      = raw_data.get("gcode_state_durations") or {}
 
     # Detect H2D: any non-zero value in tool_1 series
-    tool_1_data = raw_data.get("tool_1", {}).get("data", [])
+    tool_1_data = series_data.get("tool_1", {}).get("data", [])
     is_h2d = any(p.get("v", 0) != 0 for p in tool_1_data)
 
     # Render each section
     svgs = [
-        _row_temps(raw_data, is_h2d),
-        _row_fans(raw_data),
+        _row_temps(series_data, is_h2d),
+        _row_fans(series_data),
         _row_health(health_history),
         _row_analysis(factors, durations),
         _row_calibration(),
