@@ -2758,6 +2758,32 @@ def _build_app():
             log.error("monitoring_series: error: %s", e, exc_info=True)
             return _err(str(e))
 
+    @app.route("/api/charts", methods=["GET"])
+    def charts_route():
+        """Render and return the live telemetry dashboard HTML for a printer.
+
+        GET /api/charts?printer=<name>
+        Returns Content-Type: text/html. The page auto-refreshes every 30 s.
+        """
+        try:
+            p, printer_name = _get_printer(_rargs())
+            if p is None:
+                return Response(
+                    f"<html><body style='background:#0d1117;color:#ff7b72;font-family:sans-serif;padding:40px'>"
+                    f"<h2>Printer '{_rargs().get('printer', '?')}' not connected</h2></body></html>",
+                    mimetype="text/html",
+                ), HTTPStatus.BAD_REQUEST
+            from tools.charts import render_charts_html
+            html = render_charts_html(printer_name)
+            return Response(html, mimetype="text/html")
+        except Exception as e:
+            log.error("charts_route: error: %s", e, exc_info=True)
+            return Response(
+                f"<html><body style='background:#0d1117;color:#ff7b72;font-family:sans-serif;padding:40px'>"
+                f"<h2>Error: {e}</h2></body></html>",
+                mimetype="text/html",
+            ), HTTPStatus.INTERNAL_SERVER_ERROR
+
     log.debug("_build_app: → app built with %d routes", len(list(app.url_map.iter_rules())))
     return app
 

@@ -422,45 +422,33 @@ def open_charts(name: str) -> dict:
     """
     log.debug("open_charts: called for name=%s", name)
 
-    from data_collector import data_collector
-    from camera import job_monitor as _jm
+    # Prefer serving via REST API so the browser can auto-refresh live data.
+    try:
+        from tools.system import get_server_info
+        info = get_server_info()
+        api_port = info.get("api_port", 0)
+    except Exception:
+        api_port = 0
 
-    raw_data = data_collector.get_all_data(name)
-    if raw_data is None:
-        log.warning("open_charts: printer %s not connected", name)
+    if api_port:
+        url = f"http://localhost:{api_port}/api/charts?printer={name}"
+        opened = webbrowser.open(url)
+        log.info("open_charts: opened live URL %s opened=%s", url, opened)
+        return {"output_path": url, "opened": opened}
+
+    # Fallback: render and write static file
+    html = render_charts_html(name)
+    if html.startswith("<html><body style"):
         return {"error": "not_connected"}
+    out = Path(f"/tmp/bambu-charts-{name}.html")
+    out.write_text(html, encoding="utf-8")
+    opened = webbrowser.open(f"file://{out}")
+    log.info("open_charts: written %s opened=%s", out, opened)
+    return {"output_path": str(out), "opened": opened}
 
-    # get_all_data nests time-series under "collections"
-    series_data = raw_data.get("collections") or raw_data
 
-    health_history = _jm.get_health_history(name)
-    latest_result  = _jm.get_latest_result(name)
-    factors        = (latest_result or {}).get("factor_contributions") or {}
-    durations      = raw_data.get("gcode_state_durations") or {}
-
-    # Detect H2D: any non-zero value in tool_1 series
-    tool_1_data = series_data.get("tool_1", {}).get("data", [])
-    is_h2d = any(p.get("v", 0) != 0 for p in tool_1_data)
-
-    # Render each section
-    svgs = [
-        _row_temps(series_data, is_h2d),
-        _row_fans(series_data),
-        _row_health(health_history),
-        _row_analysis(factors, durations),
-        _row_calibration(),
-        _row_ams(name),
-    ]
-
-    section_titles = [
-        "Temperature History",
-        "Fan Speeds",
-        "Anomaly &amp; Health",
-        "Failure Analysis",
-        "Camera Calibration",
-        "AMS Filament",
-    ]
-
+def _assemble_html(name: str, svgs: list, section_titles: list) -> str:
+    """Assemble chart SVGs into a responsive dark-themed HTML page."""
     sections_html = ""
     for title, svg in zip(section_titles, svgs):
         sections_html += f"""
@@ -471,11 +459,12 @@ def open_charts(name: str) -> dict:
 
     ts_str = time.strftime("%Y-%m-%d %H:%M:%S")
 
-    html = f"""<!DOCTYPE html>
+    return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="30">
 <title>Bambu MCP — {name} Dashboard</title>
 <style>
 *{{box-sizing:border-box;margin:0;padding:0}}
@@ -490,13 +479,40 @@ h2{{color:#f0f6fc;font-size:0.82rem;padding:9px 14px;background:#1c2128;border-b
 </head>
 <body>
 <h1>&#x1F4CA; {name} — Telemetry Dashboard</h1>
-<div class="sub">Generated {ts_str}</div>
+<div class="sub">Generated {ts_str} &nbsp;·&nbsp; auto-refreshes every 30 s</div>
 {sections_html}
 </body>
 </html>"""
 
-    out = Path(f"/tmp/bambu-charts-{name}.html")
-    out.write_text(html, encoding="utf-8")
-    opened = webbrowser.open(f"file://{out}")
-    log.info("open_charts: written %s opened=%s", out, opened)
-    return {"output_path": str(out), "opened": opened}
+
+def render_charts_html(name: str) -> str:
+    """Render and return the full dashboard HTML for *name* (used by HTTP route)."""
+    from data_collector import data_collector
+    from camera import job_monitor as _jm
+
+    raw_data = data_collector.get_all_data(name)
+    if raw_data is None:
+        return f"<html><body style='background:#0d1117;color:#ff7b72;font-family:sans-serif;padding:40px'><h2>Printer '{name}' not connected</h2></body></html>"
+
+    series_data = raw_data.get("collections") or raw_data
+    health_history = _jm.get_health_history(name)
+    latest_result  = _jm.get_latest_result(name)
+    factors        = (latest_result or {}).get("factor_contributions") or {}
+    durations      = raw_data.get("gcode_state_durations") or {}
+
+    tool_1_data = series_data.get("tool_1", {}).get("data", [])
+    is_h2d = any(p.get("v", 0) != 0 for p in tool_1_data)
+
+    section_titles = [
+        "Temperature History", "Fan Speeds", "Anomaly &amp; Health",
+        "Failure Analysis", "Camera Calibration", "AMS Filament",
+    ]
+    svgs = [
+        _row_temps(series_data, is_h2d),
+        _row_fans(series_data),
+        _row_health(health_history),
+        _row_analysis(factors, durations),
+        _row_calibration(),
+        _row_ams(name),
+    ]
+    return _assemble_html(name, svgs, section_titles)
