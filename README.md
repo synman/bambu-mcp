@@ -1,6 +1,6 @@
 # Bambu Lab MCP Server
 
-**Version: 0.6.0** · Follows [Semantic Versioning](https://semver.org/)
+**Version: 0.9.0** · Follows [Semantic Versioning](https://semver.org/)
 
 A fully self-contained MCP (Model Context Protocol) server for managing Bambu Lab 3D printers.
 
@@ -15,7 +15,7 @@ All intelligence from `bambu-printer-manager` and `bambu-printer-app` is baked i
 - **85 tools** covering discovery, state monitoring, print control, climate, filament, camera, files, detectors, and raw commands
 - **9 resources** at `bambu://` URIs: live rules files + baked-in knowledge modules
 - **1 system prompt** (`bambu_system_context`) that loads all behavioral rules, escalation policy, and tool guidance
-- **Encrypted secrets store** — Fernet AES-256 at `~/.bambu-mcp/secrets.enc` (cross-platform)
+- **Encrypted secrets store** — AES-256-GCM at `~/.bambu-mcp/secrets.enc`, keychain-backed master key (cross-platform)
 - **Persistent MQTT sessions** — BambuPrinter sessions start at server launch, reconnect automatically
 - **3-tier knowledge escalation** — baked-in → authoritative GitHub repos → broad search
 - **Write protection** — all state-changing tools require `user_permission=True`
@@ -94,7 +94,7 @@ Merge `config/copilot_mcp.json` into your Copilot MCP configuration.
 ├── server.py                    ← FastMCP entry point (85 tools, 9 resources, 1 prompt)
 ├── session_manager.py           ← Persistent BambuPrinter MQTT sessions
 ├── data_collector.py            ← Telemetry history (8 rolling time-series per printer)
-├── secrets_store.py             ← Fernet-encrypted secrets at ~/.bambu-mcp/secrets.enc
+├── secrets_store.py             ← AES-256-GCM secrets vault at ~/.bambu-mcp/secrets.enc
 ├── auth.py                      ← Printer credential CRUD on top of secrets_store
 ├── make.py                      ← Cross-platform venv installer (python make.py)
 ├── camera/                      ← Self-contained camera streaming module
