@@ -162,6 +162,14 @@ def get_job_info(name: str) -> dict:
         18=paused by front cover removal, 19=calibrating extrusion flow,
         20=paused by nozzle temp malfunction,
         21=paused by heat bed temp malfunction, 255=printing normally.
+
+    Empty result interpretation:
+    - When all fields are empty/zeroed (subtask_name="", gcode_file="",
+      print_percentage=0, stage_id=-1): no job has been executed since the
+      printer's last power cycle or reboot. Job info persists across idle
+      periods — it does NOT clear over time. Empty always means reboot
+      boundary, never "idle too long."
+
     Note: gcode_state is NOT a field of ActiveJobInfo and is not returned by this
     tool. Read gcode_state from get_print_progress() or get_printer_state() instead.
 

@@ -48,6 +48,19 @@ is `gcode_state: "FAILED"` + `print_error: 0`.
 
 ---
 
+## Job Info Lifecycle (ActiveJobInfo Persistence)
+
+ActiveJobInfo fields persist across printer state transitions (RUNNING → FINISH → IDLE).
+The last job's data remains queryable until:
+- A new print starts (fields overwritten with new job data), or
+- The printer is rebooted/power-cycled (fields reset to defaults: empty strings,
+  zeros, stage_id=-1).
+
+**Empty job info = no job since last reboot.** Job data does NOT decay or expire
+over time. An empty result always indicates a reboot boundary.
+
+---
+
 ## gcode_state Quick Reference
 
 | Value | Meaning | Ready to print? | Idle nozzle timeout? |
