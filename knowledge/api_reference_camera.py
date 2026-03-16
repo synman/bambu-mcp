@@ -169,7 +169,6 @@ returned by `start_stream()` (e.g. `http://localhost:49152`).
 | `GET /layout` | GET | image/png | Current job annotated plate top-down layout; 404 if no active job or no project data |
 | `GET /annotated` | GET | image/png | Anomaly-detection overlay from background monitor; 204 No Content if no data available |
 | `GET /factors_radar` | GET | image/png | Failure Drivers 8-factor spider chart; 204 No Content if no data available |
-| `GET /health_panel_img` | GET | image/png | Arc gauge health panel image (120 px); 204 No Content if no data available |
 | `GET /snapshot` | GET | image/jpeg | Single live camera frame captured on demand |
 | `GET /job_state` | GET | application/json | Full background monitor result dict (same schema as `analyze_active_job()` return value); polled every 8 s by the JOB HEALTH panel |
 | `GET /open` | GET | text/html | Named-tab portal page; used by `view_stream()` to open the stream in a persistent browser tab (`bambu-{name}`) |

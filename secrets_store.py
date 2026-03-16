@@ -129,7 +129,8 @@ def _load_v2(vault: dict, key: bytes) -> dict:
         try:
             plaintext = _decrypt_entry(key, service, entry)
             try:
-                result[service] = json.loads(plaintext)
+                parsed = json.loads(plaintext)
+                result[service] = plaintext if not isinstance(parsed, (list, dict)) else parsed
             except json.JSONDecodeError:
                 result[service] = plaintext
         except Exception as exc:  # noqa: BLE001

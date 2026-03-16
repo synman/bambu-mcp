@@ -100,8 +100,6 @@ is active — auto-expands on RUNNING/PAUSE/FAILED/FINISH, collapses on IDLE; po
 every 8 s):
 - **Verdict badge** (`#hp-verdict`): CLEAN / WARNING / CRITICAL / STANDBY — color-coded from
   composite score (`success_probability × decision_confidence`)
-- **Score section** (`#hp-sec-score`): `/health_panel_img` PNG (120 px arc gauge), composite
-  score %, confidence % — hidden when no health_panel_img is available
 - **Metrics section** (`#hp-sec-metrics`): Hot px %, Strand score, Diff score, Layer/total,
   Progress % — sourced from `/job_state` response fields
 - **Trends section** (`#hp-sec-trends`): 4 rolling sparkline canvases — Success % (30-sample,

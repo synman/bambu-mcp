@@ -172,7 +172,7 @@ class TCPFrameBuffer:
                                         len(img), payload_size)
                             img = None
                     elif len(dr) == 16:
-                        payload_size = int.from_bytes(dr[0:3], "little")
+                        payload_size = int.from_bytes(dr[0:4], "little")
                         log.debug("_reader_loop: header received, payload_size=%d", payload_size)
                         img = bytearray()
 
