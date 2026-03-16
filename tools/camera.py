@@ -562,7 +562,10 @@ def start_stream(name: str, port: int | None = None) -> dict:
                 _save_plate_disk(thumb_bytes, layout_bytes)
                 return thumb_bytes, layout_bytes
             except Exception as _e:
-                log.warning("_get_images: error fetching thumbnail/layout: %s", _e, exc_info=True)
+                # Negative-cache this key so we don't spam the log every poll
+                # cycle when the 3MF isn't in sdcard_3mf_files.
+                _img_cache["key"] = cache_key
+                log.debug("_get_images: project info unavailable for %s: %s", tmf_path, _e)
                 return None, None
 
         def thumbnail_fn():

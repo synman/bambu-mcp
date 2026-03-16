@@ -13,6 +13,7 @@ Usage:
 import atexit
 import logging
 import os
+import signal
 import sys
 from pathlib import Path
 
@@ -278,9 +279,13 @@ def _startup() -> None:
 
         for name in printer_names:
             data_collector.register_printer(name)
-            session_manager.register_update_callback(
-                lambda n=name: data_collector.on_update(n, session_manager.get_printer(n))
-            )
+
+            def _data_cb(n: str = name) -> None:
+                p = session_manager.get_printer(n)
+                if p is not None:
+                    data_collector.on_update(n, p)
+
+            session_manager.register_update_callback(_data_cb)
 
         # Wire job monitor — auto-reference + 60s analysis loop per printer.
         try:
@@ -297,10 +302,12 @@ def _startup() -> None:
         log.info(f"Started sessions for {len(printer_names)} printer(s): {printer_names}")
 
         # Wire notification manager — captures event loop for out-of-band resource push.
+        # _startup() runs in a non-async daemon thread, so there is no running event
+        # loop.  Create one explicitly rather than relying on get_event_loop().
         try:
             from notifications import notifications as _notifications
             import asyncio
-            loop = asyncio.get_event_loop()
+            loop = asyncio.new_event_loop()
             _notifications.wire_mcp_server(mcp, loop)
         except Exception as exc:
             log.warning("notifications wiring error (push disabled): %s", exc)
@@ -339,6 +346,17 @@ def _shutdown() -> None:
 
 
 atexit.register(_shutdown)
+
+
+def _signal_handler(signum: int, _frame) -> None:
+    """Log the signal that killed us, then exit (atexit._shutdown will fire)."""
+    sig_name = signal.Signals(signum).name
+    log.warning("Received %s — shutting down", sig_name)
+    sys.exit(128 + signum)
+
+
+for _sig in (signal.SIGTERM, signal.SIGINT):
+    signal.signal(_sig, _signal_handler)
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────

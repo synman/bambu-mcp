@@ -33,6 +33,14 @@ import av
 
 log = logging.getLogger(__name__)
 
+# Regex to strip embedded access codes from RTSPS URLs in log messages.
+_RTSPS_CRED_RE = __import__("re").compile(r"(rtsps://bblp:)[^@]+(@)")
+
+
+def _redact_url(text: str) -> str:
+    """Replace access codes in rtsps:// URLs with '****'."""
+    return _RTSPS_CRED_RE.sub(r"\1****\2", text)
+
 
 _AV_OPTIONS = {
     "rtsp_transport": "tcp",
@@ -136,6 +144,7 @@ class RTSPSFrameBuffer:
         """Background thread: all av.open / container.decode / _frame_to_jpeg calls happen here."""
         log.debug("_reader_loop: starting for %s", self._ip)
         reconnect_count = 0
+        backoff = 1.0  # exponential backoff: 1s → 2s → 4s → … → 30s cap
 
         while self._running:
             container = None
@@ -152,6 +161,7 @@ class RTSPSFrameBuffer:
                 with self._container_lock:
                     self._container = container
                 frames_received = 0
+                backoff = 1.0  # reset on successful connect
 
                 for frame in container.decode(video=0):
                     if not self._running:
@@ -167,7 +177,10 @@ class RTSPSFrameBuffer:
                 log.warning("_reader_loop: stream ended after %d frames, reconnecting", frames_received)
 
             except Exception as e:
-                log.warning("_reader_loop: error: %s — reconnecting in 1s", e, exc_info=True)
+                log.warning(
+                    "_reader_loop: error: %s — reconnecting in %.0fs",
+                    _redact_url(str(e)), backoff,
+                )
             finally:
                 with self._container_lock:
                     self._container = None
@@ -179,8 +192,9 @@ class RTSPSFrameBuffer:
                         log.debug("_reader_loop: error closing container", exc_info=True)
 
             if self._running:
-                log.debug("_reader_loop: sleeping 1s before reconnect")
-                time.sleep(1)
+                log.debug("_reader_loop: sleeping %.0fs before reconnect", backoff)
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 30.0)
 
         log.debug("_reader_loop: exiting (running=False)")
 
