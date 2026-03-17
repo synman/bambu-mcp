@@ -106,10 +106,11 @@ MCP_PORTS           = [49152, 49153, 49154, 49155, 49156]
 # Secrets + camera
 # ---------------------------------------------------------------------------
 def _secret(key: str) -> str:
-    secrets = Path.home() / "bambu-printer-manager" / "secrets.py"
-    return subprocess.check_output(
-        [sys.executable, str(secrets), "get", key],
-        stdin=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True).strip()
+    import secrets_store
+    value = secrets_store.get(key)
+    if value is None:
+        raise KeyError(f"secret not found: {key}")
+    return str(value).strip()
 
 
 def _rtsps_frame(ip: str, access_code: str, timeout_s: int = 15) -> Image.Image:

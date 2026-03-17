@@ -54,3 +54,11 @@ Agent-managed — full git lifecycle authorized (stage, commit, push). Descripti
 - Never update/add/remove dependencies without explicit user approval
 - Version in one place: `pyproject.toml` `[project] version`
 - After version bump: `pip install -e .` then `python make.py version-sync`
+
+## Credential Registry
+
+All project secrets are stored in the workspace vault (`~/.claude/secrets.vault`).
+
+| Secret | Vault Service | Expires | Notes |
+|--------|--------------|---------|-------|
+| Container API auth | `bpm_api_auth` | 90d default | Basic auth for BPM container REST API |
