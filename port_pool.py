@@ -21,7 +21,7 @@ OS alignment:
 Environment variables
 ---------------------
   BAMBU_PORT_POOL_START  — first port in the pool (default 49152)
-  BAMBU_PORT_POOL_END    — last port in the pool inclusive (default 49251; 100-port window)
+  BAMBU_PORT_POOL_END    — last port in the pool inclusive (default 49351; 200-port window)
 
 Usage
 -----
@@ -43,7 +43,7 @@ import threading
 log = logging.getLogger(__name__)
 
 _POOL_START_DEFAULT = 49152
-_POOL_END_DEFAULT   = 49251
+_POOL_END_DEFAULT   = 49351
 
 
 class PortPool:
@@ -96,9 +96,14 @@ class PortPool:
                     log.info("PortPool.allocate: allocated pool port %d", port)
                     return port
 
+            # Count how many ports failed bind vs were claimed
+            bind_failures = sum(
+                1 for port in range(self._start, self._end + 1)
+                if port not in self._claimed
+            )
             log.error(
-                "PortPool.allocate: pool exhausted (range %d–%d, claimed=%s)",
-                self._start, self._end, sorted(self._claimed),
+                "PortPool.allocate: pool exhausted (range %d–%d, claimed=%d, bind_failures=%d)",
+                self._start, self._end, len(self._claimed), bind_failures,
             )
             raise OSError(
                 f"bambu-mcp port pool exhausted: no available port in {self._start}–{self._end}"
@@ -151,6 +156,7 @@ class PortPool:
         """OS-level socket probe.  Must be called while holding self._lock."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             try:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 s.bind(("", port))
                 return True
             except OSError:

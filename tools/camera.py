@@ -1012,7 +1012,7 @@ tell application "System Events"
                         end repeat
                     end repeat
                 end tell
-            else
+            else if browserName is "Safari" then
                 tell application "Safari"
                     repeat with w in windows
                         repeat with t in tabs of w
@@ -1097,7 +1097,7 @@ def view_stream(name: str, resolution: str = "native", quality: int = 85) -> dic
     # Construct per-client parameterized URL; omit params when using defaults.
     use_default = (resolution == "native" and quality == 85)
     client_url = url if use_default else f"{url.rstrip('/')}/?resolution={resolution}&quality={quality}"
-    focused = _focus_existing_tab(client_url if not use_default else url)
+    focused = _focus_existing_tab(url.rstrip("/"))
     if focused:
         log.debug("view_stream: focused existing tab for %s", name)
         opened = True

@@ -2057,8 +2057,25 @@ def _build_app():
             duration_hours = int(_rargs().get("duration_hours", 4))
             log.debug("turn_on_ams_dryer: ams_id=%s target_temp=%s duration_hours=%s", ams_id, target_temp, duration_hours)
             p.turn_on_ams_dryer(target_temp=target_temp, duration=duration_hours, ams_id=ams_id)
-            log.debug("turn_on_ams_dryer: → ok")
-            return _ok()
+            log.debug("turn_on_ams_dryer: command sent, polling for confirmation")
+            _DRYING = 2
+            _ERROR = 5
+            deadline = time.time() + 10
+            unit = None
+            while time.time() < deadline:
+                time.sleep(1)
+                state = p.printer_state
+                if state and state.ams_units:
+                    unit = next((u for u in state.ams_units if u.ams_id == ams_id), None)
+                    if unit:
+                        hs = int(unit.heater_state)
+                        if hs == _DRYING:
+                            return _ok(ams_id=ams_id, heater_state="DRYING", target_temp=target_temp, duration_hours=duration_hours)
+                        if hs == _ERROR or hs == 0:
+                            break
+            final_state = unit.heater_state.name if unit else "unknown"
+            log.warning("turn_on_ams_dryer: heater_state did not reach DRYING within 10s (final: %s)", final_state)
+            return _err(f"dryer command sent but heater_state did not reach DRYING within 10s (final: {final_state})")
         except Exception as e:
             log.error("turn_on_ams_dryer: error: %s", e, exc_info=True)
             return _err(str(e))
