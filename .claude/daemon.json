@@ -1,0 +1,16 @@
+{
+  "daemons": [
+    {
+      "name": "bambu-mcp",
+      "description": "Bambu Lab MCP Server (Streamable HTTP)",
+      "exec": ".venv/bin/python3",
+      "script": "server.py",
+      "args": ["--transport", "streamable-http"],
+      "env": {
+        "BAMBU_MCP_LOG_LEVEL": "WARNING"
+      },
+      "log": "bambu-mcp.log",
+      "working_dir": true
+    }
+  ]
+}
