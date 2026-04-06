@@ -33,7 +33,10 @@ from camera.mjpeg_server import mjpeg_server
 from camera.protocol import get_protocol, get_rtsps_url
 
 # ---------------------------------------------------------------------------
+# Active RTSPS stream registry — allows _capture_jpeg to reuse a live stream
 # ---------------------------------------------------------------------------
+_active_rtsps_streams: dict = {}
+
 
 def _no_printer(name: str) -> dict:
     return {"error": f"Printer '{name}' not connected"}
@@ -182,6 +185,12 @@ def _capture_jpeg(printer) -> bytes:
     log.debug("_capture_jpeg: protocol=%s ip=%s", protocol, ip)
     access_code = printer.config.access_code
     if protocol == "rtsps":
+        running = _active_rtsps_streams.get(ip)
+        if running is not None:
+            frame = running.get_latest_frame()
+            if frame is not None:
+                log.debug("_capture_jpeg: reusing live RTSPS stream for %s (%d bytes)", ip, len(frame))
+                return frame
         from camera.rtsps_stream import capture_frame
         log.debug("_capture_jpeg: calling rtsps capture_frame for %s", ip)
         result = capture_frame(ip, access_code)
@@ -207,8 +216,12 @@ def _make_stream_session(printer):
         session = RTSPSFrameBuffer(ip, access_code)
         log.info("_make_stream_session: waiting for first RTSPS frame from %s", ip)
         session.wait_first_frame(timeout=15.0)
+        _active_rtsps_streams[ip] = session
+        def _rtsps_closer(ip=ip, session=session):
+            _active_rtsps_streams.pop(ip, None)
+            session.close()
         log.debug("_make_stream_session: → session type=%s", type(session).__name__)
-        return session, None
+        return session, _rtsps_closer
     if protocol == "tcp_tls":
         from camera.tcp_stream import TCPFrameBuffer
         buf = TCPFrameBuffer(ip, access_code)

@@ -59,7 +59,7 @@ cmd_start() {
     local elapsed=0
     while [[ ! -f "$PORT_FILE" ]] && (( elapsed < 30 )); do
         sleep 1
-        (( elapsed++ ))
+        elapsed=$(( elapsed + 1 ))
     done
 
     if [[ -f "$PORT_FILE" ]]; then
@@ -95,7 +95,7 @@ cmd_stop() {
     local elapsed=0
     while _is_alive "$pid" && (( elapsed < 10 )); do
         sleep 1
-        (( elapsed++ ))
+        elapsed=$(( elapsed + 1 ))
     done
 
     if _is_alive "$pid"; then

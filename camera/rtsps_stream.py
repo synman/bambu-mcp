@@ -23,6 +23,7 @@ worker threads.
 
 from __future__ import annotations
 
+import gc
 import io
 import logging
 import threading
@@ -59,18 +60,20 @@ def _frame_to_jpeg(frame: av.VideoFrame) -> bytes:
         output = io.BytesIO()
         output_container = av.open(output, mode="w", format="mjpeg")
         log.debug("_frame_to_jpeg: output container opened, adding mjpeg stream %dx%d", yuv_frame.width, yuv_frame.height)
-        jpeg_stream = output_container.add_stream("mjpeg")
-        jpeg_stream.width = yuv_frame.width
-        jpeg_stream.height = yuv_frame.height
-        jpeg_stream.pix_fmt = "yuvj420p"
-        log.debug("_frame_to_jpeg: encoding frame packets")
-        for packet in jpeg_stream.encode(yuv_frame):
-            output_container.mux(packet)
-        log.debug("_frame_to_jpeg: flushing encoder")
-        for packet in jpeg_stream.encode(None):
-            output_container.mux(packet)
-        log.debug("_frame_to_jpeg: closing output container")
-        output_container.close()
+        try:
+            jpeg_stream = output_container.add_stream("mjpeg")
+            jpeg_stream.width = yuv_frame.width
+            jpeg_stream.height = yuv_frame.height
+            jpeg_stream.pix_fmt = "yuvj420p"
+            log.debug("_frame_to_jpeg: encoding frame packets")
+            for packet in jpeg_stream.encode(yuv_frame):
+                output_container.mux(packet)
+            log.debug("_frame_to_jpeg: flushing encoder")
+            for packet in jpeg_stream.encode(None):
+                output_container.mux(packet)
+        finally:
+            log.debug("_frame_to_jpeg: closing output container")
+            output_container.close()
         result = output.getvalue()
         log.debug("_frame_to_jpeg: → %d bytes", len(result))
         return result
@@ -132,6 +135,8 @@ class RTSPSFrameBuffer:
         self._container_lock = threading.Lock()
         self._container = None  # current av.InputContainer; written by reader, read by watchdog
         log.debug("RTSPSFrameBuffer.__init__: ip=%s timeout=%s", ip, timeout)
+        self._client_count = 0
+        self._client_wake_event = threading.Event()
         self._thread = threading.Thread(target=self._reader_loop, daemon=True,
                                         name=f"rtsps-cam-{ip}")
         self._thread.start()
@@ -166,8 +171,13 @@ class RTSPSFrameBuffer:
                 for frame in container.decode(video=0):
                     if not self._running:
                         break
+                    if self._client_count == 0:
+                        log.warning("_reader_loop[%s]: no active clients, stopping decode", self._ip)
+                        break
                     jpeg = _frame_to_jpeg(frame)
                     frames_received += 1
+                    if frames_received % 500 == 0:
+                        gc.collect()
                     log.debug("_reader_loop: frame #%d ready, size=%d", frames_received, len(jpeg))
                     with self._cond:
                         self._last_frame = jpeg
@@ -192,9 +202,17 @@ class RTSPSFrameBuffer:
                         log.debug("_reader_loop: error closing container", exc_info=True)
 
             if self._running:
-                log.debug("_reader_loop: sleeping %.0fs before reconnect", backoff)
-                time.sleep(backoff)
-                backoff = min(backoff * 2, 30.0)
+                if self._client_count > 0:
+                    log.debug("_reader_loop: sleeping %.0fs before reconnect", backoff)
+                    self._client_wake_event.wait(timeout=backoff)
+                    self._client_wake_event.clear()
+                    backoff = min(backoff * 2, 30.0)
+                else:
+                    log.debug("_reader_loop: no clients — idle-waiting for first client")
+                    while self._running and self._client_count == 0:
+                        self._client_wake_event.wait(timeout=5.0)
+                        self._client_wake_event.clear()
+                    backoff = 1.0
 
         log.debug("_reader_loop: exiting (running=False)")
 
@@ -211,6 +229,23 @@ class RTSPSFrameBuffer:
             time.sleep(5)
             if not self._running:
                 break
+            # Safety net: if all clients have disconnected but the container is still
+            # open, close it so the reader's container.decode() unblocks promptly.
+            # The primary fix is in iter_frames() but this catches any edge case where
+            # that close was skipped (e.g., exception during finally).
+            if self._client_count == 0:
+                with self._container_lock:
+                    container = self._container
+                if container is not None:
+                    log.warning(
+                        "_watchdog_loop[%s]: zero clients but container open — closing to stop decode loop",
+                        self._ip,
+                    )
+                    try:
+                        container.close()
+                    except Exception as e:
+                        log.debug("_watchdog_loop: error closing container: %s", e)
+                continue
             stale_secs = time.monotonic() - self._last_frame_time
             if stale_secs >= 30:
                 with self._container_lock:
@@ -241,6 +276,11 @@ class RTSPSFrameBuffer:
         log.debug("wait_first_frame: → %s", "ready" if got else "no frame")
         return got
 
+    def get_latest_frame(self) -> bytes | None:
+        """Return the most recently decoded JPEG frame without blocking."""
+        with self._cond:
+            return self._last_frame
+
     def iter_frames(self) -> Iterator[bytes]:
         """Yield frames as they arrive. Blocks between frames. Safe for multiple callers.
 
@@ -248,31 +288,63 @@ class RTSPSFrameBuffer:
         browser receives data before any Safari speculative-connection timeout fires.
         """
         log.debug("iter_frames: client attached (thread=%s)", threading.current_thread().name)
+        with self._cond:
+            self._client_count += 1
+            if self._client_count == 1:
+                self._client_wake_event.set()
         last: bytes | None = None
         frames_yielded = 0
-        while self._running:
+        try:
+            while self._running:
+                with self._cond:
+                    if self._last_frame is last:
+                        self._cond.wait(timeout=30)
+                    frame = self._last_frame
+                if not self._thread.is_alive():
+                    log.error("iter_frames: reader thread died — raising to trigger browser retry")
+                    raise RuntimeError("RTSPSFrameBuffer reader thread died")
+                if frame is not None and frame is not last:
+                    last = frame
+                    frames_yielded += 1
+                    log.debug("iter_frames: yielding frame #%d size=%d", frames_yielded, len(frame))
+                    yield frame
+                elif frame is last:
+                    stale_secs = time.monotonic() - self._last_frame_time
+                    if stale_secs > 60:
+                        log.warning("iter_frames: no new frame for %.0fs — watchdog failed, raising to trigger browser retry", stale_secs)
+                        raise RuntimeError(f"RTSPSFrameBuffer stream stalled ({stale_secs:.0f}s)")
+        finally:
             with self._cond:
-                if self._last_frame is last:
-                    self._cond.wait(timeout=30)
-                frame = self._last_frame
-            if not self._thread.is_alive():
-                log.error("iter_frames: reader thread died — raising to trigger browser retry")
-                raise RuntimeError("RTSPSFrameBuffer reader thread died")
-            if frame is not None and frame is not last:
-                last = frame
-                frames_yielded += 1
-                log.debug("iter_frames: yielding frame #%d size=%d", frames_yielded, len(frame))
-                yield frame
-            elif frame is last:
-                stale_secs = time.monotonic() - self._last_frame_time
-                if stale_secs > 60:
-                    log.warning("iter_frames: no new frame for %.0fs — watchdog failed, raising to trigger browser retry", stale_secs)
-                    raise RuntimeError(f"RTSPSFrameBuffer stream stalled ({stale_secs:.0f}s)")
-        log.debug("iter_frames: client detached after %d frames", frames_yielded)
+                self._client_count -= 1
+                last_client = self._client_count == 0
+            if last_client:
+                # Wake the reader out of backoff sleep so it can see _client_count == 0.
+                self._client_wake_event.set()
+                # Close the container to interrupt a blocking container.decode() call
+                # in the reader thread.  Without this, the reader stays blocked in the
+                # C/SSL layer for up to the next frame interval — during which the
+                # browser JS reconnect timer (1 s) may fire and increment _client_count
+                # back to 1 before the reader ever checks it, creating an infinite loop.
+                with self._container_lock:
+                    _c = self._container
+                if _c is not None:
+                    log.warning(
+                        "iter_frames: last client detached — closing container to interrupt decode loop"
+                    )
+                    try:
+                        _c.close()
+                    except Exception:
+                        pass
+            log.debug(
+                "iter_frames: client detached after %d frames (remaining=%d)",
+                frames_yielded,
+                self._client_count,
+            )
 
     def close(self) -> None:
         log.debug("RTSPSFrameBuffer.close: stopping reader thread")
         with self._cond:
             self._running = False
             self._cond.notify_all()
+        self._client_wake_event.set()  # unblock any idle-waiting _reader_loop
         log.debug("RTSPSFrameBuffer.close: done")

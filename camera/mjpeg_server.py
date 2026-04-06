@@ -952,8 +952,9 @@ class _StreamHandler(BaseHTTPRequestHandler):
     def _serve_snapshot(self):
         """Return a single JPEG frame as image/jpeg and close the connection."""
         log.debug("_serve_snapshot: requested by %s", self.client_address)
+        _gen = self.server.frame_factory()
         try:
-            jpeg = next(iter(self.server.frame_factory()))
+            jpeg = next(_gen)
         except StopIteration:
             log.warning("_serve_snapshot: no frame available for %s", self.client_address)
             self.send_response(503)
@@ -964,6 +965,8 @@ class _StreamHandler(BaseHTTPRequestHandler):
             self.send_response(500)
             self.end_headers()
             return
+        finally:
+            _gen.close()  # always decrement _client_count; don't rely on GC
         log.debug("_serve_snapshot: serving %d bytes to %s", len(jpeg), self.client_address)
         self.send_response(200)
         self.send_header("Content-Type", "image/jpeg")

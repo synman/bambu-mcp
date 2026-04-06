@@ -29,14 +29,23 @@ import socket
 import tempfile
 from pathlib import Path
 
-from port_pool import assert_registered_port, _BAMBU_DAEMON_PORT_MIN, _BAMBU_DAEMON_PORT_MAX
-
 log = logging.getLogger(__name__)
 
+_BAMBU_DAEMON_PORT_MIN = 25000
+_BAMBU_DAEMON_PORT_MAX = 25099
 _DEFAULT_DAEMON_PORT = 25099
 _BAMBU_MCP_DIR = Path.home() / ".bambu-mcp"
 _PORT_FILE = _BAMBU_MCP_DIR / "daemon.port"
 _PID_FILE = _BAMBU_MCP_DIR / "daemon.pid"
+
+
+def assert_registered_port(port: int) -> None:
+    """Raise ValueError if port is outside the registered daemon range."""
+    if not (_BAMBU_DAEMON_PORT_MIN <= port <= _BAMBU_DAEMON_PORT_MAX):
+        raise ValueError(
+            f"port {port} outside registered range "
+            f"{_BAMBU_DAEMON_PORT_MIN}–{_BAMBU_DAEMON_PORT_MAX}"
+        )
 
 _daemon_mode: bool = False
 
@@ -52,38 +61,58 @@ def set_daemon_mode(enabled: bool = True) -> None:
     _daemon_mode = enabled
 
 
+def ensure_singleton() -> None:
+    """Enforce that only one bambu-mcp HTTP daemon can run at a time.
+
+    Checks the PID file for a live process. If one exists, raises
+    RuntimeError — the caller must not proceed with startup.
+
+    Raises:
+        RuntimeError: If a live daemon process is already running.
+    """
+    pid = read_pid_file()
+    if pid is not None and check_pid_alive(pid):
+        port = read_port_file()
+        raise RuntimeError(
+            f"bambu-mcp daemon already running (PID {pid}, port {port}). "
+            f"Stop it first with: ./bambu-mcp-daemon.sh stop"
+        )
+    # Stale files from a dead process — clean up before proceeding.
+    if read_pid_file() is not None or read_port_file() is not None:
+        log.warning("ensure_singleton: cleaning up stale PID/port files from dead daemon")
+        cleanup_files()
+
+
 def resolve_port() -> int:
     """Resolve the daemon port from the configured chain.
+
+    Singleton-safe: must only be called after ensure_singleton() has
+    confirmed no live daemon is running. The port is fixed — there is no
+    fallback scan. If the designated port is unavailable by something
+    other than a live bambu-mcp daemon, startup fails with OSError.
 
     Resolution order:
       1. BAMBU_MCP_PORT env var
       2. Vault pref pref-bambu-mcp-port (via secrets.py)
       3. Default: 25099
-      4. If preferred port unavailable: descending scan 25099→25000
 
     Returns:
-        An available port in the registered range 25000–25099.
+        The designated port for this daemon instance.
 
     Raises:
-        OSError: If no port in the range is available.
+        OSError: If the designated port is not available.
     """
-    preferred = _read_env_port() or _read_vault_port() or _DEFAULT_DAEMON_PORT
-    assert_registered_port(preferred)
+    port = _read_env_port() or _read_vault_port() or _DEFAULT_DAEMON_PORT
+    assert_registered_port(port)
 
-    if _is_port_available(preferred):
-        log.info("resolve_port: using port %d", preferred)
-        return preferred
+    if not _is_port_available(port):
+        raise OSError(
+            f"bambu-mcp daemon: designated port {port} is unavailable. "
+            f"Another process may be using it. Run: lsof -i :{port}"
+        )
 
-    log.info("resolve_port: preferred port %d unavailable, scanning", preferred)
-    for port in range(_BAMBU_DAEMON_PORT_MAX, _BAMBU_DAEMON_PORT_MIN - 1, -1):
-        if _is_port_available(port):
-            log.info("resolve_port: found available port %d", port)
-            return port
-
-    raise OSError(
-        f"bambu-mcp daemon: no available port in "
-        f"{_BAMBU_DAEMON_PORT_MIN}–{_BAMBU_DAEMON_PORT_MAX}"
-    )
+    log.info("resolve_port: using port %d", port)
+    return port
 
 
 def write_port_file(port: int) -> None:
