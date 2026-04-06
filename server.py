@@ -15,6 +15,8 @@ import logging
 import os
 import signal
 import sys
+
+import setproctitle
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
@@ -104,6 +106,35 @@ _root.addHandler(_stream_handler)
 _bpm_log_level = _log_level if os.environ.get("BAMBU_MCP_BPM_VERBOSE") else logging.WARNING
 logging.getLogger("bpm").setLevel(_bpm_log_level)
 log = logging.getLogger("bambu-mcp")
+
+# ── Runtime log-level management ───────────────────────────────────────────────
+_LOG_LEVEL_CYCLE = [logging.DEBUG, logging.INFO, logging.WARNING]
+
+
+def set_log_level(level_name: str) -> str:
+    """Update the root logger and file handler to *level_name* (case-insensitive).
+
+    The stderr handler is intentionally left at WARNING to avoid flooding the
+    Copilot stdio MCP transport.  The bpm logger is updated only when
+    BAMBU_MCP_BPM_VERBOSE is not set (i.e. when it tracks the root level).
+    """
+    level = getattr(logging, level_name.upper(), None)
+    if level is None:
+        raise ValueError(f"Unknown log level: {level_name!r}")
+    _root.setLevel(level)
+    _file_handler.setLevel(level)
+    if not os.environ.get("BAMBU_MCP_BPM_VERBOSE"):
+        logging.getLogger("bpm").setLevel(level)
+    log.warning("Log level changed to %s", logging.getLevelName(level))
+    return logging.getLevelName(level)
+
+
+def _cycle_log_level() -> None:
+    """Cycle through DEBUG → INFO → WARNING → DEBUG (SIGUSR1 handler)."""
+    current = _root.level
+    idx = _LOG_LEVEL_CYCLE.index(current) if current in _LOG_LEVEL_CYCLE else 2
+    next_level = _LOG_LEVEL_CYCLE[(idx + 1) % len(_LOG_LEVEL_CYCLE)]
+    set_log_level(logging.getLevelName(next_level))
 
 # ── FastMCP server ─────────────────────────────────────────────────────────────
 def _pkg_version() -> str:
@@ -317,7 +348,7 @@ def _startup() -> None:
 
     try:
         import api_server
-        api_server.start()
+        api_server.start(log_level_setter=set_log_level)
     except Exception as exc:
         log.warning(f"API server startup error: {exc}")
 
@@ -358,10 +389,13 @@ def _signal_handler(signum: int, _frame) -> None:
 for _sig in (signal.SIGTERM, signal.SIGINT):
     signal.signal(_sig, _signal_handler)
 
+signal.signal(signal.SIGUSR1, lambda _sig, _frame: _cycle_log_level())
+
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 def main() -> None:
     """Entry point for the bambu-mcp CLI script."""
+    setproctitle.setproctitle("bambu-mcp")
     transport = "stdio"
     for i, arg in enumerate(sys.argv[1:], 1):
         if arg in ("--transport", "-t") and i < len(sys.argv) - 1:
@@ -369,7 +403,24 @@ def main() -> None:
         elif arg in ("sse", "stdio", "streamable-http"):
             transport = arg
 
-    if transport == "stdio":
+    if transport == "streamable-http":
+        import atexit
+        import threading
+        import daemon_port as _dp
+        _dp.ensure_singleton()  # hard stop if a live daemon already exists
+        _dp.set_daemon_mode(True)
+        _port = _dp.resolve_port()
+        _dp.write_pid_file()
+        _dp.write_port_file(_port)
+        atexit.register(_dp.cleanup_files)
+        mcp.settings.host = "127.0.0.1"
+        mcp.settings.port = _port
+        # Run startup in a background thread — printer SSL handshakes can block
+        # for 30+ seconds, exceeding the daemon script's port-file wait window.
+        threading.Thread(target=_startup, daemon=True, name="bambu-mcp-startup").start()
+        log.info(f"Starting Bambu Lab MCP server (transport: {transport}, port: {_port})")
+        mcp.run(transport=transport)
+    elif transport == "stdio":
         # Run startup in a background thread so mcp.run() can respond to the
         # MCP initialize request immediately. Copilot CLI has a 60s init timeout;
         # printer SSL handshakes block startup long enough to exceed it. Tools
@@ -377,11 +428,12 @@ def main() -> None:
         # and become fully functional once established.
         import threading
         threading.Thread(target=_startup, daemon=True, name="bambu-mcp-startup").start()
+        log.info(f"Starting Bambu Lab MCP server (transport: {transport})")
+        mcp.run(transport=transport)
     else:
         _startup()
-
-    log.info(f"Starting Bambu Lab MCP server (transport: {transport})")
-    mcp.run(transport=transport)
+        log.info(f"Starting Bambu Lab MCP server (transport: {transport})")
+        mcp.run(transport=transport)
 
 
 if __name__ == "__main__":

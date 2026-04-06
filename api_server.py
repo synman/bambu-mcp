@@ -66,6 +66,7 @@ _werkzeug_server = None  # holds make_server instance for clean shutdown
 _port: int = 0           # set by start(); 0 = not running
 _zc_instance = None      # Zeroconf instance for mDNS service registration
 _zc_info = None          # ServiceInfo registered with Zeroconf
+_log_level_setter = None  # callable(level_name: str) -> str, injected by server.py
 _UPLOADS = os.path.join(os.path.dirname(__file__), "uploads")
 
 DEFAULT_PRINTER = os.environ.get("BAMBU_API_PRINTER", "")
@@ -302,6 +303,8 @@ _ROUTE_TAGS: dict[str, str] = {
     "toggle_session": "System",
     "dump_log": "System",
     "truncate_log": "System",
+    "log_level": "System",
+    "set_log_level": "System",
     "server_info": "System",
     "get_openapi_spec": "System",
     "api_docs": "System",
@@ -2290,6 +2293,29 @@ def _build_app():
             log.error("truncate_log: error: %s", e, exc_info=True)
             return _err(str(e))
 
+    @app.route("/api/log_level")
+    def get_log_level():
+        """Return the current root log level name."""
+        import logging as _lg
+        return _ok(level=_lg.getLevelName(_lg.getLogger().level))
+
+    @app.route("/api/set_log_level", methods=["POST"])
+    def set_log_level_route():
+        """Change the runtime log level.
+
+        Query param: level=DEBUG|INFO|WARNING|ERROR|CRITICAL
+        """
+        level = request.args.get("level", "").upper()
+        if not level:
+            return _err("level parameter required"), 400
+        if _log_level_setter is None:
+            return _err("log level setter not registered"), 503
+        try:
+            new_level = _log_level_setter(level)
+            return _ok(level=new_level)
+        except ValueError as e:
+            return _err(str(e)), 400
+
     # ── server info ───────────────────────────────────────────────────────────
 
     @app.route("/api/server_info")
@@ -2877,7 +2903,7 @@ def _unregister_mdns() -> None:
         _zc_info = None
 
 
-def start(port: int | None = None) -> int:
+def start(port: int | None = None, log_level_setter=None) -> int:
     """
     Start the bambu-mcp-api HTTP server in a background non-daemon thread.
 
@@ -2897,6 +2923,9 @@ def start(port: int | None = None) -> int:
         port: Preferred TCP port.  If None, BAMBU_API_PORT env var is used as hint
               (or pool rotation starts from BAMBU_PORT_POOL_START = 49152 by default).
               Ignored if the server is already running.
+        log_level_setter: Optional callable(level_name: str) -> str injected by
+              server.py so HTTP routes can change the root log level without a
+              circular import.
 
     Returns:
         The port the server is (or was already) listening on.
@@ -2905,7 +2934,9 @@ def start(port: int | None = None) -> int:
         RuntimeError: If Flask is unavailable or the app fails to build.
         OSError: If the port pool is exhausted (all 100 pool ports are in use).
     """
-    global _flask_app, _server_thread, _werkzeug_server, _port
+    global _flask_app, _server_thread, _werkzeug_server, _port, _log_level_setter
+    if log_level_setter is not None:
+        _log_level_setter = log_level_setter
     log.debug("start: called port=%s", port)
 
     if _server_thread is not None and _server_thread.is_alive():

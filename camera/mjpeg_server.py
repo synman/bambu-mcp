@@ -1026,8 +1026,9 @@ class _StreamHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Pragma", "no-cache")
         self.end_headers()
+        _gen = self.server.frame_factory()
         try:
-            for jpeg in self.server.frame_factory():
+            for jpeg in _gen:
                 if not self.server._running:
                     break
                 if apply_transform:
@@ -1053,6 +1054,8 @@ class _StreamHandler(BaseHTTPRequestHandler):
             log.warning("_serve_stream: client %s disconnected: %s", self.client_address, e)
         else:
             log.info("stream_disconnect: client=%s reason=normal", self.client_address[0])
+        finally:
+            _gen.close()
         log.debug("_serve_stream: stream ended for client %s", self.client_address)
 
     def log_message(self, format, *args):

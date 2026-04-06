@@ -91,21 +91,35 @@ _THRESH_CRIT    = 0.20  # score → critical
 # ---------------------------------------------------------------------------
 # Module-level per-printer reference store
 # ---------------------------------------------------------------------------
+_REFERENCE_TTL = 600  # seconds — evict stale reference frames after 10 minutes
 _references: dict[str, tuple[bytes, float]] = {}   # name → (jpeg_bytes, timestamp)
 
 
 def store_reference(name: str, jpeg: bytes) -> None:
-    _references[name] = (jpeg, time.monotonic())
-    log.debug("store_reference: stored %d bytes for %s", len(jpeg), name)
+    now = time.monotonic()
+    stale = [k for k, (_, ts) in _references.items() if now - ts > _REFERENCE_TTL]
+    for k in stale:
+        del _references[k]
+    if stale:
+        log.debug("store_reference: evicted %d stale entries", len(stale))
+    _references[name] = (jpeg, now)
+    log.debug("store_reference: stored %d bytes for %s (total=%d)", len(jpeg), name, len(_references))
 
 
 def get_reference(name: str) -> tuple[Optional[bytes], Optional[float]]:
-    """Return (jpeg_bytes, age_seconds) or (None, None) if no reference stored."""
+    """Return (jpeg_bytes, age_seconds) or (None, None) if no reference stored or expired."""
     entry = _references.get(name)
     if entry is None:
+        log.debug("get_reference: miss (not stored) for %s", name)
         return None, None
     jpeg, ts = entry
-    return jpeg, time.monotonic() - ts
+    age = time.monotonic() - ts
+    if age > _REFERENCE_TTL:
+        del _references[name]
+        log.debug("get_reference: TTL expired (age=%.1fs) for %s", age, name)
+        return None, None
+    log.debug("get_reference: hit for %s age=%.1fs size=%d", name, age, len(jpeg))
+    return jpeg, age
 
 
 def clear_reference(name: str) -> None:
@@ -1623,6 +1637,7 @@ def analyze(
     # Decode frame
     img_pil  = Image.open(io.BytesIO(frame_jpeg)).convert("RGB")
     W, H     = img_pil.size
+    log.debug("analyze: input dims=%dx%d", W, H)
     frame_rgb = np.array(img_pil)
 
     # Decode reference
@@ -1699,6 +1714,7 @@ def analyze(
         _ph = round(1.0 - score, 4)   # fallback: raw anomaly score inversion
 
     _dc = compute_decision_confidence(window_size, _stage_gated, printer_context)
+    log.debug("analyze: verdict=%s score=%.3f confidence=%.3f stage_gated=%s", verdict, score, _dc or 0.0, _stage_gated)
 
     health_panel_png = _build_health_panel_png(
         tw * 2 + 2, verdict, score, printer_context,
