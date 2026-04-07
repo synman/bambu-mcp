@@ -598,6 +598,11 @@ def start_stream(name: str, port: int | None = None) -> dict:
                                  frame_transform_fn=_resize_camera_frame)
         allocated_port = int(url.split(":")[-1].rstrip("/"))
         log.info("start_stream: server started for '%s' at %s protocol=%s", name, url, protocol)
+        # Auto-stop: tear down when all MJPEG consumers disconnect.
+        # Mirrors on-demand start — stream auto-restarts on next view_stream() call.
+        if hasattr(session, '_on_idle'):
+            session._on_idle = lambda n=name: mjpeg_server.stop(n)
+            log.debug("start_stream: auto-stop wired for %s", name)
         return {"url": url, "port": allocated_port, "protocol": protocol}
     except Exception as e:
         log.error("start_stream: exception: %s", e, exc_info=True)

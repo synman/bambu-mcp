@@ -227,6 +227,10 @@ class RTSPSFrameBuffer:
         log.debug("RTSPSFrameBuffer.__init__: ip=%s timeout=%s", ip, timeout)
         self._client_count = 0
         self._client_wake_event = threading.Event()
+        # Settable after construction (to avoid circular dependency at creation time).
+        # When set, _schedule_idle_stop() calls this after 10s with no consumers.
+        # Typically: lambda: mjpeg_server.stop(name)
+        self._on_idle: "Callable[[], None] | None" = None
         self._thread = threading.Thread(target=self._reader_loop, daemon=True,
                                         name=f"rtsps-cam-{ip}")
         self._thread.start()
@@ -461,11 +465,40 @@ class RTSPSFrameBuffer:
                 # to return errSSLClosedAbort immediately.
                 log.warning("iter_frames[%s]: last client detached — interrupting decode", self._ip)
                 self._interrupt_decode()
+                # Tear down the whole pipeline after 10s idle — auto-stop on zero consumers.
+                # Stream restarts automatically on next view_stream() call.
+                self._schedule_idle_stop()
             log.debug(
                 "iter_frames: client detached after %d frames (remaining=%d)",
                 frames_yielded,
                 self._client_count,
             )
+
+    def _schedule_idle_stop(self) -> None:
+        """Schedule stream teardown 10s after all consumers disconnect.
+
+        Called from iter_frames() finally when the last client detaches.
+        The grace period tolerates brief reconnects — browser refresh or single-frame
+        /snapshot requests — without tearing down the whole RTSPS pipeline.
+
+        on_idle() (= mjpeg_server.stop) blocks internally on server.shutdown(), so it
+        MUST run on a daemon thread; calling it from inside a request handler would deadlock.
+        """
+        on_idle = self._on_idle
+        if on_idle is None:
+            return
+        ip = self._ip
+
+        def _delayed() -> None:
+            time.sleep(10.0)
+            if self._running and self._client_count == 0:
+                log.info("RTSPSFrameBuffer[%s]: no consumers for 10s — auto-stopping stream", ip)
+                try:
+                    on_idle()
+                except Exception as exc:
+                    log.warning("RTSPSFrameBuffer[%s]: on_idle error: %s", ip, exc)
+
+        threading.Thread(target=_delayed, daemon=True, name=f"rtsps-idle-{ip}").start()
 
     def close(self) -> None:
         log.debug("RTSPSFrameBuffer.close: stopping reader thread")
@@ -473,4 +506,5 @@ class RTSPSFrameBuffer:
             self._running = False
             self._cond.notify_all()
         self._client_wake_event.set()  # unblock any idle-waiting _reader_loop
+        self._interrupt_decode()       # force SSLRead to return if reader is active
         log.debug("RTSPSFrameBuffer.close: done")
