@@ -23,9 +23,15 @@ worker threads.
 
 from __future__ import annotations
 
+import ctypes
+import ctypes.util
 import gc
 import io
 import logging
+import os
+import platform
+import socket
+import struct
 import threading
 import time
 from typing import Iterator
@@ -41,6 +47,89 @@ _RTSPS_CRED_RE = __import__("re").compile(r"(rtsps://bblp:)[^@]+(@)")
 def _redact_url(text: str) -> str:
     """Replace access codes in rtsps:// URLs with '****'."""
     return _RTSPS_CRED_RE.sub(r"\1****\2", text)
+
+
+# libc handle for raw getpeername()/shutdown() syscalls — no socket.fromfd() dup needed.
+try:
+    _libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6", use_errno=True)
+except Exception:
+    _libc = None
+
+# sockaddr_in layout: BSD/macOS prefixes a 1-byte sin_len before sin_family; Linux does not.
+_FAMILY_OFFSET = 1 if platform.system() == "Darwin" else 0
+_FAMILY_FMT = "B" if platform.system() == "Darwin" else "H"
+
+
+def _find_camera_fd(target_ip: str) -> int | None:
+    """Scan open FDs of this process for a TCP socket connected to target_ip:322.
+
+    Calls getpeername() via ctypes — avoids socket.fromfd() which would dup() the FD.
+    Returns the raw integer FD, or None if not found.
+    """
+    if _libc is None:
+        return None
+    try:
+        resolved = socket.gethostbyname(target_ip)
+    except OSError:
+        resolved = target_ip
+    try:
+        fd_names = os.listdir("/dev/fd")
+    except OSError:
+        return None
+
+    buf = ctypes.create_string_buffer(28)  # large enough for sockaddr_in
+    alen = ctypes.c_uint32(28)
+    for name in fd_names:
+        try:
+            fd = int(name)
+        except ValueError:
+            continue
+        alen.value = 28
+        if _libc.getpeername(fd, buf, ctypes.byref(alen)) != 0:
+            continue
+        # sin_family offset differs between macOS (offset 1, uint8) and Linux (offset 0, uint16)
+        if struct.unpack_from(_FAMILY_FMT, buf.raw, _FAMILY_OFFSET)[0] != socket.AF_INET:
+            continue
+        # sin_port at offset 2 (network byte order), sin_addr at offset 4
+        if socket.ntohs(struct.unpack_from("H", buf.raw, 2)[0]) != 322:
+            continue
+        if socket.inet_ntoa(buf.raw[4:8]) == resolved:
+            log.debug("_find_camera_fd: FD=%d for %s:322", fd, resolved)
+            return fd
+    log.debug("_find_camera_fd: no match for %s:322", target_ip)
+    return None
+
+
+def _shutdown_fd(fd: int) -> bool:
+    """Shut down both ends of socket FD to interrupt a blocking read (e.g. SSLRead).
+
+    Does NOT close the FD — FFmpeg can still call close() on it afterwards.
+    Returns True on success.
+    """
+    if _libc is None:
+        return False
+    return _libc.shutdown(fd, 2) == 0  # SHUT_RDWR = 2 on POSIX
+
+
+def _set_rcvtimeo(fd: int, seconds: int) -> bool:
+    """Set SO_RCVTIMEO on a raw socket FD to bound SSLRead blocking duration.
+
+    SO_RCVTIMEO is a BSD kernel option applied inside SSLRead/poll. It forces
+    the syscall to return ETIMEDOUT after `seconds` seconds with no data,
+    giving FFmpeg a chance to check its interrupt state and allowing the reader
+    thread to detect _client_count == 0 without waiting for the next frame.
+
+    timeval layout on macOS 64-bit: struct { long tv_sec; long tv_usec; } = 16 bytes.
+    On Linux 64-bit the layout is identical. Verified via setsockopt with both
+    'li' (12 bytes, fails) and 'll' (16 bytes, succeeds) formats on macOS 15.
+    Does NOT tear down the connection — reader can retry normally after ETIMEDOUT.
+    """
+    if _libc is None:
+        return False
+    SO_RCVTIMEO = 4102 if platform.system() == "Darwin" else 20
+    tv = struct.pack("ll", seconds, 0)  # 16 bytes on 64-bit
+    ret = _libc.setsockopt(fd, socket.SOL_SOCKET, SO_RCVTIMEO, tv, len(tv))
+    return ret == 0
 
 
 _AV_OPTIONS = {
@@ -134,6 +223,7 @@ class RTSPSFrameBuffer:
         self._last_frame_time: float = time.monotonic()
         self._container_lock = threading.Lock()
         self._container = None  # current av.InputContainer; written by reader, read by watchdog
+        self._camera_fd: int | None = None  # TCP socket FD for the active RTSPS connection
         log.debug("RTSPSFrameBuffer.__init__: ip=%s timeout=%s", ip, timeout)
         self._client_count = 0
         self._client_wake_event = threading.Event()
@@ -159,12 +249,22 @@ class RTSPSFrameBuffer:
                 url = _build_url(self._ip, self._access_code)
                 options = dict(_AV_OPTIONS)
                 options["stimeout"] = str(int(self._timeout * 1_000_000))
-                options["timeout"] = str(int(self._timeout * 1_000_000))
+                options["rw_timeout"] = "3000000"
                 log.debug("_reader_loop: calling av.open url=rtsps://bblp:<redacted>@%s:322/...", self._ip)
-                container = av.open(url, options=options)
+                container = av.open(url, options=options, timeout=(self._timeout, 2.0))
                 log.debug("_reader_loop: av.open succeeded")
+                # Capture the TCP socket FD so we can interrupt SSLRead via shutdown()
+                # when the last client detaches.  container.close() from another thread
+                # cannot interrupt a concurrent SSLRead on macOS (SSLContextRef lock).
+                cam_fd = _find_camera_fd(self._ip)
+                if cam_fd is not None:
+                    ok = _set_rcvtimeo(cam_fd, 2)
+                    log.debug("_reader_loop: SO_RCVTIMEO(2s) on FD=%d → %s", cam_fd, "ok" if ok else "failed")
+                else:
+                    log.debug("_reader_loop: camera_fd not found — SO_RCVTIMEO not set")
                 with self._container_lock:
                     self._container = container
+                    self._camera_fd = cam_fd
                 frames_received = 0
                 backoff = 1.0  # reset on successful connect
 
@@ -187,13 +287,17 @@ class RTSPSFrameBuffer:
                 log.warning("_reader_loop: stream ended after %d frames, reconnecting", frames_received)
 
             except Exception as e:
-                log.warning(
-                    "_reader_loop: error: %s — reconnecting in %.0fs",
-                    _redact_url(str(e)), backoff,
-                )
+                if self._client_count == 0:
+                    log.debug("_reader_loop: read timeout with no clients — going idle")
+                else:
+                    log.warning(
+                        "_reader_loop: error: %s — reconnecting in %.0fs",
+                        _redact_url(str(e)), backoff,
+                    )
             finally:
                 with self._container_lock:
                     self._container = None
+                    self._camera_fd = None
                 if container is not None:
                     try:
                         container.close()
@@ -238,13 +342,10 @@ class RTSPSFrameBuffer:
                     container = self._container
                 if container is not None:
                     log.warning(
-                        "_watchdog_loop[%s]: zero clients but container open — closing to stop decode loop",
+                        "_watchdog_loop[%s]: zero clients but container open — interrupting decode",
                         self._ip,
                     )
-                    try:
-                        container.close()
-                    except Exception as e:
-                        log.debug("_watchdog_loop: error closing container: %s", e)
+                    self._interrupt_decode()
                 continue
             stale_secs = time.monotonic() - self._last_frame_time
             if stale_secs >= 30:
@@ -260,6 +361,40 @@ class RTSPSFrameBuffer:
                     except Exception as e:
                         log.debug("_watchdog_loop: error closing container: %s", e)
         log.debug("_watchdog_loop: exiting (running=False)")
+
+    def _interrupt_decode(self) -> None:
+        """Interrupt a blocking container.decode() call by shutting down the camera socket.
+
+        On macOS, container.close() from a different thread cannot interrupt SSLRead
+        because macOS SSLContextRef serializes access — the close blocks until the reader
+        thread releases the lock (which never happens while SSLRead is outstanding).
+
+        Instead, we shut down the underlying TCP socket FD via shutdown(SHUT_RDWR).
+        This is handled by the kernel: SSLRead returns errSSLClosedAbort immediately,
+        PyAV raises av.AVError, and the reader thread's except block sees _client_count==0
+        and transitions to idle-wait.
+
+        Falls back to container.close() only if no socket FD was captured (e.g. if
+        _find_camera_fd failed to locate the connection).
+        """
+        with self._container_lock:
+            fd = self._camera_fd
+            container = self._container
+        if fd is not None:
+            ok = _shutdown_fd(fd)
+            log.warning(
+                "_interrupt_decode[%s]: shutdown(SHUT_RDWR) FD=%d → %s",
+                self._ip, fd, "ok" if ok else "failed",
+            )
+        elif container is not None:
+            log.warning(
+                "_interrupt_decode[%s]: no camera_fd, falling back to container.close()",
+                self._ip,
+            )
+            try:
+                container.close()
+            except Exception:
+                pass
 
     def wait_first_frame(self, timeout: float = 15.0) -> bool:
         """Block until the first frame is available or timeout. Returns True if a frame arrived."""
@@ -298,7 +433,7 @@ class RTSPSFrameBuffer:
             while self._running:
                 with self._cond:
                     if self._last_frame is last:
-                        self._cond.wait(timeout=30)
+                        self._cond.wait(timeout=5)
                     frame = self._last_frame
                 if not self._thread.is_alive():
                     log.error("iter_frames: reader thread died — raising to trigger browser retry")
@@ -310,7 +445,7 @@ class RTSPSFrameBuffer:
                     yield frame
                 elif frame is last:
                     stale_secs = time.monotonic() - self._last_frame_time
-                    if stale_secs > 60:
+                    if stale_secs > 10:
                         log.warning("iter_frames: no new frame for %.0fs — watchdog failed, raising to trigger browser retry", stale_secs)
                         raise RuntimeError(f"RTSPSFrameBuffer stream stalled ({stale_secs:.0f}s)")
         finally:
@@ -320,21 +455,12 @@ class RTSPSFrameBuffer:
             if last_client:
                 # Wake the reader out of backoff sleep so it can see _client_count == 0.
                 self._client_wake_event.set()
-                # Close the container to interrupt a blocking container.decode() call
-                # in the reader thread.  Without this, the reader stays blocked in the
-                # C/SSL layer for up to the next frame interval — during which the
-                # browser JS reconnect timer (1 s) may fire and increment _client_count
-                # back to 1 before the reader ever checks it, creating an infinite loop.
-                with self._container_lock:
-                    _c = self._container
-                if _c is not None:
-                    log.warning(
-                        "iter_frames: last client detached — closing container to interrupt decode loop"
-                    )
-                    try:
-                        _c.close()
-                    except Exception:
-                        pass
+                # Interrupt the blocking container.decode() call by shutting down the
+                # TCP socket.  container.close() from this thread cannot interrupt SSLRead
+                # on macOS — use socket shutdown(SHUT_RDWR) instead, which forces SSLRead
+                # to return errSSLClosedAbort immediately.
+                log.warning("iter_frames[%s]: last client detached — interrupting decode", self._ip)
+                self._interrupt_decode()
             log.debug(
                 "iter_frames: client detached after %d frames (remaining=%d)",
                 frames_yielded,
