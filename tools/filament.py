@@ -162,7 +162,7 @@ def set_ams_filament_setting(
     ams_id = _resolve_ams_id(name, unit_id)
     if ams_id is None:
         return f"Error: AMS unit {unit_id} not found on '{name}'."
-    tray_id = ams_id * 4 + slot_id
+    tray_id = ams_id + slot_id if ams_id >= 128 else ams_id * 4 + slot_id
     try:
         log.debug("set_ams_filament_setting: calling printer.set_spool_details for %s", name)
         printer.set_spool_details(
