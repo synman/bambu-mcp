@@ -31,6 +31,7 @@ log = logging.getLogger(__name__)
 from session_manager import session_manager
 from camera.mjpeg_server import mjpeg_server
 from camera.protocol import get_protocol, get_rtsps_url
+from camera.status_helpers import build_active_filament
 
 # ---------------------------------------------------------------------------
 # Active RTSPS stream registry — allows _capture_jpeg to reuse a live stream
@@ -68,24 +69,7 @@ def _build_status(name: str) -> dict:
         active_errors = len(active_error_list)
 
         # Active filament swatch (E4)
-        active_tray_id = getattr(state, "active_tray_id", -1)
-        active_spool = next(
-            (s for s in (state.spools or []) if s.id == active_tray_id),
-            None
-        ) if active_tray_id not in (-1, 255) else None
-        active_filament = None
-        if active_spool:
-            color = active_spool.color or ""
-            # Normalise bare 6-char hex to #RRGGBB
-            if color and not color.startswith("#") and len(color) == 6 and all(
-                c in "0123456789abcdefABCDEF" for c in color
-            ):
-                color = "#" + color
-            active_filament = {
-                "type": active_spool.type or "",
-                "color": color,
-                "remaining_pct": active_spool.remaining_percent,
-            }
+        active_filament = build_active_filament(state)
 
         # AMS humidity for the active AMS unit (E7)
         active_ams_id = getattr(state, "active_ams_id", -1)
@@ -514,10 +498,26 @@ def start_stream(name: str, port: int | None = None) -> dict:
                 # No active job — return whatever is cached (disk-loaded or last known).
                 return _img_cache.get("thumbnail"), _img_cache.get("layout")
 
-            # Derive the SD-card 3MF path from subtask_name (e.g. "H2D H2S main riser 2025-9-19"
-            # → "/_jobs/H2D H2S main riser 2025-9-19.gcode.3mf") and plate_num from the
-            # gcode_file path (e.g. "/data/Metadata/plate_3.gcode" → 3).
-            tmf_path = f"/_jobs/{job.subtask_name}.gcode.3mf"
+            # Find the 3MF path by searching the SD card file cache by filename.
+            # Files may be anywhere on the SD card; never assume a fixed directory.
+            tmf_name = f"{job.subtask_name}.gcode.3mf"
+            tmf_path = None
+            try:
+                from bpm.bambuproject import get_3mf_entry_by_name as _bpm_find
+                _pr = session_manager.get_printer(n)
+                if _pr is not None:
+                    _tree = _pr.get_sdcard_3mf_files()
+                    if _tree:
+                        _entry = _bpm_find(_tree, tmf_name)
+                        if _entry:
+                            tmf_path = _entry.get("id")
+            except Exception as _fe:
+                log.debug("_get_images: 3mf lookup failed: %s", _fe)
+
+            if not tmf_path:
+                log.debug("_get_images: %s not found in SD card cache", tmf_name)
+                return _img_cache.get("thumbnail"), _img_cache.get("layout")
+
             m = re.search(r"plate_(\d+)", job.gcode_file or "")
             plate_num = int(m.group(1)) if m else 1
 

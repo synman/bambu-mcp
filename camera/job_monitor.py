@@ -27,6 +27,8 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
+from camera.status_helpers import build_active_filament
+
 _PERSIST_DIR = Path.home() / ".bambu-mcp"
 
 
@@ -698,23 +700,7 @@ def _build_context(printer_name: str, state) -> dict:
     _flow_type = getattr(getattr(_active_nozzle, "flow_type", None), "name", "STANDARD") if _active_nozzle else "STANDARD"
 
     # Active filament (mirrors tools/camera.py _build_status logic)
-    active_filament = None
-    active_tray_id = getattr(state, "active_tray_id", -1)
-    if active_tray_id not in (-1, 255):
-        active_spool = next(
-            (s for s in (state.spools or []) if s.id == active_tray_id), None
-        )
-        if active_spool:
-            color = active_spool.color or ""
-            if color and not color.startswith("#") and len(color) == 6 and all(
-                c in "0123456789abcdefABCDEF" for c in color
-            ):
-                color = "#" + color
-            active_filament = {
-                "type": active_spool.type or "",
-                "color": color,
-                "remaining_pct": active_spool.remaining_percent,
-            }
+    active_filament = build_active_filament(state)
 
     return {
         "job_name":              (job.subtask_name or job.gcode_file or "") if job else "",
