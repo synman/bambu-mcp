@@ -197,9 +197,13 @@ def load_filament(
     Requires user_permission=True.
 
     H2D dual-extruder wiring (fixed by hardware):
-    - AMS 2 Pro (chip_id 0, unit_id 0) → RIGHT extruder (extruder 0).
-    - AMS HT (chip_id 128, unit_id 1) → LEFT extruder (extruder 1).
+    - AMS 2 Pro → RIGHT extruder (extruder 0).
+    - AMS HT → LEFT extruder (extruder 1).
     Loading from a given AMS unit automatically targets its paired extruder.
+
+    To find the correct unit_id: call get_ams_units() and use the positional
+    index (0-based) of the desired unit in the returned list. chip_ids (ams_id)
+    are hardware-assigned and should never be hardcoded.
 
     ⛔ BLOCKED during active prints (gcode_state RUNNING or PREPARE).
     Defense-in-depth: AMS locks slots during prints and firmware rejects the

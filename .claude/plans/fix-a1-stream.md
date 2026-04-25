@@ -4,7 +4,7 @@
 |-------|-------|
 | Date | 2026-03-16 13:28 EDT |
 | Model | claude-opus-4-6[1m] |
-| Status | PENDING APPROVAL |
+| Status | ABANDONED |
 | Scope | bambu-mcp |
 | Repos | `bambu-mcp` |
 | Files touched | 2 |
@@ -67,8 +67,7 @@ The frame header is a 16-byte struct with a uint32 payload size in the first 4 b
 
 ## Quality Gate Checklist
 
-| Gate | Status |
-|------|--------|
+| Gate | Status | ABANDONED |------|--------|
 | 1. Scope Definition | PASS — two bugs, two one-line fixes |
 | 2. Current State | PASS — read source files, confirmed both bugs; infrastructure audit: no existing systems apply |
 | 3. Impact & Dependency | PASS — secrets_store change affects all stored scalars (safe: coercion preserves original string); tcp_stream fix is A1/P1 only (RTSPS printers unaffected) |

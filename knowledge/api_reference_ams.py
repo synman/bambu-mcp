@@ -52,7 +52,13 @@ Returns list of {"ams_f_bind": int, "ams_s_bind": int, "extruder": int}.
 
 #### set_spool_details(tray_id: int, tray_info_idx: str, tray_id_name: str | None = "", tray_type: str | None = "", tray_color: str | None = "", nozzle_temp_min: int | None = -1, nozzle_temp_max: int | None = -1, ams_id: int | None = 0) -> None
 Sets spool/tray filament type, color, temp range. Publishes AMS_FILAMENT_SETTING.
-- tray_id: absolute tray ID (ams_id * 4 + slot_id, or 254 for external)
+- tray_id: absolute tray ID = chip_id + slot_id, where chip_id is ams_unit.ams_id
+    from live telemetry (get_ams_units()). External spool = 254.
+    NEVER hardcode chip_ids — they are hardware-assigned per unit and vary across
+    printer configurations. NEVER use unit_index * 4 + slot_id (positional — wrong
+    for AMS HT) or chip_id * 4 + slot_id (gives 512 for AMS HT — wrong).
+    Always call get_ams_units() first, find the target unit by model or assigned_to_extruder,
+    read its ams_id (chip_id), then compute tray_id = ams_id + slot_id.
 - tray_info_idx: filament catalog code (e.g. "GFA00"). Pass "no_filament" to clear tray.
   This is a primary identity field — encodes base profile (temps, drying, flow).
 - tray_id_name: Bambu Lab vendor-specific brand label (e.g. "Bambu PLA Basic"). Optional

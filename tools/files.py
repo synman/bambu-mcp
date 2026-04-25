@@ -615,11 +615,22 @@ def print_file(
     prints without AMS).
     ams_mapping overrides the AMS slot assignment baked into the .3mf file. Provide
     a JSON array string or a list of integers where each element is an absolute
-    tray_id for the corresponding filament slot in the file. tray_id encoding:
-    ams_unit_index * 4 + slot (0–3).
-    Examples: slot 0 of AMS unit 0 = 0, slot 1 of AMS unit 0 = 1, slot 0 of AMS
-    unit 1 = 4. External spool holder = 254. Unmapped filament = -1.
-    Example: "[1, -1, -1, -1]" or [1, -1, -1, -1] maps filament 1 to AMS unit 0 slot 1, rest unmapped.
+    tray_id for the corresponding filament slot in the file.
+
+    tray_id encoding — ALWAYS derive from live telemetry, NEVER hardcode:
+      tray_id = ams_unit.ams_id + slot_id
+      where ams_unit.ams_id is the hardware chip_id from get_ams_units().
+    chip_ids are hardware-assigned and vary across printer configurations.
+    NEVER use unit_index * 4 + slot_id — this is WRONG for AMS HT and any
+    multi-AMS setup. External spool holder = 254. Unmapped filament = -1.
+
+    Correct workflow:
+      1. Call get_ams_units() to get each unit's ams_id (chip_id).
+      2. For each filament slot: tray_id = target_unit.ams_id + slot_id.
+      3. Build ams_mapping array in filament-slot order from the .3mf file.
+
+    Example: if AMS 2 Pro has ams_id=0, slot 1 → tray_id=1.
+             if AMS HT has ams_id=128, slot 0 → tray_id=128.
     When ams_mapping is provided, use_ams is automatically set to True.
     Always call get_project_info() first to see what filament slots the .3mf requires,
     then map those slots to the physical AMS slots you want to use.

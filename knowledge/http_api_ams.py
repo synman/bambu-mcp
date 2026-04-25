@@ -61,7 +61,7 @@ Only works for RFID-equipped Bambu Lab spools. Returns `{"success": true}`.
 Update filament metadata for an AMS slot.
 
 Query parameters:
-- `tray_id` (required) — absolute tray id (ams_unit_index × 4 + slot_index)
+- `tray_id` (required) — absolute tray id: `chip_id + slot_id`, where chip_id = `ams_unit.ams_id` from `get_ams_units()` live telemetry. NEVER use `unit_index × 4 + slot_id`.
 - `tray_info_idx` (optional) — Bambu filament catalog ID, e.g. `GFA00`
 - `tray_color` (optional) — hex color string, e.g. `FF0000`
 - `nozzle_temp_min` (optional) — integer °C
@@ -120,7 +120,7 @@ Returns `{"success": true}`.
 Select an extrusion calibration profile for a filament slot.
 
 Query parameters:
-- `tray_id` (required) — absolute tray ID: `ams_unit_index × 4 + slot` (0–3); external spool = `254`
+- `tray_id` (required) — absolute tray ID: `chip_id + slot` where chip_id = `ams_unit.ams_id` from `get_ams_units()`. NEVER use `unit_index × 4 + slot`. External spool = `254`.
 - `cali_idx` (optional, default `-1`) — index of the saved calibration profile to activate;
   use `-1` to let the printer automatically select the best matching profile for the loaded filament
 

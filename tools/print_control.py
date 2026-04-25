@@ -374,11 +374,13 @@ def select_extrusion_calibration(
     printed lines match the intended dimensions.
 
     tray_id: the absolute tray identifier for the filament slot to calibrate.
-    Encoding: ams_unit_index * 4 + slot (0–3). Examples:
-      - 0 = AMS unit 0, slot 0 (first AMS, first slot)
-      - 1 = AMS unit 0, slot 1
-      - 4 = AMS unit 1, slot 0 (second AMS, first slot)
-      - 254 = external spool holder
+    tray_id = ams_unit.ams_id + slot_id, where ams_unit.ams_id is the hardware
+    chip_id read from get_ams_units() live telemetry — never hardcode.
+    NEVER use unit_index * 4 + slot_id (wrong for AMS HT and multi-AMS setups).
+    Examples (chip_ids from get_ams_units().ams_id):
+      - AMS 2 Pro ams_id=0, slot 1 → tray_id=1
+      - AMS HT ams_id=128, slot 0 → tray_id=128
+      - External spool holder → tray_id=254
     cali_idx: the index of the saved calibration profile to activate. Use -1
     to let the printer automatically select the best matching profile for the
     loaded filament. Use get_spool_info() to see currently loaded filaments
