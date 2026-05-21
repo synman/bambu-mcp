@@ -66,6 +66,45 @@ Retrieves the latest result from the **background job monitor daemon**, which au
 - Accumulates a 5-sample confidence window; `stable_verdict` is reliable after 3 cycles
 - Skips analysis when the stage is not 255 (filament change, pause, heating, etc.)
 
+---
+
+## Tool Selection Heuristic — analyze_active_job vs get_print_progress
+
+**The key decision**: Does the printer have a camera and is a print active?
+
+### When to use get_print_progress
+- **Programmatic checks**: Dashboard-style queries, automation, or numeric data extraction
+- **No camera available**: Printer model has no camera (`has_camera=False`)
+- **Specific numeric queries**: "percentage", "ETA", "time remaining", "what layer", "is it done", "is it still running"
+- **Quick status checks**: When you only need basic progress metrics
+
+**What get_print_progress provides:**
+- `gcode_state`, `print_percentage`, `current_layer`, `total_layers`
+- `elapsed_minutes`, `remaining_minutes`, `stage_name`, `subtask_name`
+- `skipped_objects` list
+- Fast, lightweight, no camera dependency
+
+### When to use analyze_active_job
+- **Human-facing queries**: Any conversational print status request when camera is present
+- **Print health assessment**: "how is it going", "how's the print", "check on it", "any issues", "is it ok"
+- **Quality inspection**: "does it look good", "any problems", "spaghetti check", "print health"
+- **Visual analysis needed**: When the user wants to understand what's actually happening
+
+**What analyze_active_job provides:**
+- **Verdict + stable verdict** (clean / warning / critical)
+- **Success probability** (0-1 scale, Bayesian model)
+- **Decision confidence** (how much to trust the assessment)
+- **Factor contributions** (material, platform, progress, anomaly, thermal, humidity, stability, settings)
+- **Anomaly scores** (strand, diff, hot pixel percentage) with threshold context
+- **Live camera composite image** with health overlay
+- **Health panel image** with gauges and trends
+
+**Recommended invocation pattern for human queries:**
+```
+analyze_active_job(name, categories=["X","H"], quality="standard")
+→ then open_job_state(name) to display results to user
+```
+
 ### Print Status Display Tiers — Progressive Disclosure Model
 
 Use this model to select the right tool and depth for any print status query.
