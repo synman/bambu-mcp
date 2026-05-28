@@ -83,7 +83,7 @@ Merge `config/copilot_mcp.json` into your Copilot MCP configuration.
 | Camera | `get_snapshot`, `get_stream_url`, `start_stream`, `stop_stream`, `view_stream` | none |
 | System | `get_session_status`, `pause_mqtt_session`, `resume_mqtt_session`, `trigger_printer_refresh`, `force_state_refresh`, `get_firmware_version`, `get_monitoring_history`, `set_print_options`, `rename_printer` | writes |
 | Raw Command | `send_mqtt_command` | always |
-| Knowledge | `search_authoritative_sources`, `get_knowledge_topic` | none |
+| Knowledge | (retired → node-kb-mcp `kb_search`/`kb_get` `bambu-*` articles) | n/a |
 
 ---
 

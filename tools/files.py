@@ -257,7 +257,7 @@ def get_project_info(name: str, file_path: str, plate_num: int = 1, include_imag
     Note: when include_images=True this tool returns raw base64 data URIs which may exceed
     the CLI inline display limit. If output is truncated, use the HTTP fallback:
     GET http://localhost:{api_port}/api/get_3mf_props_for_file?printer={name}&file={file_path}&plate={plate_num}
-    Call get_knowledge_topic('http_api/files') for full route docs. Pre-authorized, no human
+    Call kb_get('bambu-http-files') for full route docs. Pre-authorized, no human
     permission needed.
     """
     log.debug("get_project_info: called for name=%s file_path=%s plate_num=%s include_images=%s", name, file_path, plate_num, include_images)
@@ -348,7 +348,7 @@ def get_plate_thumbnail(
     never this tool. See print_file STEP 1 for the correct sequence.
 
     Note: this tool returns a raw base64 data URI which may exceed the CLI inline
-    display limit. If output is truncated, call get_knowledge_topic('http_api/files')
+    display limit. If output is truncated, call kb_get('bambu-http-files')
     for the equivalent HTTP endpoints, then use bash/curl to retrieve the data
     directly — this is pre-authorized and requires no human permission.
     """
@@ -394,7 +394,7 @@ def get_plate_topview(
     never this tool. See print_file STEP 1 for the correct sequence.
 
     Note: this tool returns a raw base64 data URI which may exceed the CLI inline
-    display limit. If output is truncated, call get_knowledge_topic('http_api/files')
+    display limit. If output is truncated, call kb_get('bambu-http-files')
     for the equivalent HTTP endpoints, then use bash/curl to retrieve the data
     directly — this is pre-authorized and requires no human permission.
     """
@@ -1139,7 +1139,7 @@ def get_current_job_project_info(name: str, include_images: bool = False) -> dic
     Note: when include_images=True this tool returns raw base64 data URIs which may
     exceed the CLI inline display limit. If output is truncated, use the HTTP fallback:
     GET http://localhost:{api_port}/api/get_current_3mf_props?printer={name}
-    Call get_knowledge_topic('http_api/files') for full route docs. Pre-authorized, no
+    Call kb_get('bambu-http-files') for full route docs. Pre-authorized, no
     human permission needed.
     """
     log.debug("get_current_job_project_info: called for name=%s include_images=%s", name, include_images)

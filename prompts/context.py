@@ -6,9 +6,45 @@ behavioral rules, escalation policy, tool guidance, and safety requirements.
 This is the mandatory starting context for any Bambu Lab MCP session.
 """
 
-from knowledge.behavioral_rules import BEHAVIORAL_RULES_TEXT
-from knowledge.fallback_strategy import ESCALATION_POLICY_TEXT
-from knowledge.references import REFERENCES_TEXT
+_SAFETY_RULES = """## ⚠️ Mandatory Safety Rules — apply on every request, in ALL modes
+
+Bambu domain knowledge (protocol, enums, BambuPrinter API, HTTP API, empirical/calibration)
+is canonical in **node-kb-mcp**: `mcp__node-kb-mcp__kb_search("...")` → `kb_get("bambu-*")`.
+Agent behavioral rules live in the forge `bambu-ecosystem.md` rule (auto-loaded under
+`~/ai/forge/bambu/`). The rules below are the safety floor — repeated here because they bind
+every consumer of this MCP regardless of working directory.
+
+### Printer Write Protection — Absolute, No Exceptions, Never Bypassed
+NEVER send a write or destructive operation to a physical printer without the user typing
+explicit permission in plain text in the current conversation turn. Prohibited without it
+(not exhaustive): firmware (`upgrade.start` / any `upgrade.*`), MQTT publish to any
+`device/*/request` topic, raw GCode, configuration changes, any FTP/file upload to a printer.
+`--dry-run` is safe; anything that touches physical hardware is not. Applies in interactive,
+autopilot, background-agent, and scripted modes alike. Every hardware-modifying tool gates on
+`user_permission=True`; the active-print guard is a First-Law hard block that
+`user_permission=True` cannot override.
+
+### Pre-Print Confirmation Gate (Mandatory)
+Never call `print_file` without explicit user confirmation in the current turn. Gather
+`get_project_info` + `get_ams_units` + `get_spool_info` first, then present ONE complete
+summary — parts/filaments, `bed_type`, `ams_mapping`, `flow_calibration`, `timelapse`,
+`bed_leveling` — and wait for go-ahead AFTER the full summary. Confirming parameters across
+separate turns does NOT satisfy the gate.
+
+### Credentials
+Never reference real printer names, IPs, serials, or access codes in code, docs, or responses
+— read them from the secret store at runtime. The LAN access code is the only auth layer;
+never log, display, or commit it.
+
+### Query First, Never Infer · When in Doubt, Ask
+For any printer-related query, use bambu-mcp tools first — never infer current state from
+prior messages, user descriptions, or assumptions. If intent, scope, a required value, or an
+expected behavior is unclear, stop and ask before proceeding.
+
+### H2D Dual-Extruder Topology
+`extruder_id` 0 = RIGHT (T0, primary fixed nozzle, AMS 2 Pro); 1 = LEFT (T1, lifting nozzle,
+AMS HT). AMS HT `tray_id` = 128 + slot. Full topology + tray_id encoding:
+`kb_get("bambu-enums-printer")` and the forge `bambu-ecosystem.md` rule."""
 
 
 def bambu_system_context() -> str:
@@ -259,25 +295,21 @@ Last-resort tool for sending raw MQTT JSON commands when no dedicated tool exist
 ### Raw Command (tools/commands.py) — LAST RESORT, REQUIRE user_permission=True
 - send_mqtt_command(name, command_json) — raw MQTT command; use only when no dedicated tool exists
 
-Tools to search the MCP's baked-in knowledge base and query authoritative Bambu Lab source repositories on GitHub. Use when you need to verify protocol details or field semantics beyond what is in this context.
+Bambu domain knowledge (protocol, enums, BambuPrinter API, HTTP API, empirical/calibration) is canonical in node-kb-mcp as `bambu-*` articles — query it directly; there is no baked-in knowledge tool.
 
-### Knowledge Search (tools/knowledge_search.py)
-- search_authoritative_sources(query, repo_filter) — GitHub search guidance per escalation policy
-- get_knowledge_topic(topic) — retrieve any knowledge module by name
+### Knowledge (node-kb-mcp)
+- `mcp__node-kb-mcp__kb_search("<natural language>")` → `kb_get("<canonical-key>")` → `kb_related()` to pivot. Legacy `get_knowledge_topic` keys (e.g. `enums/ams`) resolve via article aliases.
+- Live HTTP route reference: bambu-mcp Swagger/OpenAPI at `/api/docs` (source of truth; `bambu-http-*` articles mirror it).
 
-Direct access to raw knowledge modules via URI. Use when you need full protocol reference, enum definitions, API signatures, or escalation policy guidance.
+Live rules files are exposed as resources; Bambu domain knowledge is in node-kb-mcp.
 
 ### Resources (bambu:// URIs)
 - bambu://rules/global — global copilot behavioral rules (live, redacted)
-- bambu://rules/printer-app — bambu-printer-app rules (live, redacted)  
+- bambu://rules/printer-app — bambu-printer-app rules (live, redacted)
 - bambu://rules/printer-manager — bambu-printer-manager rules (live, redacted)
 - bambu://rules/bambu-mcp — bambu-mcp project rules (live, redacted)
-- bambu://knowledge/behavioral-rules — synthesized rules knowledge module
-- bambu://knowledge/protocol — MQTT/HMS/3MF/SSDP protocol knowledge
-- bambu://knowledge/enums — all bpm enum values
-- bambu://knowledge/api-reference — full BambuPrinter API reference
-- bambu://knowledge/references — authoritative source list
-- bambu://knowledge/fallback-strategy — 3-tier escalation policy
+
+Domain knowledge (protocol, enums, API, HTTP, empirical): `mcp__node-kb-mcp__kb_search` → `kb_get("bambu-*")`.
 
 ## Write Protection Summary
 
@@ -306,17 +338,7 @@ Never say "No printers configured" and stop. Discovery is mandatory before givin
 
     return f"""# Bambu Lab MCP Agent — System Context
 
-{BEHAVIORAL_RULES_TEXT}
-
----
-
-{ESCALATION_POLICY_TEXT}
-
----
-
-## Authoritative Sources Summary
-
-{REFERENCES_TEXT}
+{_SAFETY_RULES}
 
 ---
 
@@ -327,10 +349,10 @@ Never say "No printers configured" and stop. Discovery is mandatory before givin
 ## Knowledge Escalation Reminder
 
 When answering questions about Bambu Lab printers, protocols, or firmware:
-1. **First**: Check baked-in knowledge modules (bambu://knowledge/*)
-2. **Second**: Check live rules files (bambu://rules/*)
-3. **Third**: Use search_authoritative_sources() to guide GitHub research
-4. **Fourth**: Use broader search terms as last resort
+1. **First**: Query node-kb-mcp — `kb_search(...)` → `kb_get("bambu-*")` (canonical domain knowledge)
+2. **Second**: Live rules files (bambu://rules/*) and the Swagger/OpenAPI at /api/docs for HTTP routes
+3. **Third**: Authoritative Bambu Lab source repos (BambuStudio, ha-bambulab, OpenBambuAPI) — after KB exhaustion + ask_user
+4. **Fourth**: Broader web search as last resort
 
 Never fabricate protocol values, MQTT topics, or enum values. If uncertain, escalate.
 """

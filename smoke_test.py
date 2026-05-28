@@ -49,44 +49,7 @@ MODULES = [
     "server",
     "api_server",
     "notifications",
-    "resources.knowledge",
-    "tools.knowledge_search",
     "tools.notifications",
-    "knowledge.behavioral_rules",
-    "knowledge.behavioral_rules_methodology",
-    "knowledge.behavioral_rules_session",
-    "knowledge.behavioral_rules_alerts",
-    "knowledge.behavioral_rules_camera",
-    "knowledge.behavioral_rules_job_analysis",
-    "knowledge.behavioral_rules_mcp_patterns",
-    "knowledge.behavioral_rules_print_state",
-    "knowledge.api_reference",
-    "knowledge.api_reference_session",
-    "knowledge.api_reference_files",
-    "knowledge.api_reference_print",
-    "knowledge.api_reference_ams",
-    "knowledge.api_reference_state",
-    "knowledge.api_reference_dataclasses",
-    "knowledge.api_reference_camera",
-    "knowledge.protocol",
-    "knowledge.protocol_concepts",
-    "knowledge.protocol_mqtt",
-    "knowledge.protocol_hms",
-    "knowledge.protocol_3mf",
-    "knowledge.enums",
-    "knowledge.enums_printer",
-    "knowledge.enums_ams",
-    "knowledge.enums_filament",
-    "knowledge.http_api",
-    "knowledge.http_api_printer",
-    "knowledge.http_api_print",
-    "knowledge.http_api_ams",
-    "knowledge.http_api_climate",
-    "knowledge.http_api_hardware",
-    "knowledge.http_api_files",
-    "knowledge.http_api_system",
-    "knowledge.fallback_strategy",
-    "knowledge.references",
 ]
 
 
@@ -106,30 +69,7 @@ def test_imports():
 
 def test_knowledge():
     print("\n── Knowledge topics ────────────────────────────────────────────────────")
-    try:
-        from tools.knowledge_search import _KNOWN_TOPICS, get_knowledge_topic
-    except Exception as e:
-        fail("tools.knowledge_search import", str(e))
-        return
-
-    for topic in sorted(_KNOWN_TOPICS.keys()):
-        try:
-            result = get_knowledge_topic(topic)
-            if isinstance(result, str) and len(result) > 100:
-                ok(f"topic: {topic}  ({len(result):,} chars)")
-            elif isinstance(result, str) and result:
-                fail(f"topic: {topic} — suspiciously short ({len(result)} chars)", result[:120])
-            else:
-                fail(f"topic: {topic} — empty or wrong type", repr(result)[:120])
-        except Exception as e:
-            fail(f"topic: {topic}", f"{type(e).__name__}: {e}")
-
-    # Verify new sub-topics explicitly
-    for required in ("behavioral_rules/session", "behavioral_rules/alerts"):
-        if required not in _KNOWN_TOPICS:
-            fail(f"_KNOWN_TOPICS missing: {required}")
-        else:
-            ok(f"_KNOWN_TOPICS contains: {required}")
+    skip("knowledge lookup tools", "retired → node-kb-mcp bambu-* articles")
 
 
 # ── 3. Live HTTP API ─────────────────────────────────────────────────────────

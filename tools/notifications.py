@@ -50,7 +50,7 @@ def get_pending_alerts(name: str, clear: bool = True) -> list[dict]:
       health_escalated:  from_verdict, to_verdict, score
       health_recovered:  from_verdict, to_verdict, score
 
-    Call get_knowledge_topic('behavioral_rules/alerts') for full semantic
+    Call kb_get('bambu-state-change-alerts') for full semantic
     documentation on each alert type, recommended actions, and severity guidance.
     """
     from session_manager import session_manager

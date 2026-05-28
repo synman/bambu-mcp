@@ -17,7 +17,7 @@
 
 ## Architecture
 
-- 85 MCP tools, 79 HTTP routes, 41 knowledge modules, 1 system prompt
+- 83 MCP tools, 79 HTTP routes, 1 system prompt (domain knowledge lives in node-kb-mcp `bambu-*` articles)
 - All printer ops route through BPM library via `session_manager.get_printer(name)`
 - BPM is considered stable — do not modify it to solve MCP-layer problems
 - No tool may open its own direct FTPS/MQTT/socket/HTTP connection (camera streaming excepted)
@@ -28,13 +28,11 @@
 - Console script entry point: `bambu-mcp = "server:main"`
 - 25 runtime dependencies (Flask, mcp SDK, av, onnxruntime, numpy, PIL, zeroconf)
 
-### Dual-Layer Sync
+### HTTP Route Reference
 
-Every HTTP route and MCP tool must stay in sync:
-- `api_server.py` route docstring (Swagger/OpenAPI source)
-- `knowledge/http_api_*.py` sub-topic file (agent-facing reference)
-
-A change to one layer without the other is incomplete.
+`api_server.py` route docstrings are the Swagger/OpenAPI source of truth. The agent-facing
+mirror is the node-kb-mcp `bambu-http-*` articles (tagged `source: derived:api_server.py`);
+regenerate them from the routes when the API changes.
 
 ### Filesystem Persistence
 

@@ -33,7 +33,7 @@ def get_server_info() -> dict:
 
     The server also registers a Zeroconf/mDNS service (`_bambu-mcp._tcp.local.`) at startup
     so non-MCP clients can discover the port without calling this tool. See
-    get_knowledge_topic('http_api/system') for the TXT record schema.
+    kb_get('bambu-http-system') for the TXT record schema.
 
     Returns:
         api_port      — TCP port the REST API is currently bound to (0 if not running)

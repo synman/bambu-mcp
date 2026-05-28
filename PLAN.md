@@ -3,6 +3,12 @@
 > Standalone reference for the self-contained Bambu Lab MCP server.
 > Committed to `~/bambu-mcp/PLAN.md` — the authoritative version lives in the project.
 > Session state copy: `files/bambu-mcp.md` (kept in sync).
+>
+> **Status (2026-05-27):** the baked-in knowledge subsystem — `get_knowledge_topic`,
+> `search_authoritative_sources`, the `knowledge/` modules, and the `bambu://knowledge/*`
+> resources — has been **retired**. Bambu domain knowledge now lives in node-kb-mcp as
+> canonical `bambu-*` articles (`kb_search`/`kb_get`, legacy keys aliased); agent rules live
+> in the forge `bambu-ecosystem.md` rule. Knowledge-tool references below are historical.
 
 # Bambu Lab MCP Server
 

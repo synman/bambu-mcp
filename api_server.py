@@ -32,7 +32,7 @@ Route categories (67 routes total):
   File mgmt     (12)  — list, upload, download, delete, rename, mkdir, project info, print
   System         (6)  — health, session CRUD, printer discovery, OpenAPI docs
 
-Agent reference: call get_knowledge_topic('http_api') for the full route inventory.
+Agent reference: query node-kb (kb_get('bambu-http-*')) or the Swagger UI at /api/docs for the full route inventory.
 """
 
 from __future__ import annotations

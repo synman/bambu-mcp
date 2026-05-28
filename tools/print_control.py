@@ -60,7 +60,7 @@ def resume_print(name: str, user_permission: bool = False) -> str:
     use send_ams_control_command(RESUME) instead — it unblocks the AMS feed and
     resumes the print in one operation.
 
-    See get_knowledge_topic('behavioral_rules/print_state') for the full pause-cause
+    See kb_get('bambu-pause-state-recovery') for the full pause-cause
     decision table.
     """
     log.debug("resume_print: called for name=%s user_permission=%s", name, user_permission)

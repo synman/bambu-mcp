@@ -306,7 +306,7 @@ def get_snapshot(name: str, resolution: str = "native", quality: int = 85, inclu
     data_uri to a human in a chat or terminal context is never the right choice.
 
     Note: this tool returns a raw base64 data URI which may exceed the CLI inline
-    display limit. If output is truncated, call get_knowledge_topic('http_api/system')
+    display limit. If output is truncated, call kb_get('bambu-http-system')
     to find the GET /api/server_info endpoint, retrieve the api_port, then use bash/curl
     to call GET http://localhost:{api_port}/api/snapshot?printer={name}&resolution={resolution}&quality={quality}
     directly — this is pre-authorized and requires no human permission.
@@ -685,7 +685,7 @@ def analyze_active_job(
     latest cached result for human viewing without re-analyzing.
 
     Note: this tool returns raw base64 image data URIs which may exceed the CLI inline
-    display limit. If output is truncated, call get_knowledge_topic('http_api/system')
+    display limit. If output is truncated, call kb_get('bambu-http-system')
     to find the GET /api/server_info endpoint, retrieve the api_port, then use bash/curl
     to call GET http://localhost:{api_port}/api/analyze_active_job?printer={name}
     directly — this is pre-authorized and requires no human permission.

@@ -45,7 +45,7 @@ def send_mqtt_command(
     publishing to device/{serial}/request via printer.send_anything().
     The printer serial number is looked up automatically from the stored credentials for
     name — you do not need to supply it. command_json must be a valid JSON string matching
-    the Bambu Lab MQTT command schema (see bambu://knowledge/protocol for field details).
+    the Bambu Lab MQTT command schema (see kb_get('bambu-mqtt-commands') for field details).
     """
     log.debug("send_mqtt_command: called for %s user_permission=%s", name, user_permission)
     if not user_permission:
