@@ -154,7 +154,7 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
 </style>
 </head>
 <body>
-<img id="stream">
+<canvas id="stream"></canvas>
 <div id="fps"><span id="fps-num"></span><span id="fps-lbl">FPS</span><canvas id="fps-chart" width="52" height="20"></canvas></div>
 <div id="health-panel">
   <div class="hp-hdr" onclick="hpToggle(this)">
@@ -661,11 +661,13 @@ function _hpPoll(){
 poll();setInterval(poll,2000);
 // Fetch-based MJPEG parser: bypasses Safari's broken <img src="multipart"> loader.
 // Reads the raw multipart stream via fetch(), parses Content-Length from each part
-// header, extracts the JPEG bytes, and sets img.src to a blob URL. Works in all browsers.
+// header, extracts the JPEG bytes, and renders each frame to a <canvas> via
+// createImageBitmap (NOT img.src=objectURL — see the render block below). Works in all browsers.
 var _lastFrameMs=0;var _streamConnect=null;
 (function(){
-  var img=document.getElementById('stream');
-  var prevUrl=null;
+  var cv=document.getElementById('stream');
+  var ctx=cv.getContext('2d');
+  var _busy=false;
   var _ctrl=null;
   function connect(){
     if(_ctrl){try{_ctrl.abort();}catch(e){}}
@@ -695,11 +697,21 @@ var _lastFrameMs=0;var _streamConnect=null;
           var jpeg=buf.slice(ds,ds+cl);
           buf=buf.slice(ds+cl);
           var blob=new Blob([jpeg],{type:'image/jpeg'});
-          var url=URL.createObjectURL(blob);
-          if(prevUrl)URL.revokeObjectURL(prevUrl);
-          prevUrl=url;
-          _lastFrameMs=Date.now();
-          img.src=url;
+          // Render via canvas + ImageBitmap, NOT <img src=objectURL>. revokeObjectURL
+          // frees the JPEG bytes but WebKit keeps the DECODED bitmap in its <img> image
+          // cache (revoke does not evict it) -> unbounded growth at native frame sizes
+          // (decoded RGBA ~= W*H*4 per frame). createImageBitmap + drawImage + bm.close()
+          // releases the decoded frame deterministically and never touches the <img>
+          // decoded-image cache, so memory stays flat at full native resolution.
+          if(_busy)continue; // drop frame while a decode is in flight (bounds memory + latency)
+          _busy=true;
+          createImageBitmap(blob).then(function(bm){
+            if(cv.width!==bm.width||cv.height!==bm.height){cv.width=bm.width;cv.height=bm.height;}
+            ctx.drawImage(bm,0,0);
+            bm.close();
+            _lastFrameMs=Date.now();
+            _busy=false;
+          }).catch(function(){_busy=false;});
         }
       }
       function pump(){
