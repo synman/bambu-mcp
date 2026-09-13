@@ -48,6 +48,7 @@ from collections.abc import Callable
 from dataclasses import asdict
 from http import HTTPStatus
 from io import BytesIO
+from pathlib import Path
 
 log = logging.getLogger(__name__)
 
@@ -68,6 +69,25 @@ _zc_instance = None      # Zeroconf instance for mDNS service registration
 _zc_info = None          # ServiceInfo registered with Zeroconf
 _log_level_setter = None  # callable(level_name: str) -> str, injected by server.py
 _UPLOADS = os.path.join(os.path.dirname(__file__), "uploads")
+
+
+def _safe_upload_path(name: str) -> Path | None:
+    """Resolve `name` to a file inside the uploads dir, or None if it escapes.
+
+    Strips any directory components (both separator styles), then containment-
+    checks the resolved path. A client-supplied name like '../../api_server.py'
+    previously joined straight into `_UPLOADS`, giving arbitrary file write
+    (upload_file_to_host) and arbitrary local-file read exfiltrated to the
+    printer's SD card (upload_file_to_printer). Guards traversal only — every
+    legal filename character ('+', spaces, unicode) passes through unchanged.
+    """
+    cleaned = os.path.basename(str(name).replace("\\", "/").strip())
+    if not cleaned or cleaned in {".", ".."}:
+        return None
+    root = Path(_UPLOADS).resolve()
+    candidate = (root / cleaned).resolve()
+    return candidate if candidate.is_relative_to(root) else None
+
 
 DEFAULT_PRINTER = os.environ.get("BAMBU_API_PRINTER", "")
 
@@ -1642,11 +1662,13 @@ def _build_app():
             f = request.files.get("myFile")
             if f is None:
                 return _err("no file in request", HTTPStatus.BAD_REQUEST)
-            dest = os.path.join(_UPLOADS, f.filename)
+            dest = _safe_upload_path(f.filename or "")
+            if dest is None:
+                return _err("invalid filename", HTTPStatus.BAD_REQUEST)
             log.debug("upload_file_to_host: saving to %s", dest)
-            f.save(dest)
+            f.save(str(dest))
             log.debug("upload_file_to_host: → ok")
-            return _ok(filename=f.filename)
+            return _ok(filename=dest.name)
         except Exception as e:
             log.error("upload_file_to_host: error: %s", e, exc_info=True)
             return _err(str(e))
@@ -1664,9 +1686,11 @@ def _build_app():
         try:
             src = _rargs().get("src", "")
             dest = _rargs().get("dest", "")
-            local = os.path.join(_UPLOADS, src)
+            local = _safe_upload_path(src)
+            if local is None:
+                return _err("invalid src filename", HTTPStatus.BAD_REQUEST)
             log.debug("upload_file_to_printer: src=%s dest=%s", local, dest)
-            result = p.upload_sdcard_file(local, dest)
+            result = p.upload_sdcard_file(str(local), dest)
             log.debug("upload_file_to_printer: → ok")
             return jsonify(result)
         except Exception as e:
@@ -1686,11 +1710,13 @@ def _build_app():
         try:
             src = _rargs().get("src", "")
             filename = src[src.rindex("/") + 1:]
-            local = os.path.join(_UPLOADS, filename)
+            local = _safe_upload_path(filename)
+            if local is None:
+                return _err("invalid src filename", HTTPStatus.BAD_REQUEST)
             log.debug("download_file_from_printer: src=%s local=%s", src, local)
-            p.download_sdcard_file(src, local)
-            log.debug("download_file_from_printer: → serving %s", filename)
-            return send_from_directory(_UPLOADS, filename)
+            p.download_sdcard_file(src, str(local))
+            log.debug("download_file_from_printer: → serving %s", local.name)
+            return send_from_directory(_UPLOADS, local.name)
         except Exception as e:
             log.error("download_file_from_printer: error: %s", e, exc_info=True)
             return _err(str(e))
