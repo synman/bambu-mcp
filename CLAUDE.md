@@ -14,6 +14,7 @@
 - Smoke test: `.venv/bin/python3 smoke_test.py`
 - Reload: `~/bin/mcp-reload`
 - Full restart sequence: see shared rules — MCP Server Restart
+- Daemon administration (launchd supervision, restart, log levels, debug logging): `docs/operators-guide.md` — the daemon is launchd-supervised; do NOT rely on `bambu-mcp-daemon.sh restart` for env changes
 
 ## Architecture
 

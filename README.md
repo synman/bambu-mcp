@@ -148,6 +148,7 @@ Merge `config/copilot_mcp.json` into your Copilot MCP configuration.
 
 ## See Also
 
+- `docs/operators-guide.md` — Daemon administration: launchd supervision, restart procedures, log-level/debug management
 - `PLAN.md` — Full implementation plan and design decisions
 - `bambu://knowledge/behavioral-rules` — Behavioral rules for the agent
 - `bambu://knowledge/protocol` — Bambu Lab MQTT/HMS protocol documentation
