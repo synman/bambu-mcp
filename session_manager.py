@@ -225,31 +225,45 @@ class SessionManager:
         actually dropped, resume_session() leaves service_state at QUIT
         instead of CONNECTED — in that case fall back to a full
         start_session() reconnect.
+
+        Guards against a race with paho's own auto-reconnect (bpm sets
+        reconnect_delay_set(1, 1) and runs loop_forever(retry_first_connection=True)
+        on a dedicated thread): client.is_connected() — and bpm's own
+        service_state label — can both read as disconnected during a
+        transient blip while that ORIGINAL thread is still alive and
+        reconnecting on its own. Calling start_session() in that window
+        spawns a second client/thread/watchdog on top of the first, since
+        bpm's own "already active" guard also keys off is_connected().
+        The session thread's own liveness is the one signal that actually
+        tells the two cases apart.
         """
         logger.debug("resume_session: called for name=%s", name)
         p = self.get_printer(name)
         if not p:
             return
         _ensure_imports()
+        thread = getattr(p, "_mqtt_client_thread", None)
+        thread_alive = bool(thread and thread.is_alive())
         if p.service_state != _ServiceState.PAUSED:
-            # Not paused: bpm's resume_session() would flip a live session to
-            # QUIT and start_session() would then raise "a session is already
-            # active". Reconnect only when the client is actually gone;
-            # otherwise there is nothing to resume.
-            if p.client and p.client.is_connected():
+            # Not paused: covers both "already fully connected, nothing to
+            # do" and "mid-blip, paho is reconnecting on its own" — either
+            # way the session thread is still alive and start_session()
+            # would duplicate it. Reconnect only when the thread has
+            # genuinely exited.
+            if thread_alive:
                 logger.debug(
-                    "resume_session: %s is not paused (state=%s); nothing to resume",
-                    name, p.service_state,
+                    "resume_session: %s is not paused (state=%s) and its session "
+                    "thread is still alive; nothing to resume", name, p.service_state,
                 )
                 return
             logger.debug(
-                "resume_session: %s client dropped (state=%s); reconnecting via start_session",
-                name, p.service_state,
+                "resume_session: %s session thread has exited (state=%s); "
+                "reconnecting via start_session", name, p.service_state,
             )
             p.start_session()
             return
         p.resume_session()
-        if p.service_state != _ServiceState.CONNECTED:
+        if p.service_state != _ServiceState.CONNECTED and not thread_alive:
             logger.debug(
                 "resume_session: %s not connected after resume_session (state=%s); "
                 "falling back to start_session", name, p.service_state,

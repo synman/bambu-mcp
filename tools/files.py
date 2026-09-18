@@ -911,6 +911,10 @@ def preview_ams_mapping(name: str, file_path: str, plate_num: int = 1) -> dict:
     colour distance, and a BPA match label (Excellent Match / Good Match / Type Match /
     Color Match Only / Poor Match). "Type Match" means the material matches but the
     colour is off — print_file WILL print on it, so surface it to the user.
+    "Color Match Only" means the MATERIAL DOES NOT MATCH (e.g. project wants PLA,
+    only PETG is loaded) and the spool was accepted purely because its colour is
+    close — print_file WILL print on it too. Call this out explicitly for any
+    "quality": "poor" match; it is a stronger warning than a colour mismatch.
 
     Returns resolved_ams_mapping (list, indexed by 1-based filament id, -1 for an
     unused id), ams_mapping_json (the exact string print_file sends), matches,
@@ -946,8 +950,10 @@ def print_file(
     printer last reported loaded: each project filament is matched to an AMS
     spool by exact type then closest colour (bambu-printer-app's print-dialog
     scoring; exact pairs are assigned first, then best unused, then reuse).
-    A same-material spool of the WRONG colour is accepted ("Type Match") — call
-    preview_ams_mapping() first and show the user every match label.
+    A same-material spool of the WRONG colour is accepted ("Type Match"). A
+    WRONG-MATERIAL spool is ALSO accepted if its colour is close enough
+    ("Color Match Only" — no material check at all) — call preview_ams_mapping()
+    first and show the user every match label, "Color Match Only" especially.
     The 3mf carries no usable tray ids — get_project_info()'s ams_mapping is a
     filament-id placeholder, never a slot assignment. If any filament finds no
     loaded match, or the plate carries no filament metadata, the print is
