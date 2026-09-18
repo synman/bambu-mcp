@@ -12,7 +12,6 @@ Usage:
 
 import atexit
 import logging
-import os
 import signal
 import sys
 
@@ -48,8 +47,7 @@ import tools.notifications as notification_tools
 import tools.url_factory as url_factory_tools
 import tools.charts as charts_tools
 
-_env_level = os.environ.get("BAMBU_MCP_LOG_LEVEL", "WARNING").upper()
-_log_level = getattr(logging, _env_level, logging.WARNING)
+_log_level = logging.ERROR
 _log_file = Path(__file__).parent / "bambu-mcp.log"
 _file_handler = logging.FileHandler(_log_file, encoding="utf-8")
 _file_handler.setLevel(_log_level)
@@ -65,8 +63,7 @@ _root = logging.getLogger()
 _root.setLevel(_log_level)
 _root.addHandler(_file_handler)
 _root.addHandler(_stream_handler)
-_bpm_log_level = _log_level if os.environ.get("BAMBU_MCP_BPM_VERBOSE") else logging.WARNING
-logging.getLogger("bpm").setLevel(_bpm_log_level)
+logging.getLogger("bpm").setLevel(logging.ERROR)
 log = logging.getLogger("bambu-mcp")
 
 # ── Runtime log-level management ───────────────────────────────────────────────
@@ -79,8 +76,9 @@ def set_log_level(level_name: str, bpm_level_name: str | None = None) -> str:
     The stderr handler is intentionally left at WARNING to avoid flooding the
     Copilot stdio MCP transport.  The bpm logger is never implicitly changed
     by a root-level change — pass *bpm_level_name* to set it explicitly (it
-    is left alone when omitted). BAMBU_MCP_BPM_VERBOSE is consulted only at
-    import time for the bpm logger's starting level; it is not read here.
+    is left alone when omitted). Both loggers boot at ERROR; live control
+    is this function (and the /api/set_log_level, /api/set_bpm_verbose
+    routes it backs) — no env var seeds either level anymore.
     """
     level = getattr(logging, level_name.upper(), None)
     if level is None:

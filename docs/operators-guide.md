@@ -30,23 +30,74 @@ reports "started (PID N)" by reading the PID file the *launchd* child wrote. Sym
 repeated port-25099 `OSError` tracebacks in the log around a restart, and env-dependent
 behavior (log level) unchanged. (Empirical 2026-09-14.)
 
+This is a **live LISTEN collision** — the script's child and launchd's child are both
+genuinely bound (or trying to bind) 25099 at the same time. It is a different failure
+than the TIME_WAIT race fixed below under Plain restart, and `SO_REUSEADDR` neither
+fixes nor can fix it: a socket option that lets `bind()` succeed over a stale TIME_WAIT
+entry still refuses to bind over another process's *active* LISTEN socket on the same
+address — which is why the probe binds both the wildcard and `127.0.0.1` shapes (see
+Plain restart).
+Never use `bambu-mcp-daemon.sh restart`; use `kickstart -k` below instead.
+
 ## Procedures
 
 ### Status
 
 ```bash
 ./bambu-mcp-daemon.sh status                                    # PID, MCP port, TCP probe
-launchctl print gui/$(id -u)/com.isaac.app.forge-bambu-mcp | head   # launchd view: state, pid
+launchctl print gui/$(id -u)/com.isaac.app.forge-bambu-mcp | command grep -E "state =|pid =|runs ="   # launchd view (pid sits past line 10, so no `head`)
 ```
 
 Success signal: `state = running` and `TCP: OK (port 25099 responding)`. The two PIDs must
-match — a mismatch means an orphan from the port race is lingering.
+match — a mismatch means an orphan from the daemon.sh-vs-launchd collision (the trap
+above) is lingering, not the TIME_WAIT race below (that one leaves no orphan; it just
+delays the single surviving spawn).
 
 ### Plain restart (no env change)
 
 ```bash
 launchctl kickstart -k gui/$(id -u)/com.isaac.app.forge-bambu-mcp
 ```
+
+**Port race — fixed and empirically confirmed in this repo's own log.** A `kickstart -k`
+restart used to reliably throw several `OSError: designated port 25099 is unavailable`
+tracebacks and take ~25–30s to settle: uvicorn's graceful shutdown actively closes client
+connections, which leaves the local port in TIME_WAIT; a bare `socket.bind()` probe fails
+against that TIME_WAIT entry even though the old process (and its LISTEN socket) is
+already gone, so `resolve_port()` raised, the new child crashed, and launchd's
+`ThrottleInterval` (5s) retried until one attempt landed outside the TIME_WAIT window.
+This was NOT a case of the previous daemon still being alive/mid-shutdown: every one of
+these clusters logs `daemon_port: ensure_singleton: cleaning up stale PID/port files from
+dead daemon` 5–6s after the SIGTERM and *before* the first `OSError`, which only fires
+when the PID file's process is already confirmed dead — `bambu-mcp.log:1911-1969`
+(`09:54:15`, 6 failed spawns), `:2106-2164` (`10:07:21`, 6), `:2200-2249` (`10:25:42`, 5),
+`:2278-2327` (`10:34:01`, 5, the last failing restart).
+
+`daemon_port.py`'s `_is_port_available()` now sets `SO_REUSEADDR` on the probe socket
+before binding, which lets `bind()` succeed over a TIME_WAIT entry. With that option a
+bind is refused only by a LISTEN on the *same* address — a wildcard probe sails past a
+`127.0.0.1`-specific listener and vice versa (measured 2026-09-15 on a scratch port) —
+so the probe binds both shapes (`""` and `DAEMON_HOST`, the address uvicorn actually
+binds) and reports available only when both succeed; a foreign LISTEN of either shape
+is still caught, TIME_WAIT is not. `daemon_port.py`'s on-disk mtime (`10:37:38`) sits 10s before the very next
+restart, and every restart since is clean, first-spawn, zero-`OSError`:
+`bambu-mcp.log:2353-2357` (`10:37:48`), `:2367-2371` (`10:38:06`), `:2381-2385`
+(`10:46:51`) — three consecutive restarts, all landing on the first spawn, all still
+logging the same "cleaning up stale … dead daemon" line 5–6s after SIGTERM (so the old
+process dying fast is unchanged; only the TIME_WAIT bind failure is gone). Read `runs =`
+from `launchctl print gui/$(id -u)/com.isaac.app.forge-bambu-mcp` before/after a restart
+to confirm the spawn counter advances by exactly 1 on your own node — this behavior can
+differ by macOS network-stack tuning.
+
+**If you still see repeated `OSError` tracebacks on a `kickstart -k` restart**, check two
+things, in order: (1) the previous process may genuinely still be inside `_shutdown()`
+(MQTT `session_manager.stop_all()`, camera `mjpeg_server.stop_all()`, `job_monitor.stop_all()`
+can each take time) and still holds a live LISTEN socket — SO_REUSEADDR cannot and does
+not fix that case; wait longer before retrying, or check the log for whether
+`Received SIGTERM` precedes `Finished server process` by longer than usual. (2) a stray
+`bambu-mcp-daemon.sh`-launched child left running (see the trap above) — confirmed via
+`lsof -nP -iTCP:25099 -sTCP:LISTEN` (verified 2026-09-15: correctly reports the current
+listener's PID and matches the daemon's own last "Started server process" line).
 
 Printer MQTT sessions restart automatically; streamable-http MCP clients reconnect
 transparently to port 25099 (verified 2026-09-14 — no `mcp-reload` needed for CC
@@ -98,39 +149,55 @@ for the `daemon.sh restart` step.
 All logging lands in `bambu-mcp.log` at the repo root (the root-logger file handler and
 the plist's `StandardOutPath`/`StandardErrorPath` all point there).
 
-### Knobs (read once at process start — `server.py:51-69`)
+### Knobs and runtime controls
 
-| Env var | Default | Effect |
-|---|---|---|
-| `BAMBU_MCP_LOG_LEVEL` | `WARNING` | Root logger + file handler level (`DEBUG`/`INFO`/`WARNING`) |
-| `BAMBU_MCP_BPM_VERBOSE` | unset | When set (`1`), the `bpm` logger follows the root level; when unset, bpm is clamped to WARNING regardless of root level |
+Log level and raw-payload verbosity are **no longer env-configured at all** — removed
+2026-09-17. Every daemon boots with root and the `bpm` logger fixed at `ERROR` and
+every printer session's `BambuConfig.verbose=False`; the only controls are the two
+live REST routes below, which take effect immediately on the running process and
+reset to that fixed boot default on the next restart. There is nothing to add to
+`.claude/daemon.json`'s `env` dict for this — it no longer has one.
+
+`BAMBU_MCP_FTPS_TIMEOUT` is unrelated and still a genuine env knob (session start,
+`session_manager.py:57`): seconds to wait for the FTPS control connection behind every
+SD-card file operation, passed through to `BambuConfig.ftps_connection_timeout`
+(`bpm/bambuconfig.py:81`). Must parse as a positive integer; anything else is logged
+at WARNING and ignored, leaving bpm's own default. To set it, add the key to
+`.claude/daemon.json`'s `env` dict, regenerate, and reload per **Persistent env
+change** above.
 
 - Server-wide only — there is **no per-printer** log level.
-- With both set, bpm logs every raw MQTT payload at DEBUG
-  (`DEBUG    bpm: _on_message - bambu_msg: [{"print":{...}}]`) — the log grows fast;
-  truncate when done.
-- `server.py` also has a runtime `set_log_level()` + SIGUSR1 cycle
-  (DEBUG→INFO→WARNING), but it does **not** lift the bpm clamp when
-  `BAMBU_MCP_BPM_VERBOSE` is unset, and no MCP tool exposes it. Env + reload (above) is
-  the reliable route.
+- `POST /api/set_log_level?level=<L>&bpm_level=<L>` (`api_server.py`, `server.py`'s
+  `set_log_level(level_name, bpm_level_name=None)`) sets root and, when `bpm_level`
+  is given, the `bpm` logger independently — omit it to leave `bpm` untouched.
+- `POST /api/set_bpm_verbose?printer=<name>&verbose=true|false` sets
+  `BambuConfig.verbose` directly on that printer's live session object — the ONLY
+  thing that enables bpm's raw-payload line (`bambuprinter.py` `_on_message`:
+  `if self.config.verbose: logger.debug("_on_message - bambu_msg…")`). Per-printer,
+  live, no restart.
+- Both routes are read fresh on every call — no caching, no session-start-only
+  latch. Raising `bpm_level` alone yields bpm's method-level DEBUG lines but not the
+  raw payload dump; that needs `verbose=true` too. With both on, bpm logs every raw
+  MQTT payload at DEBUG (`DEBUG    bpm: _on_message - bambu_msg: [{"print":{...}}]`)
+  — the log grows fast (181 MB in one evening on 2026-09-15); truncate when done.
+- The file handler's level is recomputed on every `set_log_level` call as
+  `min(root level, bpm's current effective level)`, so whichever logger currently
+  wants more detail is admitted to the file.
+- `SIGUSR1`/`SIGUSR2` (`server.py` `_cycle_log_level`/`_cycle_bpm_log_level`) still
+  cycle root/bpm DEBUG→INFO→WARNING→DEBUG independently via signal
+  (`kill -USR1|USR2 $(cat ~/.bambu-mcp/daemon.pid)`) — a fallback when REST is
+  unreachable. No MCP tool wraps any of this — REST/signal only, by design.
 - stderr is capped at WARNING regardless of level (stdio-pipe overflow guard).
 
 ### Debug-logging SOP
 
-1. Add to the plist env: `BAMBU_MCP_LOG_LEVEL=DEBUG`, `BAMBU_MCP_BPM_VERBOSE=1`.
-2. Reload the job (Temporary env change, above).
-3. Verify within ~15s: `grep 'DEBUG    bpm:' bambu-mcp.log | tail` shows `_on_message`
-   payload lines (printers push telemetry every few seconds). This assumes at least one
-   printer session is connected — confirm with `get_configured_printers()` first; with no
-   connected printer there is no telemetry to log. No bpm DEBUG lines *with* sessions
-   active means the env did not reach the process — check for the trap above.
-4. When done: revert the plist env (hand-edit it back, or run `install-hooks.sh` /
-   `gen-daemon-service.py` to regenerate it from `daemon.json`), then reload via
-   **bootout + bootstrap** — after ANY plist change, regen included, `kickstart -k`
-   restarts from launchd's in-memory definition and does not re-read the file (the
-   regenerator itself never restarts a running daemon by design). Then truncate the log
-   (`truncate_log` MCP tool with `user_permission=True` — server-level, no printer
-   argument, same as `dump_log` — or `truncate -s 0 bambu-mcp.log`).
+`curl -X POST "http://localhost:<api_port>/api/set_log_level?level=DEBUG&bpm_level=DEBUG"`
+then `curl -X POST ".../api/set_bpm_verbose?printer=<name>&verbose=true"`. Confirm within
+~15s: `grep 'DEBUG    bpm:' bambu-mcp.log | tail` shows `_on_message` payload lines
+(needs at least one connected printer session — check `get_configured_printers()` first).
+When done, flip `verbose=false` and set both levels back to `ERROR` (or just restart the
+daemon — the boot default is fixed at `ERROR`/`verbose=False` either way), then truncate
+the log (`truncate_log` MCP tool with `user_permission=True`, or `truncate -s 0 bambu-mcp.log`).
 
 ### Reading the log
 
@@ -154,7 +221,7 @@ Two separate port systems — do not conflate them:
 
 | Symptom | Cause | Action |
 |---|---|---|
-| Repeated `OSError: designated port 25099 is unavailable` tracebacks | Port race after a kill — old socket lingering while launchd (ThrottleInterval 5s) retries | Wait; launchd wins within ~30s. Do not start `daemon.sh` in parallel. |
+| Repeated `OSError: designated port 25099 is unavailable` tracebacks on a `kickstart -k` restart | Fixed 2026-09-15 (`bambu-mcp.log` shows 4 failing restarts, then 3 clean ones immediately after `daemon_port.py`'s `SO_REUSEADDR` fix landed — see Plain restart above). Confirmed again 21:01 EDT after the probe was widened to both address shapes: runs +1, zero `OSError`, listener up in 1s, old pid gone. If it recurs: either the previous process is still inside `_shutdown()` holding a live LISTEN socket (SO_REUSEADDR can't fix that), or a genuine collider is bound to the port. | Check `Received SIGTERM`→`Finished server process` gap in the log first. Then `lsof -nP -iTCP:25099 -sTCP:LISTEN` to find a collider. Do not run `bambu-mcp-daemon.sh` in parallel — see the trap above. |
 | `Bootstrap failed: 5: Input/output error` | bootout/bootstrap teardown race | `sleep 5`, retry bootstrap |
 | Env-dependent behavior unchanged after "restart" | The trap: launchd relaunched with plist env | Use the plist + bootout/bootstrap route |
 | Daemon down, launchd job not loaded | bootout without bootstrap | `launchctl bootstrap gui/$(id -u) <plist>` |

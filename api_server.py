@@ -2338,18 +2338,47 @@ def _build_app():
     def set_log_level_route():
         """Change the runtime log level.
 
-        Query param: level=DEBUG|INFO|WARNING|ERROR|CRITICAL
+        Query params: level=DEBUG|INFO|WARNING|ERROR|CRITICAL
+                       bpm_level=DEBUG|INFO|WARNING|ERROR|CRITICAL (optional,
+                       set the bpm logger independently of root)
         """
         level = request.args.get("level", "").upper()
         if not level:
             return _err("level parameter required"), 400
         if _log_level_setter is None:
             return _err("log level setter not registered"), 503
+        bpm_level = request.args.get("bpm_level", "").upper() or None
         try:
-            new_level = _log_level_setter(level)
-            return _ok(level=new_level)
+            new_level = _log_level_setter(level, bpm_level)
+            return _ok(level=new_level, bpm_level=bpm_level)
         except ValueError as e:
             return _err(str(e)), 400
+
+    @app.route("/api/set_bpm_verbose", methods=["POST"])
+    def set_bpm_verbose_route():
+        """Toggle raw MQTT payload logging for a live printer session, no restart.
+
+        Flips BambuConfig.verbose directly on the running session's config
+        object (a plain mutable field bpm reads fresh on every _on_message
+        call) — distinct from the bpm logger's level, which set_log_level's
+        bpm_level already covers live. Both loggers and every session boot
+        at ERROR/verbose=False; this and set_log_level are the only controls
+        — no env var seeds either. Resets to that boot default on the next
+        daemon restart (in-memory only).
+
+        Query params: printer=<name> (optional, falls back to default)
+                      verbose=true|false
+        """
+        p, name = _get_printer(request.args)
+        if p is None:
+            return _err("no connected printer"), 404
+        verbose_arg = request.args.get("verbose", "")
+        if verbose_arg.lower() not in ("true", "false"):
+            return _err("verbose parameter must be true or false"), 400
+        verbose = verbose_arg.lower() == "true"
+        p.config.verbose = verbose
+        log.warning("set_bpm_verbose: %s verbose=%s (live, no restart)", name, verbose)
+        return _ok(printer=name, verbose=verbose)
 
     # ── server info ───────────────────────────────────────────────────────────
 

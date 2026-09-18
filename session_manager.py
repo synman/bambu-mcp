@@ -122,7 +122,6 @@ class SessionManager:
             hostname=creds["ip"],
             access_code=creds["access_code"],
             serial_number=creds["serial"],
-            verbose=bool(os.environ.get("BAMBU_MCP_BPM_VERBOSE")),
             **overrides,
         )
         printer = _BambuPrinter(config=config)

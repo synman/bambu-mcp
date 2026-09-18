@@ -18,7 +18,7 @@
 
 ## Architecture
 
-- 83 MCP tools, 79 HTTP routes, 1 system prompt (domain knowledge lives in node-kb-mcp `bambu-*` articles)
+- 101 MCP tools (measured live 2026-09-15), 80 HTTP routes (2026-09-17: added `/api/set_bpm_verbose` — live per-session `BambuConfig.verbose` toggle, no restart), 1 system prompt (domain knowledge lives in node-kb-mcp `bambu-*` articles)
 - All printer ops route through BPM library via `session_manager.get_printer(name)`
 - BPM is considered stable — do not modify it to solve MCP-layer problems
 - No tool may open its own direct FTPS/MQTT/socket/HTTP connection (camera streaming excepted)
