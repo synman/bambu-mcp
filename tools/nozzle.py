@@ -123,11 +123,11 @@ def set_nozzle_config(
     diameter must be one of: 0.2, 0.4, 0.6, 0.8 (mm).
     nozzle_type must be one of: 'stainless_steel', 'hardened_steel',
     'tungsten_carbide', 'brass', 'e3d'.
-    flow_type is accepted for informational purposes (standard/high_flow/tpu_high_flow)
-    but is not sent to the printer API directly.
-    flow_type is stored as metadata for display purposes only — the printer firmware
-    determines actual flow rates from the installed nozzle's physical characteristics.
-    Valid values: 'standard', 'high_flow', 'tpu_high_flow'.
+    flow_type must be one of: 'standard', 'high_flow', 'tpu_high_flow'. On
+    dual-extruder printers this IS sent to the printer — it's encoded into the
+    SET_NOZZLE command's nozzle-identifier SKU alongside nozzle_type. On
+    single-extruder printers the underlying SET_ACCESSORIES command carries no
+    flow field, so flow_type has no effect there.
     Requires user_permission=True.
 
     Extruder selection on H2D: extruder=0 = right nozzle; extruder=1 = left nozzle;
@@ -155,7 +155,7 @@ def set_nozzle_config(
         return blocked.get("error", "Blocked: active print in progress.")
     state = session_manager.get_state(name)
     try:
-        from bpm.bambutools import NozzleDiameter, NozzleType
+        from bpm.bambutools import NozzleDiameter, NozzleFlowType, NozzleType
         try:
             nd = NozzleDiameter(float(diameter))
         except ValueError:
@@ -166,6 +166,11 @@ def set_nozzle_config(
         except KeyError:
             valid = [v.name.lower() for v in NozzleType if v != NozzleType.UNKNOWN]
             return f"Error: Unknown nozzle_type '{nozzle_type}'. Valid: {valid}"
+        try:
+            nf = NozzleFlowType[flow_type.upper()]
+        except KeyError:
+            valid = [v.name.lower() for v in NozzleFlowType if v != NozzleFlowType.UNKNOWN]
+            return f"Error: Unknown flow_type '{flow_type}'. Valid: {valid}"
 
         current_tool = state.active_tool.value if state and state.active_tool is not None else 0
 
@@ -174,7 +179,9 @@ def set_nozzle_config(
                 log.debug("set_nozzle_config: switching to extruder %s for %s", target, name)
                 printer.set_active_tool(target)
             log.debug("set_nozzle_config: calling printer.set_nozzle_details for extruder %s on %s", target, name)
-            printer.set_nozzle_details(nozzle_diameter=nd, nozzle_type=nt)
+            printer.set_nozzle_details(
+                nozzle_diameter=nd, nozzle_type=nt, nozzle_flow=nf, extruder_id=target
+            )
 
         if extruder == -1:
             _apply_to_extruder(0)
