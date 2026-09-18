@@ -216,13 +216,19 @@ def set_fan_speed(
     """
     Set the speed of a specific fan on the printer.
 
-    fan must be one of: 'part_cooling', 'aux', 'exhaust'.
+    fan must be one of: 'part_cooling', 'aux', 'exhaust', 'enhanced_cooling'.
     - 'part_cooling': the fan that blows directly on the printed part to cool it.
       Critical for PLA and PETG; often disabled for ABS to prevent warping.
     - 'aux': the auxiliary recirculation fan inside the chamber. Helps regulate
       chamber temperature and filter air on printers with HEPA filters.
     - 'exhaust': the exhaust fan that vents chamber air out of the printer.
       Used to expel fumes when printing ABS, ASA, or other engineering filaments.
+    - 'enhanced_cooling': the Toolhead Enhanced Cooling Fan (M106 P9), present only
+      on H2-series printers with the extension-tool module attached. The printer
+      publishes no run-state telemetry for this fan — the commanded value is
+      sticky (see get_fan_speeds()'s enhanced_cooling_pct). Firmware-observed
+      behavior is effectively on/off; a command sent while the fan is unplugged
+      is acknowledged by the printer as a harmless no-op.
     speed_percent: integer 0–100. 0 = fan off, 100 = full speed.
     Requires user_permission=True.
 
@@ -241,6 +247,7 @@ def set_fan_speed(
         "part_cooling": "set_part_cooling_fan_speed_target_percent",
         "aux": "set_aux_fan_speed_target_percent",
         "exhaust": "set_exhaust_fan_speed_target_percent",
+        "enhanced_cooling": "set_enhanced_cooling_fan_speed_target_percent",
     }
     fan_key = fan.lower()
     if fan_key not in fan_map:

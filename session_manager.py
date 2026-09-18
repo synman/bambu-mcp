@@ -33,6 +33,42 @@ def _ensure_imports():
         _ServiceState = ServiceState
 
 
+def _env_positive_int(name: str) -> int | None:
+    """Read a positive int from the environment.
+
+    Returns None when the variable is unset, empty, unparseable, or non-positive,
+    so the caller omits the kwarg entirely and BambuConfig's own default applies.
+    bpm stays the single source of the default — never mirror its value here.
+    """
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("%s=%r is not an integer — falling back to the bpm default", name, raw)
+        return None
+    if value <= 0:
+        logger.warning("%s=%d must be positive — falling back to the bpm default", name, value)
+        return None
+    return value
+
+
+def _bpm_config_overrides() -> dict:
+    """Env-backed BambuConfig kwargs. Absent env var → absent kwarg → bpm default.
+
+    `ftps_connection_timeout` (bpm `bambuconfig.py:81`, default 15s) bounds the FTPS
+    control-connection handshake used for every SD-card file operation. It was
+    unreachable from bambu-mcp until this shim: bpm exposed the knob, no interface
+    passed it, so a slow or wedged printer stalled file calls for the fixed default.
+    """
+    overrides: dict = {}
+    ftps_timeout = _env_positive_int("BAMBU_MCP_FTPS_TIMEOUT")
+    if ftps_timeout is not None:
+        overrides["ftps_connection_timeout"] = ftps_timeout
+    return overrides
+
+
 class SessionManager:
     def __init__(self):
         self._printers: dict = {}  # name → BambuPrinter
@@ -79,11 +115,15 @@ class SessionManager:
         logger.debug("_start_printer: called for name=%s", name)
         creds = auth.get_printer_credentials(name)
         logger.debug("_start_printer: creating config ip=%s serial=%s access_code=<redacted>", creds["ip"], creds["serial"])
+        overrides = _bpm_config_overrides()
+        if overrides:
+            logger.info("_start_printer: BambuConfig overrides for '%s': %s", name, overrides)
         config = _BambuConfig(
             hostname=creds["ip"],
             access_code=creds["access_code"],
             serial_number=creds["serial"],
             verbose=bool(os.environ.get("BAMBU_MCP_BPM_VERBOSE")),
+            **overrides,
         )
         printer = _BambuPrinter(config=config)
         logger.debug("_start_printer: BambuPrinter object created for '%s'", name)
@@ -179,10 +219,42 @@ class SessionManager:
             p.pause_session()
 
     def resume_session(self, name: str) -> None:
-        """Resume a paused MQTT session."""
+        """Resume a paused MQTT session.
+
+        Delegates to BambuPrinter.resume_session(), which re-subscribes in
+        place when the MQTT client is still connected. If the client has
+        actually dropped, resume_session() leaves service_state at QUIT
+        instead of CONNECTED — in that case fall back to a full
+        start_session() reconnect.
+        """
         logger.debug("resume_session: called for name=%s", name)
         p = self.get_printer(name)
-        if p:
+        if not p:
+            return
+        _ensure_imports()
+        if p.service_state != _ServiceState.PAUSED:
+            # Not paused: bpm's resume_session() would flip a live session to
+            # QUIT and start_session() would then raise "a session is already
+            # active". Reconnect only when the client is actually gone;
+            # otherwise there is nothing to resume.
+            if p.client and p.client.is_connected():
+                logger.debug(
+                    "resume_session: %s is not paused (state=%s); nothing to resume",
+                    name, p.service_state,
+                )
+                return
+            logger.debug(
+                "resume_session: %s client dropped (state=%s); reconnecting via start_session",
+                name, p.service_state,
+            )
+            p.start_session()
+            return
+        p.resume_session()
+        if p.service_state != _ServiceState.CONNECTED:
+            logger.debug(
+                "resume_session: %s not connected after resume_session (state=%s); "
+                "falling back to start_session", name, p.service_state,
+            )
             p.start_session()
 
 

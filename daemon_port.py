@@ -34,6 +34,9 @@ log = logging.getLogger(__name__)
 _BAMBU_DAEMON_PORT_MIN = 25000
 _BAMBU_DAEMON_PORT_MAX = 25099
 _DEFAULT_DAEMON_PORT = 25099
+# The address the daemon binds (server.py sets mcp.settings.host from this).
+# The availability probe must bind the same address — see _is_port_available.
+DAEMON_HOST = "127.0.0.1"
 _BAMBU_MCP_DIR = Path.home() / ".bambu-mcp"
 _PORT_FILE = _BAMBU_MCP_DIR / "daemon.port"
 _PID_FILE = _BAMBU_MCP_DIR / "daemon.pid"
@@ -255,10 +258,29 @@ def _read_vault_port() -> int | None:
 
 
 def _is_port_available(port: int) -> bool:
-    """Check if a port is available via socket.bind() probe."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        try:
-            s.bind(("", port))
-            return True
-        except OSError:
-            return False
+    """Check if a port is available via socket.bind() probe.
+
+    The probe binds exactly the address the daemon itself binds
+    (DAEMON_HOST, see server.py) with SO_REUSEADDR set, mirroring uvicorn's
+    own bind_socket(). Two facts decide that shape, both measured on
+    macOS 2026-09-15:
+
+    * Without SO_REUSEADDR a lingering TIME_WAIT entry from a client of the
+      previous daemon instance makes bind() fail with EADDRINUSE for the
+      TIME_WAIT duration even though the old LISTEN socket is long gone —
+      that was the 5-failed-spawns-per-restart race under launchd.
+    * With SO_REUSEADDR, a bind is refused only by a LISTEN on the SAME
+      address: a wildcard probe succeeds past a 127.0.0.1-specific listener
+      and a 127.0.0.1 probe succeeds past a wildcard listener. Either alone
+      lets a real collision through to a later, noisier failure inside
+      uvicorn, so the probe binds both shapes and the port is available only
+      when both binds succeed. A TIME_WAIT entry blocks neither.
+    """
+    for host in ("", DAEMON_HOST):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                s.bind((host, port))
+            except OSError:
+                return False
+    return True

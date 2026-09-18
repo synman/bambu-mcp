@@ -123,6 +123,16 @@ def get_printer_state(name: str) -> dict:
       get_fan_speeds()       — all fan speeds as percentages
       get_climate()          — temperatures and chamber door state
 
+    recent_update: bool — True when BPM's watchdog considers the MQTT report
+    stream live; False when the watchdog found no message for
+    watchdog_timeout seconds (or none yet), asked the printer to
+    re-announce its version/push info, and is waiting for that reply.
+    Ordinary report messages only reset the watchdog's staleness clock
+    while this is True; it flips back True only when a fresh info/module
+    reply arrives. An idle (non-printing) printer with a healthy report
+    stream still reads recent_update=True — this field flags a stalled
+    telemetry connection, not printer activity.
+
     Response may be gzip+base64 compressed if the payload is large. Decompress:
       import gzip, json, base64
       data = json.loads(gzip.decompress(base64.b64decode(r["data"])))
@@ -138,6 +148,14 @@ def get_printer_state(name: str) -> dict:
     result = _serialize(state)
     if "hms_errors" in result:
         result["hms_errors"] = _apply_hms_historical(result["hms_errors"])
+    # _serialize() already emits state.extension_tool (tool_type and
+    # mount_state as enum names, calibration_raw, type_raw) in the same shape
+    # as every other enum in this payload; add only the derived flag.
+    result.setdefault("extension_tool", {})["mounted"] = (
+        state.extension_tool.is_enhanced_cooling_fan_mounted
+    )
+    printer = session_manager.get_printer(name)
+    result["recent_update"] = printer.recent_update if printer else False
     log.debug("get_printer_state: hms_errors count=%d for %s", len(result.get("hms_errors", [])), name)
     log.debug("get_printer_state: returning result for %s", name)
     return compress_if_large(result)
@@ -221,7 +239,14 @@ def get_fan_speeds(name: str) -> dict:
     """
     Return the current fan speeds as percentages for all fans on the printer.
 
-    Fans reported: part_cooling, aux (recirculation), exhaust (chamber), heatbreak.
+    Fans reported: part_cooling, aux (recirculation), exhaust (chamber), heatbreak,
+    enhanced_cooling (Toolhead Enhanced Cooling Fan, H2-series extension-tool only).
+
+    enhanced_cooling_pct is NOT a measured speed — the printer publishes no run-state
+    telemetry for this fan. It is the last COMMANDED target (sticky): it persists
+    unchanged across telemetry updates and is zeroed only when the extension tool
+    leaves the MOUNTED state (unplugged/removed). On printers with no extension-tool
+    module, this reads 0.
     """
     log.debug("get_fan_speeds: called for printer=%s", name)
     state = session_manager.get_state(name)
@@ -235,6 +260,7 @@ def get_fan_speeds(name: str) -> dict:
         "aux_pct": c.aux_fan_speed_percent,
         "exhaust_pct": c.exhaust_fan_speed_percent,
         "heatbreak_pct": c.heatbreak_fan_speed_percent,
+        "enhanced_cooling_pct": c.enhanced_cooling_fan_target_percent,
     }
 
 

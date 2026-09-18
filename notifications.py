@@ -196,8 +196,19 @@ class NotificationManager:
 
         if new_gs == "RUNNING" and prev_gs in _IDLE_STATES:
             self._emit(ps, name, "job_started", "high", job)
+            try:
+                import job_project
+                from session_manager import session_manager
+                job_project.remember(name, session_manager.get_job(name))
+            except Exception as exc:
+                log.debug("notifications: job_project.remember failed: %s", exc)
 
         elif new_gs == "FINISH" and prev_gs in _ACTIVE_STATES:
+            try:
+                import job_project
+                job_project.forget(name)
+            except Exception as exc:
+                log.debug("notifications: job_project.forget failed: %s", exc)
             try:
                 from session_manager import session_manager
                 prog = session_manager.get_progress(name)
@@ -210,6 +221,11 @@ class NotificationManager:
 
         elif new_gs == "FAILED":
             self._emit(ps, name, "job_failed", "high", job)
+            try:
+                import job_project
+                job_project.forget(name)
+            except Exception as exc:
+                log.debug("notifications: job_project.forget failed: %s", exc)
 
         elif new_gs == "PAUSE" and prev_gs == "RUNNING":
             sid = getattr(state, "stg_cur", None)

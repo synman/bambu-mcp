@@ -494,28 +494,45 @@ def start_stream(name: str, port: int | None = None) -> dict:
             from tools.files import _build_layout_uri
 
             job = session_manager.get_job(n)
-            if job is None or not job.subtask_name:
+            if job is None:
                 # No active job — return whatever is cached (disk-loaded or last known).
                 return _img_cache.get("thumbnail"), _img_cache.get("layout")
 
-            # Find the 3MF path by searching the SD card file cache by filename.
-            # Files may be anywhere on the SD card; never assume a fixed directory.
-            tmf_name = f"{job.subtask_name}.gcode.3mf"
+            # bpm resolves the running job's project from the project_file command
+            # URL and stores it as project_info; its id is the SD-card path. That
+            # covers every start path, including a print started at the printer's
+            # screen, which reports an empty subtask_name — keying on the name
+            # alone left the panels showing the previous job's cached images.
+            import job_project
             tmf_path = None
-            try:
-                from bpm.bambuproject import get_3mf_entry_by_name as _bpm_find
-                _pr = session_manager.get_printer(n)
-                if _pr is not None:
-                    _tree = _pr.get_sdcard_3mf_files()
-                    if _tree:
-                        _entry = _bpm_find(_tree, tmf_name)
-                        if _entry:
-                            tmf_path = _entry.get("id")
-            except Exception as _fe:
-                log.debug("_get_images: 3mf lookup failed: %s", _fe)
+            _pi = getattr(job, "project_info", None)
+            _pi_id = _pi.get("id", "") if isinstance(_pi, dict) else getattr(_pi, "id", "")
+            _recalled = None if _pi_id else job_project.recall(n, job)
+            if _pi_id:
+                tmf_path = _pi_id
+                job_project.remember(n, job)
+            elif _recalled:
+                # bpm lost the project across a daemon restart; use what this
+                # daemon (or the one before it) persisted for the same job.
+                tmf_path = _recalled[0]
+            elif job.subtask_name:
+                # Fallback: search the SD card file cache by filename. Files may be
+                # anywhere on the SD card; never assume a fixed directory.
+                tmf_name = f"{job.subtask_name}.gcode.3mf"
+                try:
+                    from bpm.bambuproject import get_3mf_entry_by_name as _bpm_find
+                    _pr = session_manager.get_printer(n)
+                    if _pr is not None:
+                        _tree = _pr.get_sdcard_3mf_files()
+                        if _tree:
+                            _entry = _bpm_find(_tree, tmf_name)
+                            if _entry:
+                                tmf_path = _entry.get("id")
+                except Exception as _fe:
+                    log.debug("_get_images: 3mf lookup failed: %s", _fe)
 
             if not tmf_path:
-                log.debug("_get_images: %s not found in SD card cache", tmf_name)
+                log.debug("_get_images: no project path for %s (subtask_name=%r)", n, job.subtask_name)
                 return _img_cache.get("thumbnail"), _img_cache.get("layout")
 
             m = re.search(r"plate_(\d+)", job.gcode_file or "")

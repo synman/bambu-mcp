@@ -73,30 +73,57 @@ log = logging.getLogger("bambu-mcp")
 _LOG_LEVEL_CYCLE = [logging.DEBUG, logging.INFO, logging.WARNING]
 
 
-def set_log_level(level_name: str) -> str:
+def set_log_level(level_name: str, bpm_level_name: str | None = None) -> str:
     """Update the root logger and file handler to *level_name* (case-insensitive).
 
     The stderr handler is intentionally left at WARNING to avoid flooding the
-    Copilot stdio MCP transport.  The bpm logger is updated only when
-    BAMBU_MCP_BPM_VERBOSE is not set (i.e. when it tracks the root level).
+    Copilot stdio MCP transport.  The bpm logger is never implicitly changed
+    by a root-level change — pass *bpm_level_name* to set it explicitly (it
+    is left alone when omitted). BAMBU_MCP_BPM_VERBOSE is consulted only at
+    import time for the bpm logger's starting level; it is not read here.
     """
     level = getattr(logging, level_name.upper(), None)
     if level is None:
         raise ValueError(f"Unknown log level: {level_name!r}")
     _root.setLevel(level)
-    _file_handler.setLevel(level)
-    if not os.environ.get("BAMBU_MCP_BPM_VERBOSE"):
-        logging.getLogger("bpm").setLevel(level)
-    log.warning("Log level changed to %s", logging.getLevelName(level))
+    _bpm_logger = logging.getLogger("bpm")
+    if bpm_level_name is not None:
+        bpm_level = getattr(logging, bpm_level_name.upper(), None)
+        if bpm_level is None:
+            raise ValueError(f"Unknown bpm log level: {bpm_level_name!r}")
+        _bpm_logger.setLevel(bpm_level)
+    # The file handler is shared by every logger that propagates to root, so it
+    # must admit whichever of root/bpm currently wants more detail — otherwise
+    # a bpm level set lower than root's is silently discarded at the handler
+    # even though the bpm logger itself would emit the record.
+    _bpm_effective = _bpm_logger.level or _bpm_logger.getEffectiveLevel()
+    _file_handler.setLevel(min(level, _bpm_effective))
+    log.warning(
+        "Log level changed to %s (bpm=%s)",
+        logging.getLevelName(level),
+        logging.getLevelName(_bpm_logger.level),
+    )
     return logging.getLevelName(level)
 
 
 def _cycle_log_level() -> None:
-    """Cycle through DEBUG → INFO → WARNING → DEBUG (SIGUSR1 handler)."""
+    """Cycle the root logger through DEBUG → INFO → WARNING → DEBUG (SIGUSR1 handler)."""
     current = _root.level
     idx = _LOG_LEVEL_CYCLE.index(current) if current in _LOG_LEVEL_CYCLE else 2
     next_level = _LOG_LEVEL_CYCLE[(idx + 1) % len(_LOG_LEVEL_CYCLE)]
     set_log_level(logging.getLevelName(next_level))
+
+
+def _cycle_bpm_log_level() -> None:
+    """Cycle the bpm logger ONLY through DEBUG → INFO → WARNING → DEBUG (SIGUSR2 handler).
+
+    Root/file level is left untouched — passed back to set_log_level unchanged.
+    """
+    bpm_logger = logging.getLogger("bpm")
+    current = bpm_logger.level
+    idx = _LOG_LEVEL_CYCLE.index(current) if current in _LOG_LEVEL_CYCLE else 2
+    next_level = _LOG_LEVEL_CYCLE[(idx + 1) % len(_LOG_LEVEL_CYCLE)]
+    set_log_level(logging.getLevelName(_root.level), bpm_level_name=logging.getLevelName(next_level))
 
 # ── FastMCP server ─────────────────────────────────────────────────────────────
 def _pkg_version() -> str:
@@ -316,6 +343,7 @@ for _sig in (signal.SIGTERM, signal.SIGINT):
     signal.signal(_sig, _signal_handler)
 
 signal.signal(signal.SIGUSR1, lambda _sig, _frame: _cycle_log_level())
+signal.signal(signal.SIGUSR2, lambda _sig, _frame: _cycle_bpm_log_level())
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -339,7 +367,7 @@ def main() -> None:
         _dp.write_pid_file()
         _dp.write_port_file(_port)
         atexit.register(_dp.cleanup_files)
-        mcp.settings.host = "127.0.0.1"
+        mcp.settings.host = _dp.DAEMON_HOST
         mcp.settings.port = _port
         # Run startup in a background thread — printer SSL handshakes can block
         # for 30+ seconds, exceeding the daemon script's port-file wait window.

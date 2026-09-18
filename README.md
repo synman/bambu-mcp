@@ -12,7 +12,7 @@ All intelligence from `bambu-printer-manager` and `bambu-printer-app` is baked i
 
 ## Features
 
-- **85 tools** covering discovery, state monitoring, print control, climate, filament, camera, files, detectors, and raw commands
+- **101 tools** covering discovery, state monitoring, print control, climate, filament, camera, files, detectors, and raw commands
 - **9 resources** at `bambu://` URIs: live rules files + baked-in knowledge modules
 - **1 system prompt** (`bambu_system_context`) that loads all behavioral rules, escalation policy, and tool guidance
 - **Encrypted secrets store** — AES-256-GCM at `~/.bambu-mcp/secrets.enc`, keychain-backed master key (cross-platform)
@@ -72,14 +72,14 @@ Merge `config/copilot_mcp.json` into your Copilot MCP configuration.
 
 | Category | Tools | Write Protected |
 |---|---|---|
-| Discovery & Management | `discover_printers`, `add_printer`, `remove_printer`, `get_configured_printers`, `get_printer_info`, `update_printer_credentials` | add/remove/update |
+| Discovery & Management | `discover_printers`, `add_printer`, `remove_printer`, `get_configured_printers`, `get_printer_info`, `update_printer_credentials`, `disconnect_printer`, `start_printer`, `get_printer_connection_status` | add/remove/update/disconnect/start |
 | State & Monitoring | `get_printer_state`, `get_job_status`, `get_temperatures`, `get_fan_speeds`, `get_ams_status`, `get_hms_errors`, `get_capabilities`, `get_monitoring_data`, + 4 more | none |
 | Print Control | `pause_print`, `resume_print`, `stop_print`, `set_print_speed`, `skip_objects`, `set_print_option`, `send_gcode`, `select_extrusion_calibration` | all |
 | Climate | `set_nozzle_temp`, `set_bed_temp`, `set_chamber_temp`, `set_chamber_light`, `set_fan_speed`(fan, speed_pct), `get_climate`, `get_chamber_light` | writes |
 | Filament | `load_filament`, `unload_filament`, `set_ams_filament_setting`, `start_ams_dryer`, `stop_ams_dryer`, + 4 more | all |
 | Nozzle | `get_nozzle_info`, `set_nozzle_config`(diameter, type, extruder), `swap_tool`(extruder_id?), `refresh_nozzles` | writes |
 | Detectors | `get_detector_settings`, `set_spaghetti_detection`, `set_buildplate_marker_detection`, `set_first_layer_inspection`, `set_nozzle_clumping_detection`, `set_purge_chute_detection`, `set_air_printing_detection` | writes |
-| Files | `list_sdcard_files`, `get_project_info`, `upload_file`, `download_file`, `delete_file`, `create_folder`, `rename_sdcard_file`, `print_file`(ams_mapping?), `open_plate_viewer`, `open_plate_layout`, `get_file_info` | write ops |
+| Files | `list_sdcard_files`, `get_project_info`, `get_all_project_info`, `upload_file`, `download_file`, `delete_file`, `create_folder`, `rename_sdcard_file`, `print_file`(ams_mapping?), `preview_ams_mapping`, `open_plate_viewer`, `open_plate_layout`, `get_file_info` | write ops |
 | Camera | `get_snapshot`, `get_stream_url`, `start_stream`, `stop_stream`, `view_stream` | none |
 | System | `get_session_status`, `pause_mqtt_session`, `resume_mqtt_session`, `trigger_printer_refresh`, `force_state_refresh`, `get_firmware_version`, `get_monitoring_history`, `set_print_options`, `rename_printer` | writes |
 | Raw Command | `send_mqtt_command` | always |
@@ -91,11 +91,12 @@ Merge `config/copilot_mcp.json` into your Copilot MCP configuration.
 
 ```
 ~/bambu-mcp/
-├── server.py                    ← FastMCP entry point (85 tools, 9 resources, 1 prompt)
+├── server.py                    ← FastMCP entry point (101 tools, 9 resources, 1 prompt)
 ├── session_manager.py           ← Persistent BambuPrinter MQTT sessions
 ├── data_collector.py            ← Telemetry history (8 rolling time-series per printer)
 ├── secrets_store.py             ← AES-256-GCM secrets vault at ~/.bambu-mcp/secrets.enc
 ├── auth.py                      ← Printer credential CRUD on top of secrets_store
+├── job_project.py               ← Running job's resolved .3mf path per printer (survives daemon restarts)
 ├── make.py                      ← Cross-platform venv installer (python make.py)
 ├── camera/                      ← Self-contained camera streaming module
 │   ├── protocol.py              ← Model → protocol routing (RTSPS vs TCP+TLS)

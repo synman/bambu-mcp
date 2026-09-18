@@ -19,6 +19,47 @@ def _permission_denied() -> str:
     return "Error: user_permission must be True to perform this action."
 
 
+def _to_dict(o):
+    """Recursively convert dataclasses/enums into plain JSON-serializable values."""
+    import dataclasses
+    from enum import Enum
+
+    if isinstance(o, Enum):
+        return o.name
+    if dataclasses.is_dataclass(o) and not isinstance(o, type):
+        return {f.name: _to_dict(getattr(o, f.name)) for f in dataclasses.fields(o)}
+    if isinstance(o, dict):
+        return {k: _to_dict(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_to_dict(v) for v in o]
+    return o
+
+
+def _serialize_project_info(info, include_images: bool = False) -> dict:
+    """
+    Convert a single ProjectInfo (dataclass or dict) into the JSON-safe shape
+    returned by get_project_info(), omitting the large topimg/thumbnail image
+    fields unless include_images=True. Shared by get_project_info() and
+    get_all_project_info() so both return each plate in the same shape.
+    """
+    import dataclasses
+    import json
+
+    if dataclasses.is_dataclass(info):
+        result = json.loads(json.dumps(_to_dict(info), default=str))
+    else:
+        result = info if isinstance(info, dict) else {"info": str(info)}
+
+    if not include_images:
+        meta = result.get("metadata")
+        if isinstance(meta, dict):
+            if "topimg" in meta:
+                meta["topimg"] = "[image omitted — use get_plate_topview to fetch]"
+            if "thumbnail" in meta:
+                meta["thumbnail"] = "[image omitted — use get_plate_thumbnail to fetch]"
+    return result
+
+
 def _find_file_in_tree(tree: dict, target_path: str) -> dict | None:
     """Recursively search the sdcard file tree for an entry matching target_path."""
     log.debug("_find_file_in_tree: searching for %s", target_path)
@@ -273,41 +314,56 @@ def get_project_info(name: str, file_path: str, plate_num: int = 1, include_imag
             log.debug("get_project_info: → error: no info for %s plate=%s", file_path, plate_num)
             return {"error": f"Could not retrieve project info for '{file_path}'"}
         log.debug("get_project_info: info retrieved for %s", name)
-        import dataclasses
-        import json
-        from enum import Enum
-
-        def _to_dict(o):
-            if isinstance(o, Enum):
-                return o.name
-            if dataclasses.is_dataclass(o) and not isinstance(o, type):
-                return {f.name: _to_dict(getattr(o, f.name)) for f in dataclasses.fields(o)}
-            if isinstance(o, dict):
-                return {k: _to_dict(v) for k, v in o.items()}
-            if isinstance(o, (list, tuple)):
-                return [_to_dict(v) for v in o]
-            return o
-
-        if dataclasses.is_dataclass(info):
-            result = json.loads(
-                json.dumps(_to_dict(info), default=str)
-            )
-        else:
-            result = info if isinstance(info, dict) else {"info": str(info)}
-
-        if not include_images:
-            meta = result.get("metadata")
-            if isinstance(meta, dict):
-                if "topimg" in meta:
-                    meta["topimg"] = "[image omitted — use get_plate_topview to fetch]"
-                if "thumbnail" in meta:
-                    meta["thumbnail"] = "[image omitted — use get_plate_thumbnail to fetch]"
+        result = _serialize_project_info(info, include_images)
 
         log.debug("get_project_info: → result for %s plate=%s include_images=%s", file_path, plate_num, include_images)
         return result
     except Exception as e:
         log.error("get_project_info: error for %s: %s", name, e, exc_info=True)
         return {"error": f"Error getting project info: {e}"}
+
+
+def get_all_project_info(name: str, file_path: str, include_images: bool = False) -> dict | list:
+    """
+    Return 3MF metadata for every plate in a project file, in a single call.
+
+    Batch counterpart to get_project_info() — instead of iterating plate
+    numbers one round-trip at a time, this fetches the .3mf's actual plate
+    set and returns every plate's metadata in one response. Use this when
+    you need all plates (e.g. surveying a multi-plate project, or building a
+    plate picker) instead of calling get_project_info() once per plate.
+
+    Plate numbers are not assumed to be contiguous — a .3mf may contain a
+    sparse set of plates (e.g. [1,5,6,7,8,12,15]) if plates were deleted in
+    the slicer; only plates that genuinely exist are returned.
+
+    include_images behaves exactly as in get_project_info(): when False
+    (default) the metadata.topimg/thumbnail fields are omitted per plate to
+    keep the response small; when True both data URIs are included for
+    every plate (large). Use get_plate_thumbnail()/get_plate_topview() to
+    fetch a single plate's image on demand instead.
+
+    Returns a list of per-plate dicts, each shaped exactly like a single
+    get_project_info() response, ordered by plate number.
+    """
+    log.debug("get_all_project_info: called for name=%s file_path=%s include_images=%s", name, file_path, include_images)
+    printer = session_manager.get_printer(name)
+    if printer is None:
+        log.warning("get_all_project_info: printer not connected: %s", name)
+        return _no_printer(name)
+    try:
+        from bpm.bambuproject import get_all_project_info as _get_all_project_info
+        log.debug("get_all_project_info: calling _get_all_project_info for %s", name)
+        infos = _get_all_project_info(file_path, printer)
+        if not infos:
+            log.debug("get_all_project_info: → error: no plates for %s", file_path)
+            return {"error": f"Could not retrieve project info for '{file_path}'"}
+        plates = [_serialize_project_info(info, include_images) for info in infos]
+        log.debug("get_all_project_info: → %d plate(s) for %s", len(plates), name)
+        return plates
+    except Exception as e:
+        log.error("get_all_project_info: error for %s: %s", name, e, exc_info=True)
+        return {"error": f"Error getting all project info: {e}"}
 
 
 def get_plate_thumbnail(
@@ -586,6 +642,289 @@ def create_folder(
         return {"error": f"Error creating folder: {e}"}
 
 
+# ── AMS mapping from live spools ────────────────────────────────────────────
+# bpm's get_project_info() never yields real tray ids: the 3mf's
+# `filament_maps` is the slicer's per-filament EXTRUDER assignment, and bpm
+# replaces it with a filament-id placeholder ("1", "2", ...). The only source
+# of a real mapping is what the printer last reported loaded. This block mirrors
+# bambu-printer-app's Print3mfFileDialog (reconstructAmsMapping /
+# getProtocolTrayId / toWireMapping / getMatchQuality) scoring. Two deliberate
+# differences, because the dialog has a human at a dropdown and this tool does
+# not: colour names are parsed with the full CSS3 table (bpm emits CSS3 names;
+# BPA's 10-name table mis-defines `green`), and assignment runs exact-first,
+# then best-unused, then reuse, instead of BPA's single greedy pass.
+
+_TYPE_MISMATCH_PENALTY = 10000.0
+# A type-mismatched spool is still accepted when its colour is this close
+# (BPA COLOR_ONLY_MATCH_DISTANCE).
+_COLOR_ONLY_MATCH_DISTANCE = 60.0
+_TYPE_MATCH_EXCELLENT_DISTANCE = 50.0
+_TYPE_MATCH_GOOD_DISTANCE = 150.0
+
+
+def _match_quality(type_match: bool, dist: float) -> tuple[str, str]:
+    """BPA getMatchQuality: (quality key, human label) for one filament/spool pair."""
+    if type_match and dist < _TYPE_MATCH_EXCELLENT_DISTANCE:
+        return "excellent", "Excellent Match"
+    if type_match and dist < _TYPE_MATCH_GOOD_DISTANCE:
+        return "good", "Good Match"
+    if type_match:
+        return "fair", "Type Match"
+    if dist < _COLOR_ONLY_MATCH_DISTANCE:
+        return "poor", "Color Match Only"
+    return "bad", "Poor Match"
+
+
+def _color_to_rgb(color) -> tuple[int, int, int] | None:
+    """Parse '#RRGGBB', '#RRGGBBAA', bare 'RRGGBB', or a CSS3 colour name.
+
+    bpm stores a spool colour as the CSS3 name when webcolors knows the hex
+    exactly, else as '#RRGGBBAA'; slicer metadata is '#RRGGBB'. Returns None
+    for anything unparseable, which the caller treats as "cannot compare".
+    """
+    if not isinstance(color, str) or not color.strip():
+        return None
+    c = color.strip()
+    if not c.startswith("#"):
+        try:
+            import webcolors
+            c = webcolors.name_to_hex(c.lower())
+        except ValueError:
+            c = "#" + c
+    h = c.lstrip("#")
+    if len(h) == 8:
+        h = h[:6]
+    if len(h) != 6:
+        return None
+    try:
+        return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    except ValueError:
+        return None
+
+
+def _color_distance(a, b) -> float:
+    """Euclidean RGB distance; inf when either colour cannot be parsed."""
+    import math
+    ra, rb = _color_to_rgb(a), _color_to_rgb(b)
+    if ra is None or rb is None:
+        return math.inf
+    return math.dist(ra, rb)
+
+
+def _protocol_tray_id(spool) -> int | None:
+    """Wire tray id for an AMS-backed spool (BPA getProtocolTrayId).
+
+    4-slot units (ams_id 0..127): ams_id * 4 + slot_id → 0..103.
+    AMS HT / N3S (ams_id 128..253): ams_id + slot_id → 128..135.
+    External spool / no AMS: None — not a use_ams candidate.
+    """
+    try:
+        ams_id, slot_id = int(spool.ams_id), int(spool.slot_id)
+    except (TypeError, ValueError, AttributeError):
+        return None
+    if slot_id < 0:
+        return None
+    if 0 <= ams_id < 128:
+        return ams_id * 4 + slot_id
+    if 128 <= ams_id < 254:
+        return ams_id + slot_id
+    return None
+
+
+def _usable_spools(spools: list) -> list[tuple[int, object]]:
+    """(tray_id, spool) for every AMS-backed spool that can be printed from.
+
+    BPA isValidSpool: AMS-backed (external excluded), has a type, and
+    state != 0 (an empty slot reports state 0).
+    """
+    out: list[tuple[int, object]] = []
+    for s in spools or []:
+        tray = _protocol_tray_id(s)
+        if tray is None or not getattr(s, "type", "") or getattr(s, "state", -1) == 0:
+            continue
+        out.append((tray, s))
+    return out
+
+
+def _resolve_ams_mapping_from_spools(
+    filaments: list, spools: list
+) -> tuple[list[int], list[dict], list[dict]]:
+    """Build the filament-id-indexed wire ams_mapping from the loaded spools.
+
+    Scoring per BPA: exact type match scores 0, mismatch 10000, plus RGB
+    colour distance; a pair is acceptable when the type matches or the colour
+    alone is within _COLOR_ONLY_MATCH_DISTANCE. Assignment runs three passes
+    over the filaments still unmapped:
+      1. exact — type matches and the colour distance is 0, unused spool;
+      2. best unused — lowest acceptable score among unused spools;
+      3. reuse — lowest acceptable score among ALL usable spools, so two
+         project filaments of one loaded material share a tray rather than
+         refusing the print.
+    A filament with no usable id, type, or colour is unmatched. The mapping is
+    indexed by 1-based filament id and gap-filled with -1, because the gcode
+    inside the 3mf references filaments by id, not list position.
+
+    Returns (wire_mapping, matches, unmatched): one match dict per mapped
+    filament (id, type, color, tray_id, spool_type, spool_color, distance,
+    quality, label, pass, reused) and the unmatched filament dicts.
+    """
+    import math
+    candidates = _usable_spools(spools)
+
+    def parse_id(f) -> int:
+        try:
+            return int(f.get("id", 0))
+        except (TypeError, ValueError):
+            return 0
+
+    entries = [(f, parse_id(f)) for f in (filaments or [])]
+    wire = [-1] * max((fid for _, fid in entries), default=0)
+    used: set[int] = set()
+    matches: list[dict] = []
+    unmatched: list[dict] = []
+    pending: list[tuple[dict, int]] = []
+    for f, fid in entries:
+        if fid <= 0 or not str(f.get("type") or "") or not (f.get("color") or ""):
+            unmatched.append(f)
+        else:
+            pending.append((f, fid))
+
+    def scored(f, s) -> tuple[float, bool, float] | None:
+        type_match = str(s.type).upper() == str(f.get("type")).upper()
+        dist = _color_distance(f.get("color"), getattr(s, "color", ""))
+        if dist == math.inf:
+            return None
+        return (0.0 if type_match else _TYPE_MISMATCH_PENALTY) + dist, type_match, dist
+
+    def acceptable(score: float) -> bool:
+        return score < _TYPE_MISMATCH_PENALTY or (
+            score - _TYPE_MISMATCH_PENALTY < _COLOR_ONLY_MATCH_DISTANCE
+        )
+
+    def assign(f, fid, tray, s, type_match, dist, pass_name, reused):
+        quality, label = _match_quality(type_match, dist)
+        wire[fid - 1] = tray
+        used.add(tray)
+        matches.append({
+            "id": fid, "type": f.get("type"), "color": f.get("color"),
+            "tray_id": tray, "spool_type": s.type, "spool_color": getattr(s, "color", ""),
+            "distance": round(dist, 1), "quality": quality, "label": label,
+            "pass": pass_name, "reused": reused,
+        })
+
+    # Pass 1 — exact type and colour, unused spools only.
+    for f, fid in list(pending):
+        for tray, s in candidates:
+            if tray in used:
+                continue
+            sc = scored(f, s)
+            if sc and sc[1] and sc[2] == 0:
+                assign(f, fid, tray, s, True, 0.0, "exact", False)
+                pending.remove((f, fid))
+                break
+
+    # Pass 2 — best acceptable unused spool; pass 3 — best acceptable spool, reuse allowed.
+    for pass_name, allow_reuse in (("best-unused", False), ("reuse", True)):
+        for f, fid in list(pending):
+            best = None
+            for tray, s in candidates:
+                if tray in used and not allow_reuse:
+                    continue
+                sc = scored(f, s)
+                if sc and (best is None or sc[0] < best[0]):
+                    best = (sc[0], tray, s, sc[1], sc[2])
+            if best and acceptable(best[0]):
+                _, tray, s, type_match, dist = best
+                assign(f, fid, tray, s, type_match, dist, pass_name, tray in used)
+                pending.remove((f, fid))
+
+    unmatched.extend(f for f, _ in pending)
+    return wire, matches, unmatched
+
+
+def _resolve_print_mapping(name: str, printer, file_path: str, plate_num: int) -> dict:
+    """Resolve the ams_mapping a print of file_path/plate_num would use, from the spools
+    the printer last reported. Never prints. Returns the resolution payload; when the
+    print could not proceed on it the payload also carries an "error" message.
+    """
+    import json
+    try:
+        from bpm.bambuproject import get_project_info as _get_project_info
+        info = _get_project_info(file_path, printer, plate_num=plate_num)
+    except Exception as e:
+        log.warning("resolve_print_mapping: could not read project metadata for %s: %s", file_path, e)
+        return {
+            "error": (
+                f"Could not read project metadata for {file_path}: {e}. "
+                "Pass ams_mapping explicitly or use use_ams=False."
+            )
+        }
+    metadata = getattr(info, "metadata", None) or {}
+    filaments = list(metadata.get("filament") or [])
+    if info is None or not filaments:
+        return {
+            "error": (
+                f"{file_path} plate {plate_num} carries no filament metadata to map from "
+                "(plate missing or unparsed). Pass ams_mapping explicitly or use use_ams=False."
+            )
+        }
+    state = session_manager.get_state(name)
+    spools = list(getattr(state, "spools", None) or [])
+    wire, matches, unmatched = _resolve_ams_mapping_from_spools(filaments, spools)
+    result = {
+        "file_path": file_path,
+        "plate_num": plate_num,
+        "filaments": filaments,
+        "resolved_ams_mapping": wire,
+        "ams_mapping_json": json.dumps(wire),
+        "matches": matches,
+        "unmatched": unmatched,
+        "loaded_spools": [
+            {"tray_id": tray, "type": s.type, "color": getattr(s, "color", "")}
+            for tray, s in _usable_spools(spools)
+        ],
+        "external_spools": [
+            {"slot_id": getattr(s, "slot_id", -1), "type": s.type, "color": getattr(s, "color", "")}
+            for s in spools if _protocol_tray_id(s) is None and getattr(s, "slot_id", -1) >= 254
+        ],
+    }
+    log.info(
+        "resolve_print_mapping: %s plate %s → %s (unmatched=%d)",
+        file_path, plate_num, wire, len(unmatched),
+    )
+    if unmatched or not wire:
+        result["error"] = (
+            "No loaded AMS spool matches these project filaments: "
+            + ", ".join(f"id {f.get('id')} ({f.get('type')} {f.get('color')})" for f in unmatched)
+            + ". Load a matching spool, pass ams_mapping explicitly, or use use_ams=False."
+        )
+    return result
+
+
+def preview_ams_mapping(name: str, file_path: str, plate_num: int = 1) -> dict:
+    """
+    Resolve — WITHOUT printing — the ams_mapping that print_file would send for a
+    .3mf plate, from the spools the printer last reported loaded.
+
+    Read-only. Call it in STEP 1 of the print_file confirmation gate and show the
+    result in the summary: each filament → tray_id with the spool it matched, its
+    colour distance, and a BPA match label (Excellent Match / Good Match / Type Match /
+    Color Match Only / Poor Match). "Type Match" means the material matches but the
+    colour is off — print_file WILL print on it, so surface it to the user.
+
+    Returns resolved_ams_mapping (list, indexed by 1-based filament id, -1 for an
+    unused id), ams_mapping_json (the exact string print_file sends), matches,
+    unmatched, loaded_spools (the AMS spools that could be printed from), and
+    external_spools. When "error" is present print_file would refuse with the same
+    message; pass ams_mapping explicitly or use use_ams=False.
+    """
+    log.debug("preview_ams_mapping: called for name=%s file_path=%s plate_num=%s", name, file_path, plate_num)
+    printer = session_manager.get_printer(name)
+    if printer is None:
+        return _no_printer(name)
+    return _resolve_print_mapping(name, printer, file_path, plate_num)
+
+
 def print_file(
     name: str,
     file_path: str,
@@ -602,38 +941,49 @@ def print_file(
     Start printing a .3mf file already stored on the printer's SD card.
 
     Requires user_permission=True. bed_type must be one of: auto, cool_plate,
-    eng_plate, hot_plate, textured_plate (case-insensitive). AMS mapping is
-    read automatically from project metadata when use_ams=True.
+    eng_plate, hot_plate, textured_plate (case-insensitive). When use_ams=True
+    and no ams_mapping is given, the mapping is resolved from the spools the
+    printer last reported loaded: each project filament is matched to an AMS
+    spool by exact type then closest colour (bambu-printer-app's print-dialog
+    scoring; exact pairs are assigned first, then best unused, then reuse).
+    A same-material spool of the WRONG colour is accepted ("Type Match") — call
+    preview_ams_mapping() first and show the user every match label.
+    The 3mf carries no usable tray ids — get_project_info()'s ams_mapping is a
+    filament-id placeholder, never a slot assignment. If any filament finds no
+    loaded match, or the plate carries no filament metadata, the print is
+    REFUSED with the unmatched filaments and the loaded spools listed; pass
+    ams_mapping explicitly (or use_ams=False) to proceed.
     Calls printer.print_3mf_file() with the given parameters.
     bed_type values: 'cool_plate' = smooth cold plate (PLA, TPU at low temp).
     'eng_plate' = smooth engineering plate (PETG, PA, ABS). 'hot_plate' = smooth
     high-temp plate (ASA, PC). 'textured_plate' = textured PEI surface (good
     general-purpose adhesion). 'auto' = let the printer decide based on the sliced
     settings in the file.
-    use_ams=True = load filament from AMS slots as mapped in the .3mf file.
+    use_ams=True = load filament from AMS slots, resolved as described above.
     use_ams=False = print using only the external spool holder (for single-color
     prints without AMS).
-    ams_mapping overrides the AMS slot assignment baked into the .3mf file. Provide
-    a JSON array string or a list of integers where each element is an absolute
-    tray_id for the corresponding filament slot in the file.
+    ams_mapping overrides the live-spool resolution above. Provide a JSON array
+    string or a list of integers indexed by 1-based filament id (index 0 = filament
+    1), each element an absolute tray_id, -1 for a filament id the plate does not use.
 
-    tray_id encoding — ALWAYS derive from live telemetry, NEVER hardcode:
-      tray_id = ams_unit.ams_id + slot_id
-      where ams_unit.ams_id is the hardware chip_id from get_ams_units().
-    chip_ids are hardware-assigned and vary across printer configurations.
-    NEVER use unit_index * 4 + slot_id — this is WRONG for AMS HT and any
-    multi-AMS setup. External spool holder = 254. Unmapped filament = -1.
+    tray_id encoding — ALWAYS derive from live telemetry (the spool's ams_id is the
+    hardware chip_id from get_ams_units() / get_spool_info()), NEVER hardcode:
+      4-slot AMS (ams_id 0..127):  tray_id = ams_id * 4 + slot_id   → 0..103
+      AMS HT / N3S (ams_id ≥ 128): tray_id = ams_id + slot_id       → 128..
+      External spool holder = 254. Unused filament id = -1.
+    NEVER use the 0-based unit_index in place of ams_id, and NEVER apply the
+    4-slot formula to an AMS HT (ams_id 128 → 512 is wrong; 128 is right).
 
-    Correct workflow:
-      1. Call get_ams_units() to get each unit's ams_id (chip_id).
-      2. For each filament slot: tray_id = target_unit.ams_id + slot_id.
-      3. Build ams_mapping array in filament-slot order from the .3mf file.
+    Correct workflow when overriding:
+      1. Call preview_ams_mapping() to see what the tool would resolve, then
+         get_spool_info() for each spool's ams_id and slot_id.
+      2. Encode each chosen spool with the formula above.
+      3. Build the array indexed by 1-based filament id from get_project_info().
 
     Example: if AMS 2 Pro has ams_id=0, slot 1 → tray_id=1.
              if AMS HT has ams_id=128, slot 0 → tray_id=128.
     When ams_mapping is provided, use_ams is automatically set to True.
-    Always call get_project_info() first to see what filament slots the .3mf requires,
-    then map those slots to the physical AMS slots you want to use.
+    Always call get_project_info() first to see which filaments the .3mf plate uses.
 
     ⚠️ CONFIRMATION REQUIRED — DO NOT CALL THIS TOOL until all steps below are done
     IN A SINGLE TURN. This tool starts an irreversible physical print.
@@ -643,8 +993,9 @@ def print_file(
       firmware also rejects with "printer busy"). Check get_print_progress() first if unsure.
 
     STEP 1 — Gather everything first (no user interaction yet):
-      Call get_project_info(), get_ams_units(), get_spool_info() to collect all data
-      needed to build the complete summary before asking the user anything.
+      Call get_project_info(), preview_ams_mapping(), get_ams_units(), get_spool_info()
+      to collect all data needed to build the complete summary before asking the user
+      anything. preview_ams_mapping() is the mapping print_file will actually send.
       To show plate visuals to the user, call open_plate_viewer(name, file_path) — do NOT
       call get_plate_thumbnail() or get_plate_topview() and embed the data_uri in the
       response. Humans cannot see raw base64 in a terminal or chat context.
@@ -660,7 +1011,8 @@ def print_file(
     STEP 2 — Present ONE complete summary containing ALL of the following:
       - Part name(s) and filament(s) from the project metadata
       - bed_type (from metadata) — ask: is this correct for the plate physically on the bed?
-      - ams_mapping — show each filament → AMS unit/slot; ask: matches what's loaded?
+      - ams_mapping — from preview_ams_mapping(): each filament → tray with its match
+        label; call out any "Type Match" (right material, wrong colour); ask: correct?
       - flow_calibration — show stored value with label; ask: run flow calibration before printing?
       - timelapse — show stored value with label; ask: record a timelapse?
       - bed_leveling — show stored value with label; ask: run bed leveling, or skip for speed?
@@ -695,7 +1047,10 @@ def print_file(
             if bed_type and bed_type.upper() in PlateType.__members__
             else PlateType.AUTO
         )
-        if ams_mapping is not None:
+        matches: list[dict] = []
+        # "" and [] are the empty forms clients send for "no mapping" (BPA's own URL
+        # sends ams_mapping=); treat them as absent rather than as an empty mapping.
+        if ams_mapping not in (None, "", []):
             # Coerce list → JSON string so print_3mf_file's json.loads() works
             if isinstance(ams_mapping, list):
                 ams_mapping = __import__("json").dumps(ams_mapping)
@@ -705,14 +1060,12 @@ def print_file(
         else:
             resolved_ams_mapping = ""
             if use_ams:
-                try:
-                    from bpm.bambuproject import get_project_info as _get_project_info
-                    info = _get_project_info(file_path, printer, plate_num=plate_num)
-                    if info and hasattr(info, "metadata") and info.metadata:
-                        raw = info.metadata.get("ams_mapping", "")
-                        resolved_ams_mapping = __import__("json").dumps(raw) if isinstance(raw, list) else raw
-                except Exception:
-                    pass
+                res = _resolve_print_mapping(name, printer, file_path, plate_num)
+                if "error" in res:
+                    log.warning("print_file: refused for %s: %s", name, res["error"])
+                    return res
+                resolved_ams_mapping = res["ams_mapping_json"]
+                matches = res["matches"]
         log.debug("print_file: calling printer.print_3mf_file for %s", name)
         printer.print_3mf_file(
             name=file_path,
@@ -733,6 +1086,7 @@ def print_file(
             "bed_type": bed_enum.name,
             "use_ams": use_ams,
             "ams_mapping": resolved_ams_mapping,
+            "matches": matches,
         }
     except Exception as e:
         log.error("print_file: error for %s: %s", name, e, exc_info=True)

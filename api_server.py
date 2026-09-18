@@ -223,8 +223,8 @@ _ROUTE_PARAM_DESCRIPTIONS: dict[tuple[str, str], str] = {
     ("print_3mf",                       "filename"):    "Full SD card path to the .3mf file (e.g. /_jobs/myprint.gcode.3mf).",
     ("print_3mf",                       "platenum"):    "Plate number within the .3mf project (1-based).",
     ("print_3mf",                       "plate"):       "Build plate surface type.",
-    ("print_3mf",                       "use_ams"):     "Use AMS filament mapping from the project file.",
-    ("print_3mf",                       "ams_mapping"): "JSON array overriding AMS slot assignment (e.g. [1,-1,-1,-1]). Omit to use project defaults.",
+    ("print_3mf",                       "use_ams"):     "Print from the AMS. With no ams_mapping the mapping is resolved from the loaded spools by type and colour; the request is refused (400) when a filament has no loaded match.",
+    ("print_3mf",                       "ams_mapping"): "JSON array indexed by 1-based filament id, each an absolute tray id (4-slot AMS ams_id*4+slot, AMS HT 128+slot, -1 unused), e.g. [1,-1,128]. Omit to resolve from the loaded spools — the project file carries no usable mapping.",
     ("print_3mf",                       "bl"):          "Run bed leveling before printing.",
     ("print_3mf",                       "flow"):        "Run flow/extrusion calibration before printing.",
     ("print_3mf",                       "tl"):          "Record a timelapse of the print.",
@@ -249,7 +249,7 @@ _ROUTE_PARAM_DESCRIPTIONS: dict[tuple[str, str], str] = {
     ("upload_file_to_printer",          "dest"):        "Destination path on the printer SD card.",
     ("download_file_from_printer",      "src"):         "Full SD card path of the file to download.",
     ("get_3mf_props_for_file",          "file"):        "Full SD card path to the .3mf file.",
-    ("get_3mf_props_for_file",          "plate"):       "Plate number within the .3mf project (1-based). Use 0 to return all plates.",
+    ("get_3mf_props_for_file",          "plate"):       "Plate number within the .3mf project (1-based). Returns one plate per call — use the get_all_project_info MCP tool to fetch every plate in a single call.",
     # ── AI detectors ───────────────────────────────────────────────────────────
     ("set_buildplate_marker_detector",  "enabled"):     "Enable or disable the detector.",
     ("set_first_layer_inspection",      "enabled"):     "Enable or disable first-layer LiDAR/camera inspection.",
@@ -1422,7 +1422,16 @@ def _build_app():
             bl = _rargs().get("bl") == "true"
             flow = _rargs().get("flow") == "true"
             tl = _rargs().get("tl") == "true"
-            log.debug("print_3mf: filename=%s platenum=%s plate=%s use_ams=%s", filename, platenum, platetype, use_ams)
+            if use_ams and not ams_mapping:
+                # Same resolution as the print_file MCP tool: the 3mf carries no
+                # usable mapping, so build it from the loaded spools or refuse.
+                from tools.files import _resolve_print_mapping
+                res = _resolve_print_mapping(pname or "unknown", p, filename, platenum)
+                if "error" in res:
+                    log.warning("print_3mf: refused: %s", res["error"])
+                    return _err(res["error"], code=HTTPStatus.BAD_REQUEST)
+                ams_mapping = res["ams_mapping_json"]
+            log.debug("print_3mf: filename=%s platenum=%s plate=%s use_ams=%s ams_mapping=%s", filename, platenum, platetype, use_ams, ams_mapping)
             p.print_3mf_file(filename, platenum, platetype, use_ams, ams_mapping=ams_mapping, bedlevel=bl, flow=flow, timelapse=tl)
             log.debug("print_3mf: → ok")
             return _ok()
@@ -2187,7 +2196,7 @@ def _build_app():
         try:
             from bpm.bambuproject import get_project_info as _gpi
             file = _rargs().get("file", "")
-            plate = int(_rargs().get("plate", 0))
+            plate = int(_rargs().get("plate", 1))
             log.debug("get_3mf_props_for_file: file=%s plate=%s", file, plate)
             props = _gpi(file, p, plate_num=plate, use_cached_list=True)
             if not props:

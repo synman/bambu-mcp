@@ -144,6 +144,66 @@ def update_printer_credentials(
         return f"Credentials updated for '{name}' but session restart failed: {e}"
 
 
+def disconnect_printer(name: str, user_permission: bool = False) -> str:
+    """
+    Disconnect a printer's camera stream and MQTT session, keeping it configured.
+
+    Tears down the MJPEG stream (if running) then stops the MQTT session, in
+    that order — mirroring server._shutdown(). The per-printer job monitor is
+    NOT stopped: camera.job_monitor exposes only a global stop_all(), no
+    per-printer stop, so its background thread for this printer keeps running.
+    Unlike remove_printer(), credentials are retained — the printer stays
+    configured and start_printer() reconnects it. Requires user_permission=True,
+    mirroring the pause_mqtt_session/resume_mqtt_session gating convention.
+    """
+    log.debug("disconnect_printer: called for name=%s user_permission=%s", name, user_permission)
+    if not user_permission:
+        log.debug("disconnect_printer: permission denied for %s", name)
+        return _permission_denied()
+    try:
+        from camera.mjpeg_server import mjpeg_server
+        stream_stopped = mjpeg_server.stop(name)
+        log.debug("disconnect_printer: stream_stopped=%s for %s", stream_stopped, name)
+    except Exception as e:
+        log.warning("disconnect_printer: error stopping stream for %s: %s", name, e, exc_info=True)
+    session_manager.stop_printer(name)
+    log.info("disconnect_printer: session stopped for %s", name)
+    return f"Printer '{name}' disconnected. Configuration retained; use start_printer('{name}') to reconnect."
+
+
+def start_printer(name: str, user_permission: bool = False) -> str:
+    """
+    Start (or restart) the MQTT session for an already-configured printer.
+
+    Reconnects a printer previously torn down by disconnect_printer() without
+    needing its credentials again. Requires user_permission=True, mirroring
+    the disconnect_printer/pause_mqtt_session/resume_mqtt_session gating
+    convention.
+    """
+    log.debug("start_printer: called for name=%s user_permission=%s", name, user_permission)
+    if not user_permission:
+        log.debug("start_printer: permission denied for %s", name)
+        return _permission_denied()
+    if name not in auth.get_configured_printer_names():
+        log.warning("start_printer: printer not configured: %s", name)
+        return f"Error: Printer '{name}' is not configured."
+    try:
+        restarted = False
+        if session_manager.get_printer(name) is not None:
+            # A session object already exists. SessionManager.start_printer()
+            # would overwrite it without quit(), orphaning the old MQTT client
+            # thread with its update callback still wired — stop it first so
+            # "restart" is a real restart.
+            session_manager.stop_printer(name)
+            restarted = True
+        session_manager.start_printer(name)
+        log.info("start_printer: session %s for %s", "restarted" if restarted else "started", name)
+        return f"Printer '{name}' session {'restarted' if restarted else 'started'}."
+    except Exception as e:
+        log.error("start_printer: error starting session for %s: %s", name, e, exc_info=True)
+        return f"Error starting session for '{name}': {e}"
+
+
 def get_printer_connection_status(name: str) -> dict:
     """
     Return the connection and service state for a single named printer.
@@ -151,6 +211,11 @@ def get_printer_connection_status(name: str) -> dict:
     'connected' is True when the MQTT session is active and in CONNECTED state.
     'session_active' is True when a session object exists regardless of state.
     'configured' is True when the printer has stored credentials.
+    'recent_update' is True while BPM's watchdog considers the report stream
+    live; False once no message arrived for watchdog_timeout seconds and the
+    watchdog is waiting for the printer to re-announce itself. It flags a
+    stalled telemetry connection, not printer activity — an idle printer with
+    a healthy stream reads True. None when no session object exists.
     """
     log.debug("get_printer_connection_status: called for name=%s", name)
     configured_names = auth.get_configured_printer_names()
@@ -159,16 +224,22 @@ def get_printer_connection_status(name: str) -> dict:
     session_active = printer is not None
     connected = session_manager.is_connected(name)
     service_state = None
+    recent_update = None
     if printer is not None:
         try:
             service_state = printer.service_state.name
         except Exception:
             pass
-    log.debug("get_printer_connection_status: %s -> configured=%s session_active=%s connected=%s service_state=%s", name, configured, session_active, connected, service_state)
+        try:
+            recent_update = bool(printer.recent_update)
+        except Exception:
+            pass
+    log.debug("get_printer_connection_status: %s -> configured=%s session_active=%s connected=%s service_state=%s recent_update=%s", name, configured, session_active, connected, service_state, recent_update)
     return {
         "name": name,
         "configured": configured,
         "session_active": session_active,
         "connected": connected,
         "service_state": service_state,
+        "recent_update": recent_update,
     }

@@ -221,8 +221,14 @@ Manage files on the printer's SD card and prepare print jobs. Upload .3mf files 
 - upload_file / download_file / delete_file / create_folder — file operations
 - rename_sdcard_file(name, src_path, dest_path) — FTPS rename/move file on SD card
 - print_file(name, file_path, plate_num, bed_type, use_ams, ams_mapping?, ...) — start print from SD card
-  ams_mapping: JSON array string or list of integers overriding .3mf slot assignments; tray_id = ams_unit*4+slot (254=ext, -1=unmapped)
-  Always call get_project_info() first to understand what filament slots the file requires.
+  ams_mapping: optional override, indexed by 1-based filament id. Omit it and print_file resolves the
+  mapping from the spools the printer last reported (exact type, then closest colour — bambu-printer-app's
+  scoring; a same-material wrong-colour spool IS accepted as "Type Match") and REFUSES if a filament has
+  no loaded match. The .3mf carries no slot assignment; get_project_info()'s ams_mapping is a filament-id
+  placeholder. tray_id: 4-slot AMS = ams_id*4+slot, AMS HT = 128+slot, 254 = external, -1 = unused id.
+  Always call get_project_info() first to understand what filaments the file requires.
+- preview_ams_mapping(name, file_path, plate_num) — read-only: the exact mapping print_file would send,
+  with a match label per filament. Call it in the pre-print gathering step and show the labels.
 - open_plate_viewer(name, file_path) — HTML page with all plate thumbnails; opens in browser
 - open_plate_layout(name, file_path, plate_num) — annotated top-down PNG with bounding boxes; opens viewer
 
