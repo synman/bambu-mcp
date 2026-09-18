@@ -5,9 +5,7 @@
       "command": "<install-dir>/bambu-mcp/.venv/bin/python3",
       "args": ["<install-dir>/bambu-mcp/server.py"],
       "env": {
-        "PYTHONPATH": "<install-dir>/bambu-mcp",
-        "BAMBU_MCP_LOG_LEVEL": "DEBUG",
-        "BAMBU_MCP_BPM_VERBOSE": "1"
+        "PYTHONPATH": "<install-dir>/bambu-mcp"
       }
     }
   }

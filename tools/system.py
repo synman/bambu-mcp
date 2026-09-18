@@ -433,10 +433,10 @@ def dump_log(tail_lines: int = 200) -> dict:
     Reads the last tail_lines lines from ~/bambu-mcp/bambu-mcp.log.
     No printer parameter required — this is a server-level operation.
 
-    The log file captures entries at the configured log level (set via BAMBU_MCP_LOG_LEVEL
-    in the MCP config; default WARNING). Set BAMBU_MCP_LOG_LEVEL=DEBUG for full debug output.
-    To also capture raw MQTT message payloads from bpm, set BAMBU_MCP_BPM_VERBOSE=1 — this
-    requires BAMBU_MCP_LOG_LEVEL=DEBUG to be effective (bpm emits MQTT data at debug level).
+    The log file captures entries at the current runtime log level (both root and bpm boot
+    fixed at ERROR; no env var sets this). Use POST /api/set_log_level?level=DEBUG&bpm_level=DEBUG
+    for full debug output, then POST /api/set_bpm_verbose?printer=<name>&verbose=true to also
+    capture raw MQTT message payloads from bpm — see docs/operators-guide.md Debug-logging SOP.
     Use this tool to diagnose connection issues, tool errors, or unexpected printer behavior.
 
     Returns a dict with:
@@ -458,7 +458,7 @@ def dump_log(tail_lines: int = 200) -> dict:
     try:
         if not log_path.exists():
             log.debug("dump_log: log file does not exist at %s", log_path)
-            return {"lines": [], "total_lines": 0, "log_path": str(log_path), "note": "Log file does not exist yet — entries will appear once the server logs at the configured BAMBU_MCP_LOG_LEVEL (default WARNING)."}
+            return {"lines": [], "total_lines": 0, "log_path": str(log_path), "note": "Log file does not exist yet — entries will appear once the server logs at its current level (boots at ERROR; raise via /api/set_log_level)."}
         with open(log_path, encoding="utf-8", errors="replace") as f:
             all_lines = f.readlines()
         lines = [l.rstrip("\n") for l in all_lines[-tail_lines:]]
