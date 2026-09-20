@@ -967,7 +967,10 @@ def print_file(
     settings in the file.
     use_ams=True = load filament from AMS slots, resolved as described above.
     use_ams=False = print using only the external spool holder (for single-color
-    prints without AMS).
+    prints without AMS). Leave ams_mapping empty: bpm derives the holder for each
+    filament from the plate's own extruder assignment (right holder for a filament
+    sliced for the right extruder, left holder for the left) and refuses the print
+    with an error when the plate has no extruder map. The holder cannot be chosen.
     ams_mapping overrides the live-spool resolution above. Provide a JSON array
     string or a list of integers indexed by 1-based filament id (index 0 = filament
     1), each element an absolute tray_id, -1 for a filament id the plate does not use.
@@ -976,7 +979,7 @@ def print_file(
     hardware chip_id from get_ams_units() / get_spool_info()), NEVER hardcode:
       4-slot AMS (ams_id 0..127):  tray_id = ams_id * 4 + slot_id   → 0..103
       AMS HT / N3S (ams_id ≥ 128): tray_id = ams_id + slot_id       → 128..
-      External spool holder = 254. Unused filament id = -1.
+      Unused filament id = -1. External spool: not part of this array, use use_ams=False.
     NEVER use the 0-based unit_index in place of ams_id, and NEVER apply the
     4-slot formula to an AMS HT (ams_id 128 → 512 is wrong; 128 is right).
 
