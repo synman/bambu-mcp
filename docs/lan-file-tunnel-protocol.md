@@ -162,7 +162,7 @@ print(auth.get_configured_printer_names())     # names are user-chosen and case-
 c = auth.get_printer_credentials("<name>")     # {"ip", "access_code", "serial"}
 t = Tunnel(c["ip"], c["access_code"])
 
-internal = t.list_files(storage="internal")    # [{"name","path","size","time"}]: size in bytes, path like /userdata/model/history/<name>.gcode.3mf, newest first, flat, no directory entries; time unit not verified
+internal = t.list_files(storage="internal")    # [{"name","path","size","time"}] (history/ jobs plus bbl/ factory samples): size in bytes, path like /userdata/model/history/<name>.gcode.3mf, newest first, flat, no directory entries; time unit not verified
 usb      = t.list_files()                      # same shape, /media/usb0/... paths
 page     = t.list_files(storage="internal", start=10, count=5)   # JSON integers only; a string or float is silently ignored (you get everything)
 
@@ -193,7 +193,7 @@ Rules that bite:
 | `result 14` on `SUB_FILE` | no such member in the container, or a bare path with no `#member` | check the member name against the 3MF layout |
 | `result 16` on `LIST_INFO` | `type` not one of `model`/`timelapse`/`video` | fix `type` |
 | `result 18` on ability | `api_version` > 3 | send ≤ 3 |
-| a job you just sent is not listed | you listed the wrong `storage`, or the cache evicted it (Bambu documents a small FIFO; the H2D listed 15 files, so do not rely on a fixed count) | list `internal` again |
+| a job you just sent is not listed | you listed the wrong `storage`, or the cache evicted it (the `history/` area is an 8-file FIFO, so the ninth job pushes out the oldest) | list `internal` again |
 | connection closes mid-session | malformed frame or printer-side drop | reconnect and start again from login |
 
 Stop and report to the operator (do not retry loops) if login is refused repeatedly: repeated failed authentication can lock the printer's services.
@@ -232,7 +232,7 @@ except TunnelError as err:
 EOF
 ```
 
-Expected: `paging exact True`, the USB download verified, `sub_file 0` with a body starting `<?xml`, and `internal download refused: FILE_DOWNLOAD result 2`. Observed 2026-09-19 on the operator's H2D (fw 01.03.00.00), output below.
+Expected: `paging exact True`, the USB download verified, `sub_file 0` with a body starting `<?xml`, and `internal download refused: FILE_DOWNLOAD result 2`. Observed 2026-09-19 on the operator's H2D (fw 01.03.00.00), output below. The internal count of 15 is 8 jobs under `/userdata/model/history/` plus 7 factory samples under `/userdata/model/bbl/`.
 
 Stale signals, either direction: `internal download SUCCEEDED` means a firmware lifted the allowlist and the "When to use" table is wrong. `result 2` on a `/media/usb0` path, a failed paging check, or any exception means the client or the firmware protocol changed.
 
