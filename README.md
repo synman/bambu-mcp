@@ -150,6 +150,7 @@ Merge `config/copilot_mcp.json` into your Copilot MCP configuration.
 ## See Also
 
 - `docs/operators-guide.md` — Daemon administration: launchd supervision, restart procedures, log-level/debug management
+- `docs/lan-file-tunnel-protocol.md` — Port 6000 LAN file tunnel (H2/P2S/X2D): protocol, read-only reference client, list/page/download recipes, failure branches
 - `PLAN.md` — Full implementation plan and design decisions
 - `bambu://knowledge/behavioral-rules` — Behavioral rules for the agent
 - `bambu://knowledge/protocol` — Bambu Lab MQTT/HMS protocol documentation
