@@ -194,7 +194,8 @@ Rules that bite:
 | `result 16` on `LIST_INFO` | `type` not one of `model`/`timelapse`/`video` | fix `type` |
 | `result 18` on ability | `api_version` > 3 | send ≤ 3 |
 | a job you just sent is not listed | you listed the wrong `storage`, or the cache evicted it (the `history/` area is an 8-file FIFO, so the ninth job pushes out the oldest) | list `internal` again |
-| connection closes mid-session | malformed frame or printer-side drop | reconnect and start again from login |
+| connection closes mid-session, or resets right after connect | malformed frame, or too many sessions opened in a short time (resets began after about seven in under a minute) | wait, then reconnect once from login; do not loop |
+| `REQUEST_MEDIA_ABILITY` never replies | the request had no `peer` field | send `{"peer": "studio", "api_version": 3}` |
 
 Stop and report to the operator (do not retry loops) if login is refused repeatedly: repeated failed authentication can lock the printer's services.
 
