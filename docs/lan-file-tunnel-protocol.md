@@ -20,6 +20,7 @@ deletes, or changes printer state.
 | Read one member of a `.3mf` on the USB stick (`Metadata/slice_info.config` is verified) without downloading it | `SUB_FILE` `<path>#<member>` |
 | Download a file from the USB stick | `download(path)` (FTPS also works) |
 | Read or download a file from the **internal** cache | **not possible** on H2D fw 01.03.00.00 — every path outside `/media/usb0` returns `result 2` |
+| Read a member of the printer's **current or last job** project (`slice_info.config`, `model_settings.config`, plate PNGs) | `project_member(member)` (Studio's part-skip route, `mem:/16`); past jobs are not reachable |
 
 ## Preconditions
 
@@ -103,11 +104,11 @@ class Tunnel:
         length, magic, _seq, _ = struct.unpack("<IIII", self._read(16))
         return magic, self._read(length)
 
-    def rpc(self, cmdtype, req):
-        """Send one request; yield (reply_json, body_bytes) per frame until the result is not CONTINUE."""
+    def rpc(self, cmdtype, req, param=b""):
+        """Send one request (optional binary parameter after a blank line); yield (reply_json, body_bytes) per frame until the result is not CONTINUE."""
         self.cmd_seq += 1
-        self._send(MAGIC_CTRL, json.dumps({"mtype": 12289, "cmdtype": cmdtype,
-                                           "sequence": self.cmd_seq, "req": req}).encode())
+        payload = json.dumps({"mtype": 12289, "cmdtype": cmdtype, "sequence": self.cmd_seq, "req": req}).encode()
+        self._send(MAGIC_CTRL, payload + (b"\n\n" + param if param else b""))
         while True:
             _magic, payload = self._recv()
             head, _, body = payload.partition(b"\n\n")
@@ -138,6 +139,27 @@ class Tunnel:
         if reply["result"] != 0:
             raise TunnelError(f"LIST_INFO result {reply['result']}")
         return reply["reply"]["file_lists"]
+
+    def project_member(self, member):
+        """FILE_DOWNLOAD mem:/16: one member of the printer's CURRENT or last job project (Studio's get_project_file). Verifies md5."""
+        param = json.dumps({"sequence_id": 1, "version": 1, "peer_host": "studio",
+                            "command": "get_project_file", "file_rel_path": member}).encode()
+        req = {"path": "mem:/16", "offset": 0, "mem_dl_param_size": len(param)}
+        head, data, final = None, bytearray(), None
+        for reply, chunk in self.rpc(4, req, param):
+            info = reply.get("reply", {})
+            if head is None and "mem_dl_param_size" in info:
+                n = info["mem_dl_param_size"]
+                head = json.loads(chunk[:n])
+                data.extend(chunk[n:])
+            else:
+                data.extend(chunk)
+            final = info
+        if head is None or head.get("err_no") != 0:
+            raise TunnelError(f"project member {member!r}: err_no {None if head is None else head.get('err_no')}")
+        if hashlib.md5(data).hexdigest() != final.get("file_md5"):
+            raise TunnelError("md5 mismatch")
+        return bytes(data)
 
     def download(self, path):
         """FILE_DOWNLOAD a file under /media/usb0 (eMMC paths are rejected: result 2). Verifies md5."""
@@ -171,6 +193,9 @@ reply, body = t.call(2, {"paths": [usb[0]["path"] + "#Metadata/slice_info.config
 assert reply["result"] == 0                    # reply = {"result": 0, ...}; body = the raw XML bytes of that one member. Only single-path requests are measured.
 
 data = t.download(usb[0]["path"])              # md5 and size verified
+
+# members of the CURRENT/last job project, whatever storage it came from
+xml = t.project_member("Metadata/slice_info.config")   # raises TunnelError on err_no -2 (absent or refused)
 t.close()
 ```
 
@@ -179,6 +204,7 @@ Rules that bite:
 - **`storage`**: omit it (or send exactly `"external"`) for the USB stick; **any other string means internal**, including nonsense. Use `"internal"` and `"external"`; do not use `"emmc"`/`"udisk"` (advertised by the printer, not honoured by `LIST_INFO`).
 - **`type`** is `model`, `timelapse` or `video`; anything else is `result 16`.
 - **`api_version`** in `LIST_INFO` is ignored. `REQUEST_MEDIA_ABILITY` accepts 1–3 and returns `result 18` for 4+.
+- `project_member` serves only the printer's current or last project. On 2026-09-19 it returned `slice_info.config`, `model_settings.config`, `plate_1.png` and `pick_1.png`, and `err_no -2` for `plate_1.gcode`, `3D/3dmodel.model` and `project_settings.config`.
 - `LIST_INFO` cannot walk directories: path fields are ignored and only indexed `.3mf` models come back.
 - `FILE_DOWNLOAD` has no resume: a request `offset` is ignored and the whole file streams in 20,480-byte frames.
 
@@ -195,13 +221,14 @@ Rules that bite:
 | `result 18` on ability | `api_version` > 3 | send ≤ 3 |
 | a job you just sent is not listed | you listed the wrong `storage`, or the cache evicted it (the `history/` area is an 8-file FIFO, so the ninth job pushes out the oldest) | list `internal` again |
 | connection closes mid-session, or resets right after connect | malformed frame, or too many sessions opened in a short time (resets began after about seven in under a minute) | wait, then reconnect once from login; do not loop |
+| `TunnelError: project member ...: err_no -2` | that member is absent or refused for the printer's current project | try `Metadata/slice_info.config`; the gcode and `3D/3dmodel.model` were refused on the H2D |
 | `REQUEST_MEDIA_ABILITY` never replies | the request had no `peer` field | send `{"peer": "studio", "api_version": 3}` |
 
 Stop and report to the operator (do not retry loops) if login is refused repeatedly: repeated failed authentication can lock the printer's services.
 
 ## Verification
 
-Run against a real printer before trusting a change to this page or the client. Read-only: `LIST_INFO`, one `SUB_FILE`, one small `FILE_DOWNLOAD`, and one download that is expected to be refused. Needs a USB stick holding at least one model under 300 KB and at least one internal file.
+Run against a real printer before trusting a change to this page or the client. Read-only: `LIST_INFO`, one `SUB_FILE`, one small `FILE_DOWNLOAD`, and one download that is expected to be refused. Needs a USB stick holding at least one model under 300 KB, at least one internal file, and a printer that has run a job since boot.
 
 ```bash
 cd ~/ai/forge/bambu/bambu-mcp && D=$(mktemp -d) && trap 'rm -rf "$D"' EXIT && python3 - "$D" <<'EOF'
@@ -225,6 +252,7 @@ small = min((e for e in usb if e["size"] < 300000), key=lambda e: e["size"])
 print("usb download", len(t.download(small["path"])), "bytes verified")
 reply, body = t.call(2, {"paths": [small["path"] + "#Metadata/slice_info.config"]})
 print("sub_file", reply["result"], len(body), "bytes", body[:5])
+print("project_member", len(t.project_member("Metadata/slice_info.config")), "bytes")
 try:
     t.download(internal[0]["path"])
     print("internal download SUCCEEDED: doc is stale")
@@ -233,7 +261,7 @@ except TunnelError as err:
 EOF
 ```
 
-Expected: `paging exact True`, the USB download verified, `sub_file 0` with a body starting `<?xml`, and `internal download refused: FILE_DOWNLOAD result 2`. Observed 2026-09-19 on the operator's H2D (fw 01.03.00.00), output below. The internal count of 15 is 8 jobs under `/userdata/model/history/` plus 7 factory samples under `/userdata/model/bbl/`.
+Expected: `paging exact True`, the USB download verified, `sub_file 0` with a body starting `<?xml`, a `project_member` byte count, and `internal download refused: FILE_DOWNLOAD result 2`. Observed 2026-09-19 on the operator's H2D (fw 01.03.00.00), output below. The internal count of 15 is 8 jobs under `/userdata/model/history/` plus 7 factory samples under `/userdata/model/bbl/`.
 
 Stale signals, either direction: `internal download SUCCEEDED` means a firmware lifted the allowlist and the "When to use" table is wrong. `result 2` on a `/media/usb0` path, a failed paging check, or any exception means the client or the firmware protocol changed.
 
@@ -242,6 +270,7 @@ counts 57 15
 paging exact True
 usb download 80770 bytes verified
 sub_file 0 1522 bytes b'<?xml'
+project_member 3638 bytes
 internal download refused: FILE_DOWNLOAD result 2
 ```
 
