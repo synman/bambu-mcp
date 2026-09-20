@@ -1,8 +1,8 @@
 # LAN File Tunnel (port 6000) — protocol reference and read-only client
 
 Reference for the Bambu Lab **LAN file tunnel** on TCP port 6000 (H2 series, P2S, X2D): what it is, how to talk to it, what the H2D
-answers, and what fails. It is the only LAN route to the printer's internal (eMMC) model cache. **Read-only guide** — nothing here uploads,
-deletes, or changes printer state.
+answers, and what fails. It is the only LAN route to the printer's internal (eMMC) model cache. **Read-only client** — the code below never uploads,
+deletes, or changes printer state. The one measured write is described under Writes and needs the operator's explicit permission.
 
 - **Scope / owner:** `bambu-mcp` docs (agent-managed). Applies to the ecosystem (`bpm`, `bpa`, `bambu-mcp`); none of them has a `:6000` client today.
 - **Not covered:** the A1/P1 MJPEG camera (also port 6000, different protocol) — see `bambu://knowledge/protocol`.
@@ -208,6 +208,14 @@ Rules that bite:
 - `LIST_INFO` cannot walk directories: path fields are ignored and only indexed `.3mf` models come back.
 - `FILE_DOWNLOAD` has no resume: a request `offset` is ignored and the whole file streams in 20,480-byte frames.
 
+## Writes (measured once on the H2D, operator-authorised 2026-09-19)
+
+Not implemented in the client on purpose. Ask the operator first, every time.
+
+- **Upload works.** `FILE_UPLOAD` init `{"type":"model","storage":"emmc","path":"<name>","total":<bytes>}` returns `result 1` with `{"chunk_size":255,"offset":0}` (KiB). For a file under 255 KiB send one fragment on the same sequence, `{"frag_id":0,"offset":0,"size":<bytes>,"file_md5":"<md5>"}` then a blank line then the bytes, and read one final `result 0`. The file then heads the internal list.
+- **It silently evicts.** `history/` is an 8-file FIFO. A ninth file pushed out the oldest job, and nothing warned. Assume any upload destroys the oldest cached job.
+- **Delete does not work.** `FILE_DEL` `{"delete":["<name>"],"storage":"emmc"}` returns `result 0` but the reply's `paths` shows `/media/usb0/timelapse/<name>`, so nothing internal is removed. The `paths` form returns `result 2`. Re-list after any delete and never trust `result 0`. The uploaded test file, `zz_mcp_tunnel_test.gcode.3mf`, is still in the cache.
+
 ## Failure branches
 
 | Symptom | Meaning | Action |
@@ -276,8 +284,8 @@ internal download refused: FILE_DOWNLOAD result 2
 
 ## Known limits (2026-09-19, H2D fw 01.03.00.00)
 
-Not established: what `dir_refresh_cnt` means (always 0); printer-initiated notification payloads; what `api_version` 3 adds; `zip:true` and `mem:/N` on H2D; anything
-about `FILE_UPLOAD` / `FILE_DEL` / `TASK_CANCEL` on this firmware. Other models differ: X2D reportedly allows eMMC downloads.
+Not established: what `dir_refresh_cnt` means (always 0); printer-initiated notification payloads; what `api_version` 3 adds; `zip:true`, other `mem:/N` indexes, and why the current project's gcode is refused; anything
+about `TASK_CANCEL`, multi-fragment uploads, or a working internal delete on this firmware. Other models differ: X2D reportedly allows eMMC downloads.
 
 ## Keeping this page current
 
