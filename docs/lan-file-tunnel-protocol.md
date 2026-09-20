@@ -1,6 +1,6 @@
 # LAN File Tunnel (port 6000) — protocol reference and tested client
 
-Reference for the Bambu Lab **LAN file tunnel** on TCP port 6000 (H2 series, P2S, X2D): what it is, how to talk to it, what the H2D
+Reference for the Bambu Lab **LAN file tunnel** on TCP port 6000 (H2 series, P2S, X2D; only an H2D was tested): what it is, how to talk to it, what the H2D
 answers, and what fails. It is the only LAN route to the printer's internal (eMMC) model cache and the only way to read one member of a 3MF without downloading it. **The reference client is read-only** — it never uploads,
 deletes, or changes printer state. The tested write helpers under Writes are separate and need the operator's explicit permission each time.
 
@@ -16,7 +16,7 @@ deletes, or changes printer state. The tested write helpers under Writes are sep
 |---|---|---|
 | List and page | yes | yes (flat, `history/` plus `bbl/`) |
 | Download a file | yes | **no** (`result 2`) |
-| Read one member of a 3MF | yes, any member | **no** (`result 2`) |
+| Read one member of a 3MF | yes, but a member over roughly 250 to 450 KB uncompressed (typically the gcode) returns `result 14` | **no** (`result 2`) |
 | Upload | yes (`storage:"udisk"`) | yes (`storage:"emmc"`), but evicts the oldest of 8 history jobs |
 | Overwrite | yes | not tested |
 | Delete | yes, full path | **no** (reports success, removes nothing) |
@@ -49,7 +49,8 @@ No live field says what the tunnel will serve, so bit 31 only proves it exists. 
 | List the internal cache (what Bambu Studio "Print Plate" sent) | `list_files(storage="internal")` |
 | List the USB stick's models | `list_files()` |
 | Page a long list (either storage) | `list_files(storage="internal", start=10, count=5)`; `start` is a 0-based offset, and `count` past the end clamps |
-| Read one member of a `.3mf` on the USB stick (`Metadata/slice_info.config` is verified) without downloading it | `SUB_FILE` `<path>#<member>` |
+| Read one member of a `.3mf` on the USB stick without downloading it (`Metadata/slice_info.config`, `model_settings.config`, PNGs and other small members; not large gcode) | `SUB_FILE` `<path>#<member>` |
+| Get a model's extruder mapping | `Metadata/slice_info.config` has `<metadata key="filament_maps" value="2 1"/>` (1-based logical extruder per filament); verified on all 57 models. `physical_extruder_map` lives only in the gcode header, which is usually too large for `SUB_FILE` |
 | Download a file from the USB stick | `download(path)` (FTPS also works) |
 | Upload, overwrite, delete or move a USB file | the Writes helpers below, with the operator's permission |
 | Read or download a file from the **internal** cache | **not possible** on H2D fw 01.03.00.00 — every path outside `/media/usb0` returns `result 2` |
@@ -218,7 +219,7 @@ print(auth.get_configured_printer_names())     # names are user-chosen and case-
 c = auth.get_printer_credentials("<name>")     # {"ip", "access_code", "serial"}
 t = Tunnel(c["ip"], c["access_code"])
 
-internal = t.list_files(storage="internal")    # [{"name","path","size","time"}] (history/ jobs plus bbl/ factory samples): size in bytes, path like /userdata/model/history/<name>.gcode.3mf, newest first, flat, no directory entries; time is epoch seconds: the file's date on USB, the printer's own clock at upload on internal (this H2D's clock runs about 5 days 10 hours behind)
+internal = t.list_files(storage="internal")    # [{"name","path","size","time"}] (history/ jobs plus bbl/ factory samples): size in bytes, path like /userdata/model/history/<name>.gcode.3mf, newest first, flat, no directory entries; time is epoch seconds: a file written by other means keeps its own date, but any file the printer receives (tunnel or FTPS upload, internal or USB) is stamped with the printer's clock, which runs about 5 days 10 hours behind on this H2D
 usb      = t.list_files()                      # same shape, /media/usb0/... paths
 page     = t.list_files(storage="internal", start=10, count=5)   # JSON integers only; a string or float is silently ignored (you get everything)
 
@@ -248,7 +249,7 @@ Not part of the reference client. Ask the operator first, every time, and test o
 
 ```python
 import hashlib, json
-from tunnel6000 import MAGIC_CTRL
+from tunnel6000 import MAGIC_CTRL, TunnelError
 
 def upload(t, name, data, storage="udisk"):
     """FILE_UPLOAD for data under 255 KiB. 'udisk' = USB stick, 'emmc' = internal cache. Same name overwrites."""
@@ -281,7 +282,8 @@ def delete_usb(t, name):
 
 - **USB has full create, read and delete.** Upload lands at `/media/usb0/<name>`, downloads back byte-identical, and a second upload of the same name overwrites it (init `19`, then final `0`). Delete needs the full-path form; the name form resolves into the `timelapse` folder and misses ordinary files.
 - **Internal accepts uploads only.** `storage:"emmc"` puts the file first in the `history/` list, and the 8-file FIFO **silently evicts the oldest job** (measured: a ninth file removed `AMS_HT_SIDE_SHELF_FOR_H2D_H2S_H2C_D3P_RISER`). Assume any internal upload destroys the oldest cached job.
-- **Internal delete is a no-op that reports success.** `{"delete":["<name>"],"storage":"emmc"}` returns `result 0` while the reply's `paths` shows `/media/usb0/timelapse/<name>`; the `paths` form returns `result 2`. `zz_mcp_tunnel_test.gcode.3mf` therefore remains in the cache until newer jobs push it out.
+- **Uploads are measured only for data under 255 KiB, one fragment, into the USB root or the internal cache.** Larger files, subfolders and internal overwrite are untested. Because an internal upload cannot be undone and evicts a real job, do not use internal uploads as tests unless losing the oldest job is acceptable, and remember its list `time` comes from the printer's clock.
+- **Internal delete is a no-op that reports success.** `{"delete":["<name>"],"storage":"emmc"}` returns `result 0` while the reply's `paths` shows `/media/usb0/timelapse/<name>`; the `paths` form returns `result 2`. `zz_mcp_tunnel_test.gcode.3mf` therefore remains in the cache until newer jobs push it out. Bambu's cache wiki says the printer screen (Print Files, Internal) can delete cached files, which is the untested manual route. The name form could also delete a same-named file in the USB `timelapse` folder, so never use it.
 - **There is no rename.** `cmdtype 6` with five request shapes got no reply, and `FILE_DEL` ignores an extra `rename` field and deletes.
 
 ## Failure branches
@@ -292,14 +294,14 @@ def delete_usb(t, name):
 | login rejected or no reply after the first frame (the client does not check the two acks, and how a bad access code surfaces is not characterized) | wrong login layout: the 64-byte auth used by the A1/P1 camera is a different protocol | use the 16-byte login above |
 | `result 2` on `FILE_DOWNLOAD` / `SUB_FILE` | path is not under `/media/usb0` (validated, even for non-existent files) | expected for the eMMC cache on H2D fw 01.03; nothing to retry |
 | `result 15` on `FILE_DOWNLOAD` | path is under `/media/usb0` but the file is missing; or you used the `{file:<name>}` form, which resolves under `/media/usb0/timelapse/` | check the path against a fresh `list_files()` |
-| `result 14` on `SUB_FILE` | no such member in the container, or a bare path with no `#member` | check the member name against the 3MF layout |
+| `result 14` on `SUB_FILE` | no such member, a bare path with no `#member`, or the member is too large (gcode members from 453 KB up all failed, 243 KB worked) | check the name against the zip's member list; for large members download the file instead |
 | `result 16` on `LIST_INFO` | `type` not one of `model`/`timelapse`/`video` | fix `type` |
 | `result 18` on ability | `api_version` > 3 | send ≤ 3 |
 | a job you just sent is not listed | you listed the wrong `storage`, or the cache evicted it (the `history/` area is an 8-file FIFO, so the ninth job pushes out the oldest) | list `internal` again |
 | connection closes mid-session, or resets right after connect | malformed frame, or too many sessions opened in a short time (resets began after about seven in under a minute) | wait, then reconnect once from login; do not loop |
 | `TunnelError: project member ...: err_no -2` | that member is absent or refused for the printer's current project | try `Metadata/slice_info.config`; the gcode and `3D/3dmodel.model` were refused on the H2D |
 | `FILE_DEL` returns `result 0` but the file is still listed | the name form resolved into `/media/usb0/timelapse/`, or the file is internal (no delete route exists there) | use the full-path form on USB; re-list after every delete |
-| an unknown cmdtype never replies | the printer ignores commands it does not know | send only cmdtypes 1 to 5 and 7; use a short socket timeout on any experiment |
+| an unknown cmdtype never replies | the printer ignores commands it does not know | send only the documented cmdtypes (1 to 5 and 7, with 3 and 5 only on the operator's permission); use a short socket timeout on any experiment |
 | `REQUEST_MEDIA_ABILITY` never replies | the request had no `peer` field | send `{"peer": "studio", "api_version": 3}` |
 
 Stop and report to the operator (do not retry loops) if login is refused repeatedly: repeated failed authentication can lock the printer's services.
@@ -341,7 +343,7 @@ EOF
 
 Expected: `paging exact True`, the USB download verified, `sub_file 0` with a body starting `<?xml`, a `project_member` byte count, and `internal download refused: FILE_DOWNLOAD result 2`. Observed 2026-09-19 on the operator's H2D (fw 01.03.00.00), output below. The internal count of 15 is 8 jobs under `/userdata/model/history/` plus 7 factory samples under `/userdata/model/bbl/`.
 
-Stale signals, either direction: `internal download SUCCEEDED` means a firmware lifted the allowlist and the "When to use" table is wrong. `result 2` on a `/media/usb0` path, a failed paging check, or any exception means the client or the firmware protocol changed.
+Stale signals, either direction: `internal download SUCCEEDED` means a firmware lifted the allowlist and the "When to use" table is wrong. `result 2` on a `/media/usb0` path, a failed paging check, a `sub_file` result other than 0, or an exception in the client means the client or the firmware protocol changed. An exception from missing preconditions (no USB model under 300 KB, no internal file, no job since boot) means fix the setup, not that the doc is stale. The block does not exercise upload, delete or overwrite.
 
 ```text
 counts 57 15
