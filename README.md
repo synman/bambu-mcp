@@ -45,7 +45,7 @@ Start the server and use the `discover_printers` tool, or use the MCP tools dire
 
 1. **Discover**: Call `discover_printers()` — finds printers on your local network via SSDP
 2. **Get access code**: On the printer touchscreen → Settings → Network → Access Code
-3. **Add**: Call `add_printer(name="myprinter", ip="...", serial="...", access_code="...")`
+3. **Add**: Call `add_printer(name="myprinter", ip="...", serial="...", access_code="...", user_permission=True)` — it refuses without `user_permission=True`, and replaces the stored credentials if the name exists
 4. **Verify**: Call `get_printer_state(name="myprinter")`
 
 ---

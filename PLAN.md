@@ -168,10 +168,10 @@ python server.py                                     # start MCP server
 **First-time printer setup** happens at runtime via tool calls:
 1. Use `discover_printers()` to find printers on the network (SSDP) — returns IP + serial
 2. Provide access code when prompted
-3. `add_printer(name, ip, serial, access_code)` saves to encrypted secrets store + starts session
+3. `add_printer(name, ip, serial, access_code, user_permission=True)` saves to encrypted secrets store + starts session; it refuses without `user_permission=True`
 4. All future sessions auto-load from the store
 
-Or manually: `add_printer(name, ip, serial, access_code)` without discovery.
+Or manually: `add_printer(name, ip, serial, access_code, user_permission=True)` without discovery.
 
 No hardcoded printer metadata. No registry file. No local `~/bambu-printer-manager/` clone required.
 
@@ -289,7 +289,7 @@ Session start (always):
   → empty:     automatically run discover_printers()
                → presents found printers (ip, serial, model) to user
                → user provides access_code from printer touchscreen
-               → add_printer(name, ip, serial, access_code)
+               → add_printer(name, ip, serial, access_code, user_permission=True)
                → session_manager starts BambuPrinter session → connected
                → stored in secrets_store: bambu-{name}_ip, _serial, _access_code, printers=[name]
 
@@ -303,7 +303,7 @@ Subsequent sessions:
 | Tool | Description |
 |---|---|
 | `get_configured_printers()` | Returns list of configured printer names + models from secrets_store |
-| `add_printer(name, ip, serial, access_code)` | Saves credentials, starts session immediately |
+| `add_printer(name, ip, serial, access_code, user_permission)` | Saves credentials, starts session immediately; requires `user_permission`, and replaces stored credentials if the name exists |
 | `remove_printer(name)` | Deletes credentials, stops session |
 | `update_printer_credentials(name, ...)` | Updates one or more credential fields |
 | `get_printer_connection_status(name)` | Session state + connectivity |
@@ -567,7 +567,7 @@ Four tools present in `system.py` that were not individually called out in the p
 |---|---|
 | `get_firmware_version(name)` | Returns firmware + AMS firmware version from `printer.config`. |
 | `trigger_printer_refresh(name)` | Sends ANNOUNCE_VERSION + ANNOUNCE_PUSH via MQTT; requires `user_permission`. |
-| `force_state_refresh(name)` | Sends push_all / ANNOUNCE_PUSH without permission gate (read-triggering only). |
+| `force_state_refresh(name)` | Sends push_all / ANNOUNCE_PUSH; requires `user_permission`. |
 | `set_print_options(name, auto_recovery, sound)` | Sets `auto_recovery` and/or `sound` option flags via MQTT; requires `user_permission`. |
 
 ### PA4 — `get_monitoring_history` in `tools/system.py`

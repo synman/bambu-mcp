@@ -83,7 +83,9 @@ PA, PC, etc.). Each material has specific nozzle and bed temperature requirement
 **AMS (Automatic Material System)** — an optional multi-spool filament feeder. AMS 2 Pro
 holds 4 filament spools for multi-color or multi-material prints. AMS HT holds 1 high-
 temperature spool. Each spool slot is identified by a unit_id (0-indexed AMS unit) and
-slot_id (0–3 within that unit). External spool holder uses slot_id=254.
+slot_id (0–3 within that unit). An external spool is not in an AMS unit: the right (main)
+holder is 255 and the left (deputy) holder is 254, and a single-nozzle printer reports 254.
+get_external_spool() shows what is loaded in each.
 
 **Nozzle** — the metal tip that melts and extrudes filament. Diameter (0.4mm standard)
 and material (brass, hardened steel, tungsten carbide) vary. The nozzle heats to
@@ -132,7 +134,7 @@ Printers must be registered before any other tool will work. Use discovery to fi
 
 ### Printer Discovery & Management (tools/management.py, tools/discovery.py)
 - discover_printers(timeout_seconds) — SSDP scan, returns ip/serial/model (NOT access code)
-- add_printer(name, ip, serial, access_code) — save credentials + start MQTT session
+- add_printer(name, ip, serial, access_code, user_permission=True) — save credentials + start MQTT session; REQUIRES user_permission=True and replaces the stored ip, serial and access code if the name exists
 - remove_printer(name) — stop session + remove credentials
 - get_configured_printers() — list names + connection state of all saved printers
 - get_printer_info(name) — full config for one printer
@@ -225,7 +227,8 @@ Manage files on the printer's SD card and prepare print jobs. Upload .3mf files 
   mapping from the spools the printer last reported (exact type, then closest colour — bambu-printer-app's
   scoring; a same-material wrong-colour spool IS accepted as "Type Match") and REFUSES if a filament has
   no loaded match. The .3mf carries no slot assignment; get_project_info()'s ams_mapping is a filament-id
-  placeholder. tray_id: 4-slot AMS = ams_id*4+slot, AMS HT = 128+slot, 254 = external, -1 = unused id.
+  placeholder. tray_id: 4-slot AMS = ams_id*4+slot, AMS HT = 128+slot, -1 = unused id. An external spool
+  is not in ams_mapping: pass use_ams=False and bpm derives the holder from the plate (255 right, 254 left).
   Always call get_project_info() first to understand what filaments the file requires.
 - preview_ams_mapping(name, file_path, plate_num) — read-only: the exact mapping print_file would send,
   with a match label per filament. Call it in the pre-print gathering step and show the labels.
@@ -286,7 +289,7 @@ Session-level operations: MQTT connection management, firmware version, telemetr
 ### System (tools/system.py)
 - get_session_status / get_firmware_version — safe reads
 - pause_mqtt_session / resume_mqtt_session — REQUIRE user_permission=True
-- trigger_printer_refresh / force_state_refresh — REQUIRE user_permission=True (trigger) / safe (force)
+- trigger_printer_refresh / force_state_refresh — both REQUIRE user_permission=True
 - get_monitoring_history(name, raw=False) — telemetry summary (default) or full time-series (raw=True)
   Default returns {summary:{field:{min,max,avg,last,count},...}, gcode_state_durations} — lightweight.
   Use raw=True only when you need the full 60-min series for all 8 fields.
@@ -336,7 +339,7 @@ On every session start:
    for the user to ask. This is the welcoming action for any unconfigured session.
 4. Present discovered printers to the user, then guide through:
    - Obtain the access code from the printer touchscreen (Settings → Network → Access Code)
-   - `add_printer(name, ip, serial, access_code)` — saves credentials and starts the MQTT session
+   - `add_printer(name, ip, serial, access_code, user_permission=True)` — saves credentials and starts the MQTT session; needs the user's go-ahead
    - `get_printer_state(name)` — verify connectivity
 
 Never say "No printers configured" and stop. Discovery is mandatory before giving up.
