@@ -223,14 +223,14 @@ _ROUTE_PARAM_DESCRIPTIONS: dict[tuple[str, str], str] = {
     ("print_3mf",                       "filename"):    "Full SD card path to the .3mf file (e.g. /_jobs/myprint.gcode.3mf).",
     ("print_3mf",                       "platenum"):    "Plate number within the .3mf project (1-based).",
     ("print_3mf",                       "plate"):       "Build plate surface type.",
-    ("print_3mf",                       "use_ams"):     "Print from the AMS. With no ams_mapping the mapping is resolved from the loaded spools by type and colour; the request is refused (400) when a filament has no loaded match.",
+    ("print_3mf",                       "use_ams"):     "Print from the AMS. With no ams_mapping the mapping is resolved from the loaded spools by type and colour; the request is refused (400) when a filament has no loaded match. With use_ams=false the plate's own extruder assignment picks the external holder, and a dual-nozzle plate with no extruder map is refused (400).",
     ("print_3mf",                       "ams_mapping"): "JSON array indexed by 1-based filament id, each an absolute tray id (4-slot AMS ams_id*4+slot, AMS HT 128+slot, -1 unused), e.g. [1,-1,128]. Omit to resolve from the loaded spools — the project file carries no usable mapping.",
     ("print_3mf",                       "bl"):          "Run bed leveling before printing.",
     ("print_3mf",                       "flow"):        "Run flow/extrusion calibration before printing.",
     ("print_3mf",                       "tl"):          "Record a timelapse of the print.",
     ("skip_objects",                    "objects"):     "Comma-separated list of object identify_id values to skip.",
     # ── Spool / AMS ────────────────────────────────────────────────────────────
-    ("set_spool_details",               "tray_id"):       "Absolute tray ID: ams_unit_index × 4 + slot (0–3). External spool = 254.",
+    ("set_spool_details",               "tray_id"):       "Absolute tray ID: ams_unit_index × 4 + slot (0–3). External spool: 254 (single-nozzle printer, or the left holder of a dual-nozzle printer) or 255 (right holder).",
     ("set_spool_details",               "tray_info_idx"): "Bambu filament catalog ID (e.g. GFA00). Use 'no_filament' to clear.",
     ("set_spool_details",               "tray_id_name"):  "Filament brand/product name label.",
     ("set_spool_details",               "tray_type"):     "Filament type string (e.g. PLA, PETG, ABS).",
@@ -270,7 +270,7 @@ _ROUTE_PARAM_DESCRIPTIONS: dict[tuple[str, str], str] = {
     ("clear_print_error",              "print_error"): "Integer error code to clear. Pass 0 to clear any active error.",
     ("clear_print_error",              "subtask_id"):  "Subtask ID of the failed job (from get_job_info). Pass empty string if not known.",
     # ── Extrusion calibration ──────────────────────────────────────────────────
-    ("select_extrusion_calibration",   "tray_id"):     "Absolute tray ID: ams_unit_index × 4 + slot (0–3). External spool = 254.",
+    ("select_extrusion_calibration",   "tray_id"):     "Absolute tray ID: ams_unit_index × 4 + slot (0–3). External spool: 254 (single-nozzle printer, or the left holder of a dual-nozzle printer) or 255 (right holder).",
     ("select_extrusion_calibration",   "cali_idx"):    "Calibration profile index to activate. Use -1 for automatic best-match.",
     # ── AMS dryer ─────────────────────────────────────────────────────────────
     ("turn_on_ams_dryer",              "ams_id"):      "Internal AMS unit ID (chip_id). AMS 2 Pro starts at 0; AMS HT starts at 128.",
@@ -1402,6 +1402,8 @@ def _build_app():
 
         ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
         ⛔ BLOCKED during active prints (gcode_state RUNNING or PREPARE) — returns 409.
+        Returns 400 when bpm refuses the plate, for example use_ams=false on a dual-nozzle plate
+        that carries no extruder map.
         """
         log.debug("print_3mf: called")
         p, pname = _get_printer(_rargs())
@@ -1435,6 +1437,9 @@ def _build_app():
             p.print_3mf_file(filename, platenum, platetype, use_ams, ams_mapping=ams_mapping, bedlevel=bl, flow=flow, timelapse=tl)
             log.debug("print_3mf: → ok")
             return _ok()
+        except ValueError as e:
+            log.warning("print_3mf: refused: %s", e)
+            return _err(str(e), code=HTTPStatus.BAD_REQUEST)
         except Exception as e:
             log.error("print_3mf: error: %s", e, exc_info=True)
             return _err(str(e))
@@ -2057,7 +2062,7 @@ def _build_app():
 
         ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
 
-        tray_id encoding: ams_unit_index × 4 + slot (0–3). External spool = 254.
+        tray_id encoding: ams_unit_index × 4 + slot (0–3). External spool: 254 (single-nozzle printer, or the left holder of a dual-nozzle printer) or 255 (right holder).
         cali_idx = -1 to auto-select the best matching profile for the loaded filament.
         """
         log.debug("select_extrusion_calibration: called")

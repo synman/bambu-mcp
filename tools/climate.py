@@ -17,16 +17,41 @@ def _no_printer(name: str) -> str:
     return f"Error: Printer '{name}' not connected."
 
 
-def _permission_denied() -> str:
-    return "Error: user_permission must be True to perform this action."
+def _permission_denied(consequence: str) -> str:
+    return f"Error: user_permission must be True to perform this action. {consequence}"
 
 
 def get_climate(name: str) -> dict:
     """
     Return current and target temperatures for the bed, chamber, and all nozzles.
 
-    Also includes the chamber door/lid open state and air conditioning mode when
-    the printer hardware supports those features.
+    WHEN to use: check the thermal state of a printer, including the chamber door/lid
+    open state and the air conditioning mode, before or while heating.
+
+    Sibling disambiguation: ``get_climate`` returns the same nozzle, bed and chamber
+    temperatures as ``get_temperatures`` and adds the chamber door/lid open state and
+    the air conditioning mode (with the COOL_MODE caveat in Returns);
+    ``get_temperatures`` returns temperatures only.
+    ``get_fan_speeds`` reports fan percentages, which this tool does not.
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+
+    Returns:
+        ``{nozzles: [{id, temp, target}], bed: {temp, target}, chamber: {temp, target},
+        chamber_door_open, chamber_lid_open, air_conditioning_mode}`` on success.
+        Single-nozzle printers return one nozzle entry with ``id`` -1; dual-extruder
+        (H2D) printers return ``id`` 0 (right) and 1 (left). An entry with ``id`` 0
+        built from the active nozzle temperature appears only before the first
+        telemetry frame has been parsed. ``chamber_door_open`` and ``chamber_lid_open``
+        are always present but meaningful only on printers with a chamber door sensor;
+        without one they read False regardless of the real door/lid position.
+        ``air_conditioning_mode`` is the mode name, except that ``"COOL_MODE"`` is
+        reported as ``"NOT_SUPPORTED"``: the code tests the enum's truthiness and
+        COOL_MODE is 0 (falsy). ``"NOT_SUPPORTED"`` therefore cannot tell a printer with
+        no chamber AC from one in cool mode, including right after ``set_chamber_temp``
+        below 40°C. Only ``"HEAT_MODE"`` is reliably reported by name.
+        ``{"error": str}`` when the printer is not connected.
     """
     log.debug("get_climate: called for name=%s", name)
     state = session_manager.get_state(name)
@@ -62,24 +87,55 @@ def set_nozzle_temp(
     """
     Set the nozzle temperature target on the named printer.
 
-    temp is the target in °C. extruder selects which toolhead (0 = default/right,
-    1 = left on H2D). Pass extruder=-1 to apply to all nozzles.
-    extruder: 0 = the only extruder on single-nozzle printers, or the right nozzle on H2D
-    (dual-extruder model). 1 = left nozzle on H2D only. -1 = set all nozzles.
-    Requires user_permission=True.
+    WHEN to use: heat a nozzle to a target, or set the target to 0 to stop heating it
+    (for example preheating before a filament change or a calibration step).
 
-    Idle nozzle timeout warning: in IDLE, FINISH, or FAILED gcode_states, the H2D firmware
-    silently resets the nozzle target to 38°C after a calibrated timeout (~170s, [PROVISIONAL]).
-    Camera scripts that heat nozzles while IDLE must use the heat_and_wait() pattern:
-    two concurrent checks — proactive timer (re-assert at 75% of timeout) and reactive poll
-    (verify target via GET /api/printer every 10s). Both use PATCH /api/set_tool_target_temp
-    (HTTP Tier 1) — never raw send_gcode/M104. See behavioral_rules_camera_calibration
-    knowledge module § "Idle Nozzle Heat Timeout".
+    WRITE GUARD: sends an M104 G-code over MQTT that sets the nozzle temperature target
+    and starts heating the nozzle. With ``user_permission`` False the tool changes
+    nothing and returns the refusal string naming that consequence.
+
+    Sibling disambiguation: ``set_nozzle_temp`` sets the nozzle target only;
+    ``set_bed_temp`` sets the heated bed target and ``set_chamber_temp`` sets the chamber
+    target. ``get_temperatures`` and ``get_climate`` read the resulting temperatures.
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        temp: Target in °C. Truncated to an integer; negative values are clamped to 0
+            by the printer library.
+        extruder: Which toolhead to target. 0 = the only extruder on single-nozzle
+            printers, or the right nozzle on H2D (dual-extruder model). 1 = the left
+            nozzle on H2D only. -1 omits the T argument from the M104, so the printer
+            applies the target itself (in practice the currently active tool); it does
+            not send one command per nozzle and is not verified to heat both H2D
+            nozzles. To set both, call twice with extruder 0 and 1. Default 0.
+        user_permission: Must be True to execute. Default False.
+
+    Returns:
+        A ``str``. Success: ``"Nozzle temp target set to <temp>°C (extruder <n>) on
+        '<name>'."``, where ``<temp>`` is the value as passed, not the value sent (the
+        command carries int(temp); a negative target is clamped to 0 by the printer
+        library). Read the target back with ``get_temperatures`` or ``get_climate``.
+        Errors are ``"Error: ..."`` strings, never a dict: the
+        ``_permission_denied`` refusal when ``user_permission`` is False,
+        ``"Error: Printer '<name>' not connected."``, or
+        ``"Error setting nozzle temp on '<name>': <exception>"`` when the command fails.
+
+    Notes:
+        Idle nozzle timeout warning: in IDLE, FINISH, or FAILED gcode_states, the H2D
+        firmware silently resets the nozzle target to 38°C after a calibrated timeout
+        (~170s, [PROVISIONAL]). Camera scripts that heat nozzles while IDLE must use the
+        heat_and_wait() pattern: two concurrent checks — proactive timer (re-assert at 75%
+        of timeout) and reactive poll (verify target via GET /api/printer every 10s). Both
+        use PATCH /api/set_tool_target_temp (HTTP Tier 1) — never raw send_gcode/M104. See
+        ``calibration/calibrate_idle_nozzle_timeout.py`` in this repo, or the corresponding
+        node-kb-mcp ``bambu-*`` article.
     """
     log.debug("set_nozzle_temp: called for name=%s temp=%s extruder=%s user_permission=%s", name, temp, extruder, user_permission)
     if not user_permission:
         log.debug("set_nozzle_temp: permission denied for %s", name)
-        return _permission_denied()
+        return _permission_denied(
+            "This would set the nozzle temperature target and start heating the nozzle."
+        )
     printer = session_manager.get_printer(name)
     if printer is None:
         log.warning("set_nozzle_temp: printer not connected: %s", name)
@@ -102,15 +158,41 @@ def set_bed_temp(
     """
     Set the heated bed temperature target on the named printer.
 
-    temp is the target in °C. Use 0 to turn off bed heating.
-    Pass 0 to turn off bed heating. The bed will cool passively — the print is not
-    affected unless adhesion requires heat.
-    Requires user_permission=True.
+    WHEN to use: preheat the bed, change its target, or turn bed heating off (temp 0).
+
+    WRITE GUARD: sends an M140 G-code over MQTT that sets the bed temperature target and
+    starts heating the bed (temp 0 turns bed heating off). With ``user_permission`` False
+    the tool changes nothing and returns the refusal string naming that consequence.
+
+    Sibling disambiguation: ``set_bed_temp`` sets the heated bed target only;
+    ``set_nozzle_temp`` sets a nozzle target and ``set_chamber_temp`` sets the chamber
+    target. ``get_temperatures`` and ``get_climate`` read the resulting temperatures.
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        temp: Target in °C. Truncated to an integer; negative values are clamped to 0
+            by the printer library. Use 0 to turn off bed heating.
+        user_permission: Must be True to execute. Default False.
+
+    Returns:
+        A ``str``. Success: ``"Bed temp target set to <temp>°C on '<name>'."``, where
+        ``<temp>`` is the value as passed, not the value sent (the command carries
+        int(temp); a negative target is clamped to 0 by the printer library). Read it
+        back with ``get_temperatures`` or ``get_climate``. Errors are
+        ``"Error: ..."`` strings, never a dict: the ``_permission_denied`` refusal when
+        ``user_permission`` is False, ``"Error: Printer '<name>' not connected."``, or
+        ``"Error setting bed temp on '<name>': <exception>"`` when the command fails.
+
+    Notes:
+        With temp 0 the bed cools passively — the print is not affected unless adhesion
+        requires heat.
     """
     log.debug("set_bed_temp: called for name=%s temp=%s user_permission=%s", name, temp, user_permission)
     if not user_permission:
         log.debug("set_bed_temp: permission denied for %s", name)
-        return _permission_denied()
+        return _permission_denied(
+            "This would set the bed temperature target and start heating the bed."
+        )
     printer = session_manager.get_printer(name)
     if printer is None:
         log.warning("set_bed_temp: printer not connected: %s", name)
@@ -133,16 +215,48 @@ def set_chamber_temp(
     """
     Set the chamber temperature target on the named printer.
 
-    On printers with active chamber heating (e.g. H2D), this sets the chamber
-    temperature target and sends an MQTT command to activate it. On printers without
-    managed chamber heating (A1, P1S), this stores the target value — useful for
-    external chamber management solutions that read the stored target and drive their
-    own heating hardware. Requires user_permission=True.
+    WHEN to use: set the chamber heating target on a printer with active chamber
+    heating, or record a chamber target for external chamber management on a printer
+    without it.
+
+    WRITE GUARD: on printers with active chamber heating (e.g. H2D) this sends MQTT
+    commands that set the chamber temperature target and the chamber air conditioning
+    mode (mode 0 for a target below 40°C, mode 1 otherwise), which starts or stops chamber
+    heating. On printers without managed chamber heating (A1, P1S) it only stores the
+    target value in the server's copy of the printer state; nothing is sent to the
+    printer. With ``user_permission`` False the tool changes nothing and returns the
+    refusal string naming that consequence.
+
+    Sibling disambiguation: ``set_chamber_temp`` sets the chamber target only;
+    ``set_bed_temp`` sets the heated bed target and ``set_nozzle_temp`` sets a nozzle
+    target. ``get_climate`` reads the chamber target and, subject to the COOL_MODE caveat
+    in its Returns, the air conditioning mode.
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        temp: Target in °C, truncated to an integer.
+        user_permission: Must be True to execute. Default False.
+
+    Returns:
+        A ``str``. Success: ``"Chamber temp target set to <temp>°C on '<name>'."``, where
+        ``<temp>`` is the value as passed, not the value sent (the command carries
+        int(temp)). Read it back with ``get_climate``. Errors
+        are ``"Error: ..."`` strings, never a dict: the ``_permission_denied`` refusal when
+        ``user_permission`` is False, ``"Error: Printer '<name>' not connected."``, or
+        ``"Error setting chamber temp on '<name>': <exception>"`` when the command fails.
+
+    Notes:
+        The stored target on printers without managed chamber heating is useful for
+        external chamber management solutions that read it and drive their own heating
+        hardware.
     """
     log.debug("set_chamber_temp: called for name=%s temp=%s user_permission=%s", name, temp, user_permission)
     if not user_permission:
         log.debug("set_chamber_temp: permission denied for %s", name)
-        return _permission_denied()
+        return _permission_denied(
+            "This would set the chamber temperature target and, on printers with "
+            "active chamber heating, start or stop chamber heating."
+        )
     printer = session_manager.get_printer(name)
     if printer is None:
         log.warning("set_chamber_temp: printer not connected: %s", name)
@@ -165,13 +279,38 @@ def set_chamber_light(
     """
     Turn the chamber light(s) on or off on the named printer.
 
-    Controls all available light nodes: chamber_light, chamber_light2, column_light.
-    Requires user_permission=True.
+    WHEN to use: switch the printer's lights, for example off before a camera calibration
+    capture or on before viewing the chamber.
+
+    WRITE GUARD: sends the light command over MQTT to every light node (chamber_light,
+    chamber_light2, column_light), turning them all on or all off. With ``user_permission``
+    False the tool changes nothing and returns the refusal string naming that consequence.
+
+    Sibling disambiguation: ``set_chamber_light`` switches the lights;
+    ``get_chamber_light`` only reads the state reported by the first light node.
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        on: True to turn the lights on, False to turn them off.
+        user_permission: Must be True to execute. Default False.
+
+    Returns:
+        A ``str``. Success: ``"Chamber light turned on|off on '<name>'."``. Errors are
+        ``"Error: ..."`` strings, never a dict: the ``_permission_denied`` refusal when
+        ``user_permission`` is False, ``"Error: Printer '<name>' not connected."``, or
+        ``"Error setting chamber light on '<name>': <exception>"`` when the command fails.
+
+    Notes:
+        A ``get_chamber_light`` read straight after this call can still return the
+        previous value: the setter does not update the state that tool reads, which
+        changes only when the printer next reports its lights.
     """
     log.debug("set_chamber_light: called for name=%s on=%s user_permission=%s", name, on, user_permission)
     if not user_permission:
         log.debug("set_chamber_light: permission denied for %s", name)
-        return _permission_denied()
+        return _permission_denied(
+            "This would turn all of the printer's chamber lights on or off."
+        )
     printer = session_manager.get_printer(name)
     if printer is None:
         log.warning("set_chamber_light: printer not connected: %s", name)
@@ -191,8 +330,26 @@ def get_chamber_light(name: str) -> dict:
     """
     Return whether the chamber light is currently on for the named printer.
 
-    Returns a dict with a single key 'on' (bool): True if the chamber light is
-    currently on, False if off.
+    WHEN to use: check the light state before capturing a camera frame or before
+    toggling it.
+
+    Sibling disambiguation: ``get_chamber_light`` only reads the light state, as reported
+    by the printer's first light node; ``set_chamber_light`` changes all light nodes and
+    requires ``user_permission``.
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+
+    Returns:
+        ``{"on": bool}`` on success: True if the chamber light is currently on, False
+        otherwise. False also means no light report has arrived yet. ``{"error": str}``
+        when the printer is not connected or reading the state raises.
+
+    Notes:
+        The value comes from the first entry of the printer's ``lights_report``
+        telemetry, so it reflects only that one light node. ``set_chamber_light`` does
+        not update it: a read immediately after a set returns the previous value until
+        the printer reports back.
     """
     log.debug("get_chamber_light: called for name=%s", name)
     printer = session_manager.get_printer(name)
@@ -216,28 +373,54 @@ def set_fan_speed(
     """
     Set the speed of a specific fan on the printer.
 
-    fan must be one of: 'part_cooling', 'aux', 'exhaust', 'enhanced_cooling'.
-    - 'part_cooling': the fan that blows directly on the printed part to cool it.
-      Critical for PLA and PETG; often disabled for ABS to prevent warping.
-    - 'aux': the auxiliary recirculation fan inside the chamber. Helps regulate
-      chamber temperature and filter air on printers with HEPA filters.
-    - 'exhaust': the exhaust fan that vents chamber air out of the printer.
-      Used to expel fumes when printing ABS, ASA, or other engineering filaments.
-    - 'enhanced_cooling': the Toolhead Enhanced Cooling Fan (M106 P9), present only
-      on H2-series printers with the extension-tool module attached. The printer
-      publishes no run-state telemetry for this fan — the commanded value is
-      sticky (see get_fan_speeds()'s enhanced_cooling_pct). Firmware-observed
-      behavior is effectively on/off; a command sent while the fan is unplugged
-      is acknowledged by the printer as a harmless no-op.
-    speed_percent: integer 0–100. 0 = fan off, 100 = full speed.
-    Requires user_permission=True.
+    WHEN to use: change the part cooling, auxiliary, exhaust or enhanced cooling fan
+    speed on a printer, for example to vent fumes or adjust cooling for the filament.
 
-    Note: These fan controls send M106 G-code commands internally. Fan speed
-    set here may be overridden by the active print job's slicer settings.
+    WRITE GUARD: sends an M106 G-code over MQTT that changes the chosen fan's speed
+    immediately, which can alter part cooling or chamber ventilation for a running print.
+    With ``user_permission`` False the tool changes nothing and returns the refusal string
+    naming that consequence.
+
+    Sibling disambiguation: ``set_fan_speed`` changes one fan's speed; ``get_fan_speeds``
+    reads the speeds of all fans. ``set_nozzle_temp``, ``set_bed_temp`` and
+    ``set_chamber_temp`` set temperature targets, not fans.
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        fan: One of 'part_cooling', 'aux', 'exhaust', 'enhanced_cooling' (case-insensitive).
+            - 'part_cooling': the fan that blows directly on the printed part to cool it.
+              Critical for PLA and PETG; often disabled for ABS to prevent warping.
+            - 'aux': the auxiliary recirculation fan inside the chamber. Helps regulate
+              chamber temperature and filter air on printers with HEPA filters.
+            - 'exhaust': the exhaust fan that vents chamber air out of the printer.
+              Used to expel fumes when printing ABS, ASA, or other engineering filaments.
+            - 'enhanced_cooling': the Toolhead Enhanced Cooling Fan (M106 P9), present only
+              on H2-series printers with the extension-tool module attached. The printer
+              publishes no run-state telemetry for this fan — the commanded value is
+              sticky (see get_fan_speeds()'s enhanced_cooling_pct). Firmware-observed
+              behavior is effectively on/off; a command sent while the fan is unplugged
+              is acknowledged by the printer as a harmless no-op.
+        speed_percent: Integer 0–100. 0 = fan off, 100 = full speed.
+        user_permission: Must be True to execute. Default False.
+
+    Returns:
+        A ``str``. Success: ``"<fan> fan set to <speed_percent>% on '<name>'."``. Errors are
+        ``"Error: ..."`` strings, never a dict: the ``_permission_denied`` refusal when
+        ``user_permission`` is False, ``"Error: Printer '<name>' not connected."``,
+        ``"Error: speed_percent must be between 0 and 100, got <n>."``,
+        ``"Error: Unknown fan '<fan>'. Valid values: [...]"``, or
+        ``"Error setting <fan> fan speed on '<name>': <exception>"`` when the command fails.
+
+    Notes:
+        These fan controls send M106 G-code commands internally. Fan speed set here may be
+        overridden by the active print job's slicer settings.
     """
     log.debug("set_fan_speed: called for name=%s fan=%s speed_percent=%s user_permission=%s", name, fan, speed_percent, user_permission)
     if not user_permission:
-        return _permission_denied()
+        return _permission_denied(
+            "This would change the speed of the selected fan, which can alter cooling "
+            "or ventilation for a running print."
+        )
     printer = session_manager.get_printer(name)
     if printer is None:
         return _no_printer(name)

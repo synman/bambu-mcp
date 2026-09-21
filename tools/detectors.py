@@ -18,35 +18,70 @@ def _no_printer(name: str) -> str:
     return f"Error: Printer '{name}' not connected."
 
 
-def _permission_denied() -> str:
-    return "Error: user_permission must be True to perform this action."
+def _permission_denied(consequence: str) -> str:
+    return f"Error: user_permission must be True to perform this action. {consequence}"
 
 
 def get_detector_settings(name: str) -> dict:
     """
-    Return the current state of all X-Cam AI detector settings on the printer.
+    Return the current enabled state, sensitivity and support flag of every X-Cam AI detector.
 
-    Reads from the local BambuConfig which is kept in sync with printer telemetry.
-    Includes enabled/disabled state and sensitivity for each supported detector.
-    Detector names returned: 'buildplate_marker_detector' = verifies the correct build plate
-    type is loaded before starting a print. 'purgechutepileup_detector' = detects if purged
-    filament is piling up in the purge chute (can cause jams). 'nozzleclumping_detector' =
-    detects filament clumping around the nozzle tip. 'spaghetti_detector' = detects loose
-    spaghetti-like strands indicating a print failure. 'airprinting_detector' = detects the
-    nozzle extruding into open air (clog). Each returns enabled (bool) and sensitivity
-    ('low'/'medium'/'high').
+    WHEN to use: check which detectors are on, and at what sensitivity, before changing one
+    with a set_*_detection tool. Straight after a set call this shows the requested value,
+    not proof that the printer applied it (see Notes).
 
-    Also returns 'nozzle_blob_detect' and 'air_print_detect' — these are the older
-    firmware-level (home_flag) counterparts to the xcam detectors:
-      - nozzle_blob_detect (home_flag) is the legacy blob flag; nozzleclumping_detector
-        (xcam) is the newer AI-vision version of the same detection. On supported printers
-        both can be active; the xcam detector is preferred for sensitivity control.
-      - air_print_detect (home_flag) is the legacy air-printing flag; airprinting_detector
-        (xcam) is the newer AI-vision version. Same relationship.
+    Sibling disambiguation: ``get_detector_settings`` only reads the local config. The
+    ``set_spaghetti_detection``, ``set_buildplate_marker_detection``,
+    ``set_nozzle_clumping_detection``, ``set_purge_chute_detection`` and
+    ``set_air_printing_detection`` tools change one xcam detector each, and
+    ``set_first_layer_inspection`` controls first-layer inspection, which is not reported
+    here. ``set_print_option`` with option 'nozzle_blob_detect' or 'air_print_detect'
+    changes the two legacy home_flag flags returned here; the ``set_*_detection`` tools
+    write only the xcam detectors. ``get_capabilities`` returns the full hardware
+    capability dict, of which the ``supported`` flags here are the detector subset.
 
-    Note: first_layer_inspection is NOT included here because it has no persistent
-    config field — its support is indicated only by the has_lidar capability flag.
-    Use set_first_layer_inspection() to control it and get_capabilities() to check support.
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+
+    Returns:
+        A dict keyed by detector name, each value ``{"enabled": bool, "supported": bool}``
+        plus ``"sensitivity"`` ('low', 'medium' or 'high') for the detectors that have one
+        (spaghetti_detector, airprinting_detector, purgechutepileup_detector,
+        nozzleclumping_detector). If the printer is not connected, ``{"error": str}``.
+
+    Notes:
+        Reads from the local BambuConfig, which the printer's telemetry updates. The set
+        tools write their requested values into that config as soon as the MQTT command is
+        published, without waiting for the printer to acknowledge, so an immediate readback
+        echoes the request; the printer-reported value replaces it only on a later telemetry
+        update.
+
+        All seven detectors are listed whether or not the printer supports them. Where
+        ``supported`` is False, ``enabled`` and ``sensitivity`` are unread BambuConfig
+        defaults (False, 'medium') and must be ignored. On printers whose xcam telemetry
+        carries no ``cfg`` field, the library sets ``sensitivity`` to 'medium' on every
+        telemetry push while the message's ``print_halt`` is set, so the level shown there is
+        not necessarily the printer's actual one.
+
+        Detector names returned: 'buildplate_marker_detector' = checks for the calibration
+        marker on the build plate before a print starts. 'purgechutepileup_detector' = detects
+        if purged filament is piling up in the purge chute (can cause jams).
+        'nozzleclumping_detector' = detects filament clumping around the nozzle tip.
+        'spaghetti_detector' = detects loose spaghetti-like strands indicating a print
+        failure. 'airprinting_detector' = detects the nozzle extruding into open air (clog).
+
+        Also returns 'nozzle_blob_detect' and 'air_print_detect' - these are the older
+        firmware-level (home_flag) counterparts to the xcam detectors:
+          - nozzle_blob_detect (home_flag) is the legacy blob flag; nozzleclumping_detector
+            (xcam) is the newer AI-vision version of the same detection. On supported
+            printers both can be active; the xcam detector is preferred for sensitivity
+            control.
+          - air_print_detect (home_flag) is the legacy air-printing flag;
+            airprinting_detector (xcam) is the newer AI-vision version. Same relationship.
+
+        first_layer_inspection is NOT included here because it has no persistent config
+        field - its support is indicated only by the has_lidar capability flag. Use
+        set_first_layer_inspection() to control it and get_capabilities() to check support.
     """
     log.debug("get_detector_settings: called for name=%s", name)
     config = session_manager.get_config(name)
@@ -98,19 +133,56 @@ def set_spaghetti_detection(
     user_permission: bool = False,
 ) -> str:
     """
-    Enable or disable the spaghetti / failed-print detector (X-Cam AI vision).
+    Enable or disable the spaghetti / failed-print detector (X-Cam AI vision) and set its sensitivity.
 
-    Detects loose strands of filament ("spaghetti") extruded in mid-air rather than
-    adhering to the print — the classic sign of a delaminated or detached print.
-    When triggered, the printer halts the print. sensitivity must be one of:
-    'low', 'medium', 'high'. Low = fewer false positives (better for complex overhangs);
-    high = catches more subtle failures earlier. Requires has_spaghetti_detector_support.
-    Requires user_permission=True.
+    WHEN to use: turn the failed-print detector on or off, or tune how aggressively it flags
+    loose filament strands, on a printer that supports it.
+
+    WRITE GUARD: sends an X-Cam control command to the printer over MQTT and updates the
+    local config, changing whether the printer halts a print when it detects spaghetti.
+    With ``user_permission`` unset the tool changes nothing and returns the refusal string
+    naming that consequence.
+
+    Sibling disambiguation: ``set_spaghetti_detection`` controls the failed-print (loose
+    strand) detector only. ``set_air_printing_detection`` covers extrusion into open air,
+    ``set_nozzle_clumping_detection`` covers filament blobs on the nozzle and
+    ``set_purge_chute_detection`` covers purge waste pile-up. ``get_detector_settings``
+    reads the local config, which echoes a value set here before the printer confirms it
+    (see Notes).
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        enabled: True to enable the detector, False to disable it.
+        sensitivity: One of 'low', 'medium', 'high' (case-insensitive; default 'medium').
+            Always sent, even if you only mean to toggle ``enabled``: omitting it applies
+            'medium' and overwrites the detector's current level. To keep the current level,
+            read it with ``get_detector_settings`` and pass it back.
+        user_permission: Must be True to send the command; the caller sets it after the
+            user has approved the change.
+
+    Returns:
+        A str. On success ``"Spaghetti detector enabled|disabled (sensitivity: <sensitivity>)
+        on '<name>'."``. Errors are strings too: the permission refusal
+        ``"Error: user_permission must be True to perform this action. <consequence>"``,
+        ``"Error: Printer '<name>' not connected."``, ``"Error: Invalid sensitivity
+        '<sensitivity>'. Choose from: low, medium, high"``, or ``"Error setting spaghetti
+        detector on '<name>': <exception>"``.
+
+    Notes:
+        Detects loose strands of filament ("spaghetti") extruded in mid-air rather than
+        adhering to the print - the classic sign of a delaminated or detached print. The
+        command is published with print_halt True, i.e. the detector is set to halt the
+        print. Success means the MQTT command was published and the local config updated;
+        the printer's acknowledgement is not awaited, so ``get_detector_settings`` shows the
+        requested value until a later telemetry update reports the printer's own. Requires
+        has_spaghetti_detector_support (not checked by this tool; see get_detector_settings).
     """
     log.debug("set_spaghetti_detection: called for name=%s enabled=%s sensitivity=%s user_permission=%s", name, enabled, sensitivity, user_permission)
     if not user_permission:
         log.debug("set_spaghetti_detection: permission denied for %s", name)
-        return _permission_denied()
+        return _permission_denied(
+            "This would send an X-Cam command to the printer that enables or disables the spaghetti detector and sets its sensitivity, changing whether the printer halts a print when it sees spaghetti."
+        )
     printer = session_manager.get_printer(name)
     if printer is None:
         log.warning("set_spaghetti_detection: printer not connected: %s", name)
@@ -136,21 +208,50 @@ def set_buildplate_marker_detection(
     user_permission: bool = False,
 ) -> str:
     """
-    Enable or disable the buildplate ArUco marker detector (X-Cam AI vision).
+    Enable or disable the buildplate marker detector (X-Cam AI vision).
 
-    Build plates have printed ArUco markers (visual fiducial patterns) on their surface.
-    The camera reads these markers before the print starts to verify the plate type
-    (e.g. textured PEI vs. smooth PEI). If the plate is incompatible with the sliced print
-    settings, the printer pauses before the first layer. Disable this if your plate's
-    markers are worn, obscured, or you are using a third-party plate without markers.
-    This detector runs pre-print only — not during the print. No sensitivity parameter.
-    Requires has_buildplate_marker_detector_support.
-    Requires user_permission=True.
+    WHEN to use: turn the pre-print build plate marker check off or back on, for example
+    when the check is failing on a plate whose marker is worn, obscured or absent.
+
+    WRITE GUARD: sends an X-Cam control command to the printer over MQTT and updates the
+    local config, changing whether the printer verifies the build plate before starting a
+    print. With ``user_permission`` unset the tool changes nothing and returns the refusal
+    string naming that consequence.
+
+    Sibling disambiguation: unlike the four during-print detector tools
+    (``set_spaghetti_detection``, ``set_air_printing_detection``,
+    ``set_nozzle_clumping_detection``, ``set_purge_chute_detection``), this one takes no
+    sensitivity, as with ``set_first_layer_inspection``, and it acts before the print
+    rather than during it. ``get_detector_settings`` reads the local config, which echoes
+    the value set here before the printer confirms it.
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        enabled: True to enable the detector, False to disable it.
+        user_permission: Must be True to send the command; the caller sets it after the
+            user has approved the change.
+
+    Returns:
+        A str. On success ``"Buildplate marker detector enabled|disabled on '<name>'."``.
+        Errors are strings too: the permission refusal ``"Error: user_permission must be
+        True to perform this action. <consequence>"``, ``"Error: Printer '<name>' not
+        connected."``, or ``"Error setting buildplate marker detector on '<name>':
+        <exception>"``.
+
+    Notes:
+        When enabled, the printer's camera checks for the calibration marker on the build
+        plate before a print starts (per the bpm library); this tool only forwards the
+        enable flag. This detector runs pre-print only - not during the print. Success
+        means the MQTT command was published and the local config updated; the printer's
+        acknowledgement is not awaited. Requires has_buildplate_marker_detector_support
+        (not checked by this tool; see get_detector_settings).
     """
     log.debug("set_buildplate_marker_detection: called for name=%s enabled=%s user_permission=%s", name, enabled, user_permission)
     if not user_permission:
         log.debug("set_buildplate_marker_detection: permission denied for %s", name)
-        return _permission_denied()
+        return _permission_denied(
+            "This would send an X-Cam command to the printer that enables or disables the pre-print build plate marker check, changing whether the printer verifies the plate before starting a print."
+        )
     printer = session_manager.get_printer(name)
     if printer is None:
         log.warning("set_buildplate_marker_detection: printer not connected: %s", name)
@@ -173,18 +274,49 @@ def set_first_layer_inspection(
     """
     Enable or disable the first-layer inspection (LiDAR/camera scan after layer 1).
 
-    After the first layer completes, a LiDAR (laser distance sensor, built into X1/H2D
-    series) or camera scans the surface to verify the layer adhered correctly. If adhesion
-    problems are detected (gaps, lifting corners, incomplete coverage), the printer pauses.
-    Only available on printers with LiDAR (has_lidar capability = True). On printers without
-    LiDAR (A1, P1 series) the command is accepted but has no effect. Check
-    get_capabilities().has_lidar before enabling. No sensitivity parameter.
-    Requires user_permission=True.
+    WHEN to use: turn the first-layer adhesion scan on or off on a printer with LiDAR.
+
+    WRITE GUARD: sends a raw ``xcam_control_set`` command for the ``first_layer_inspector``
+    module to the printer over MQTT, changing whether the first layer is scanned for
+    adhesion problems after it completes. With ``user_permission`` unset the tool changes
+    nothing and returns the refusal string naming that consequence.
+
+    Sibling disambiguation: ``set_first_layer_inspection`` is the one detector-family tool
+    whose state ``get_detector_settings`` does not report (no persistent config field);
+    check ``get_capabilities`` for ``has_lidar`` instead. The other detector tools
+    (``set_spaghetti_detection``, ``set_air_printing_detection``,
+    ``set_nozzle_clumping_detection``, ``set_purge_chute_detection``,
+    ``set_buildplate_marker_detection``) each control a monitored X-Cam detector with a
+    readable setting.
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        enabled: True to enable the inspection, False to disable it.
+        user_permission: Must be True to send the command; the caller sets it after the
+            user has approved the change.
+
+    Returns:
+        A str. On success ``"First layer inspection enabled|disabled on '<name>'."``.
+        Errors are strings too: the permission refusal ``"Error: user_permission must be
+        True to perform this action. <consequence>"``, ``"Error: Printer '<name>' not
+        connected."``, or ``"Error setting first layer inspection on '<name>':
+        <exception>"``.
+
+    Notes:
+        After the first layer completes, a LiDAR or camera scan checks the layer. Intended
+        for printers with LiDAR. bpm derives ``has_lidar`` from the VALUE of
+        ``xcam.first_layer_inspector`` in telemetry, and that field is also an on/off
+        state, so a False ``has_lidar`` (see get_capabilities) means "not confirmed", not
+        proof the printer lacks LiDAR. No sensitivity parameter. The command is published
+        with print_halt False and the local config is not updated. Whether the printer
+        pauses a print on a detected first-layer defect is not established by this code.
     """
     log.debug("set_first_layer_inspection: called for name=%s enabled=%s user_permission=%s", name, enabled, user_permission)
     if not user_permission:
         log.debug("set_first_layer_inspection: permission denied for %s", name)
-        return _permission_denied()
+        return _permission_denied(
+            "This would send an X-Cam command to the printer that enables or disables first-layer inspection, changing whether the first layer is scanned for adhesion problems after it completes."
+        )
     printer = session_manager.get_printer(name)
     if printer is None:
         log.warning("set_first_layer_inspection: printer not connected: %s", name)
@@ -216,22 +348,58 @@ def set_air_printing_detection(
     user_permission: bool = False,
 ) -> str:
     """
-    Enable or disable the air-printing / no-extrusion detector (X-Cam AI vision).
+    Enable or disable the air-printing / no-extrusion detector (X-Cam AI vision) and set its sensitivity.
 
-    This is the newer xcam AI-vision detector for air printing. Detects when the nozzle
-    moves and extrudes but no filament is being laid down — indicating a clog, grinding,
-    or complete filament break. When triggered, the printer halts.
-    Note: there is also a legacy 'air_print_detect' PrintOption (home_flag bit 28) that
-    covers the same condition via an older firmware path. On supported printers, this xcam
-    detector (has_airprinting_detector_support) is preferred as it offers sensitivity control.
-    sensitivity must be one of: 'low', 'medium', 'high'. Low = fewer false positives;
-    high = catches intermittent or subtle under-extrusion earlier.
-    Requires user_permission=True.
+    WHEN to use: turn the xcam air-printing detector on or off, or tune its sensitivity, to
+    catch a clog, grinding or filament break where the nozzle moves but lays down nothing.
+
+    WRITE GUARD: sends an X-Cam control command to the printer over MQTT and updates the
+    local config, changing whether the printer halts a print when it sees the nozzle
+    extruding into open air. With ``user_permission`` unset the tool changes nothing and
+    returns the refusal string naming that consequence.
+
+    Sibling disambiguation: ``set_air_printing_detection`` sets the newer xcam AI-vision
+    detector (with sensitivity). ``set_print_option`` with option 'air_print_detect' sets
+    the legacy firmware (home_flag) version of the same check, which has no sensitivity.
+    ``set_nozzle_clumping_detection`` covers blobs on the nozzle instead, and
+    ``get_detector_settings`` reports both air-printing states from the local config,
+    which echoes a value set here before the printer confirms it.
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        enabled: True to enable the detector, False to disable it.
+        sensitivity: One of 'low', 'medium', 'high' (case-insensitive; default 'medium').
+            Always sent, even if you only mean to toggle ``enabled``: omitting it applies
+            'medium' and overwrites the detector's current level. To keep the current level,
+            read it with ``get_detector_settings`` and pass it back.
+        user_permission: Must be True to send the command; the caller sets it after the
+            user has approved the change.
+
+    Returns:
+        A str. On success ``"Air-printing detector enabled|disabled (sensitivity:
+        <sensitivity>) on '<name>'."``. Errors are strings too: the permission refusal
+        ``"Error: user_permission must be True to perform this action. <consequence>"``,
+        ``"Error: Printer '<name>' not connected."``, ``"Error: Invalid sensitivity
+        '<sensitivity>'. Choose from: low, medium, high"``, or ``"Error setting
+        air-printing detector on '<name>': <exception>"``.
+
+    Notes:
+        This is the newer xcam AI-vision detector for air printing. Detects when the nozzle
+        moves and extrudes but no filament is being laid down - indicating a clog,
+        grinding, or complete filament break. The command is published with print_halt True,
+        i.e. the detector is set to halt the print. There is also a legacy
+        'air_print_detect' PrintOption (home_flag bit 28) that covers the same condition via
+        an older firmware path. On supported printers, this xcam detector
+        (has_airprinting_detector_support) is preferred as it offers sensitivity control.
+        Success means the MQTT command was published and the local config updated; the
+        printer's acknowledgement is not awaited.
     """
     log.debug("set_air_printing_detection: called for name=%s enabled=%s sensitivity=%s user_permission=%s", name, enabled, sensitivity, user_permission)
     if not user_permission:
         log.debug("set_air_printing_detection: permission denied for %s", name)
-        return _permission_denied()
+        return _permission_denied(
+            "This would send an X-Cam command to the printer that enables or disables the air-printing detector and sets its sensitivity, changing whether the printer halts a print when it sees the nozzle extruding into open air."
+        )
     printer = session_manager.get_printer(name)
     if printer is None:
         log.warning("set_air_printing_detection: printer not connected: %s", name)
@@ -258,21 +426,56 @@ def set_nozzle_clumping_detection(
     user_permission: bool = False,
 ) -> str:
     """
-    Enable or disable the nozzle clumping / blob detector (X-Cam AI vision).
+    Enable or disable the nozzle clumping / blob detector (X-Cam AI vision) and set its sensitivity.
 
-    This is the newer xcam AI-vision detector for nozzle clumping. Detects filament
-    accumulating as a blob or clump around the nozzle tip — can damage the nozzle,
-    toolhead, or print surface if left unchecked. When triggered, the printer halts.
-    Note: there is also a legacy 'nozzle_blob_detect' PrintOption (home_flag bit 24) that
-    covers the same condition via an older firmware path. On supported printers, this xcam
-    detector (has_nozzleclumping_detector_support) is preferred as it offers sensitivity control.
-    sensitivity must be one of: 'low', 'medium', 'high'. Low = fewer false positives;
-    high = catches smaller accumulations earlier (recommended for abrasive materials).
-    Requires user_permission=True.
+    WHEN to use: turn the xcam nozzle clumping detector on or off, or tune its sensitivity.
+
+    WRITE GUARD: sends an X-Cam control command to the printer over MQTT and updates the
+    local config, changing whether the printer halts a print when filament clumps on the
+    nozzle. With ``user_permission`` unset the tool changes nothing and returns the refusal
+    string naming that consequence.
+
+    Sibling disambiguation: ``set_nozzle_clumping_detection`` sets the newer xcam AI-vision
+    detector (with sensitivity). ``set_print_option`` with option 'nozzle_blob_detect' sets
+    the legacy firmware (home_flag) version of the same check, which has no sensitivity.
+    ``set_air_printing_detection`` covers extrusion into open air instead, and
+    ``get_detector_settings`` reports both clumping states from the local config, which
+    echoes a value set here before the printer confirms it.
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        enabled: True to enable the detector, False to disable it.
+        sensitivity: One of 'low', 'medium', 'high' (case-insensitive; default 'medium').
+            Always sent, even if you only mean to toggle ``enabled``: omitting it applies
+            'medium' and overwrites the detector's current level. To keep the current level,
+            read it with ``get_detector_settings`` and pass it back.
+        user_permission: Must be True to send the command; the caller sets it after the
+            user has approved the change.
+
+    Returns:
+        A str. On success ``"Nozzle clumping detector enabled|disabled (sensitivity:
+        <sensitivity>) on '<name>'."``. Errors are strings too: the permission refusal
+        ``"Error: user_permission must be True to perform this action. <consequence>"``,
+        ``"Error: Printer '<name>' not connected."``, ``"Error: Invalid sensitivity
+        '<sensitivity>'. Choose from: low, medium, high"``, or ``"Error setting nozzle
+        clumping detector on '<name>': <exception>"``.
+
+    Notes:
+        This is the newer xcam AI-vision detector for nozzle clumping. Detects filament
+        accumulating as a blob or clump around the nozzle tip - can damage the nozzle,
+        toolhead, or print surface if left unchecked. The command is published with
+        print_halt True, i.e. the detector is set to halt the print. There is also a legacy
+        'nozzle_blob_detect' PrintOption (home_flag bit 24) that covers the same condition
+        via an older firmware path. On supported printers, this xcam detector
+        (has_nozzleclumping_detector_support) is preferred as it offers sensitivity
+        control. Success means the MQTT command was published and the local config updated;
+        the printer's acknowledgement is not awaited.
     """
     log.debug("set_nozzle_clumping_detection: called for name=%s enabled=%s sensitivity=%s user_permission=%s", name, enabled, sensitivity, user_permission)
     if not user_permission:
-        return _permission_denied()
+        return _permission_denied(
+            "This would send an X-Cam command to the printer that enables or disables the nozzle clumping detector and sets its sensitivity, changing whether the printer halts a print when filament clumps on the nozzle."
+        )
     printer = session_manager.get_printer(name)
     if printer is None:
         return _no_printer(name)
@@ -297,19 +500,55 @@ def set_purge_chute_detection(
     user_permission: bool = False,
 ) -> str:
     """
-    Enable or disable the purge chute pile-up detector (X-Cam AI vision).
+    Enable or disable the purge chute pile-up detector (X-Cam AI vision) and set its sensitivity.
 
-    When triggered, the printer halts the print. Detects when purged filament
-    waste accumulates in the purge chute to a level that could block the toolhead
-    or cause jams. This detector is primarily relevant during multi-color prints —
-    single-color prints generate minimal purge waste. Disable only if you are
-    experiencing false positives on single-color prints.
-    sensitivity must be one of: 'low', 'medium', 'high'. Requires
-    has_purgechutepileup_detector_support. Requires user_permission=True.
+    WHEN to use: turn the purge chute pile-up detector on or off, or tune its sensitivity,
+    mainly for multi-color prints that generate purge waste.
+
+    WRITE GUARD: sends an X-Cam control command to the printer over MQTT and updates the
+    local config, changing whether the printer halts a print when purge waste piles up in
+    the chute. With ``user_permission`` unset the tool changes nothing and returns the
+    refusal string naming that consequence.
+
+    Sibling disambiguation: ``set_purge_chute_detection`` watches purge waste in the chute.
+    ``set_nozzle_clumping_detection`` watches filament build-up on the nozzle tip, and
+    ``set_spaghetti_detection`` watches for loose strands on the print itself.
+    ``get_detector_settings`` reads the local config, which echoes a value set here before
+    the printer confirms it.
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        enabled: True to enable the detector, False to disable it.
+        sensitivity: One of 'low', 'medium', 'high' (case-insensitive; default 'medium').
+            Always sent, even if you only mean to toggle ``enabled``: omitting it applies
+            'medium' and overwrites the detector's current level. To keep the current level,
+            read it with ``get_detector_settings`` and pass it back.
+        user_permission: Must be True to send the command; the caller sets it after the
+            user has approved the change.
+
+    Returns:
+        A str. On success ``"Purge chute pile-up detector enabled|disabled (sensitivity:
+        <sensitivity>) on '<name>'."``. Errors are strings too: the permission refusal
+        ``"Error: user_permission must be True to perform this action. <consequence>"``,
+        ``"Error: Printer '<name>' not connected."``, ``"Error: Invalid sensitivity
+        '<sensitivity>'. Choose from: low, medium, high"``, or ``"Error setting purge chute
+        detector on '<name>': <exception>"``.
+
+    Notes:
+        The command is published with print_halt True, i.e. the detector is set to halt the
+        print. Detects when purged filament waste accumulates in the purge chute to a level
+        that could block the toolhead or cause jams. This detector is primarily relevant
+        during multi-color prints - single-color prints generate minimal purge waste.
+        Success means the MQTT command was published and the local config updated; the
+        printer's acknowledgement is not awaited. Requires
+        has_purgechutepileup_detector_support (not checked by this tool; see
+        get_detector_settings).
     """
     log.debug("set_purge_chute_detection: called for name=%s enabled=%s sensitivity=%s user_permission=%s", name, enabled, sensitivity, user_permission)
     if not user_permission:
-        return _permission_denied()
+        return _permission_denied(
+            "This would send an X-Cam command to the printer that enables or disables the purge chute pile-up detector and sets its sensitivity, changing whether the printer halts a print when purge waste piles up in the chute."
+        )
     printer = session_manager.get_printer(name)
     if printer is None:
         return _no_printer(name)

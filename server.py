@@ -31,21 +31,7 @@ from resources.rules import (
 from prompts.context import bambu_system_context
 
 # ── Tool modules ───────────────────────────────────────────────────────────────
-import tools.state as state_tools
-import tools.print_control as print_control_tools
-import tools.climate as climate_tools
-import tools.filament as filament_tools
-import tools.nozzle as nozzle_tools
-import tools.detectors as detector_tools
-import tools.management as management_tools
-import tools.files as file_tools
-import tools.system as system_tools
-import tools.discovery as discovery_tools
-import tools.commands as command_tools
-import tools.camera as camera_tools
-import tools.notifications as notification_tools
-import tools.url_factory as url_factory_tools
-import tools.charts as charts_tools
+from tools._registry import register_tools
 
 _log_level = logging.ERROR
 _log_file = Path(__file__).parent / "bambu-mcp.log"
@@ -144,52 +130,7 @@ mcp = FastMCP(
 mcp._mcp_server.version = _pkg_version()
 
 # ── Register tools ─────────────────────────────────────────────────────────────
-_TOOL_MODULES = [
-    state_tools,
-    print_control_tools,
-    climate_tools,
-    filament_tools,
-    nozzle_tools,
-    detector_tools,
-    management_tools,
-    file_tools,
-    system_tools,
-    discovery_tools,
-    command_tools,
-    camera_tools,
-    notification_tools,
-    url_factory_tools,
-    charts_tools,
-]
-
-# Functions registered from url_factory_tools instead of their original modules.
-# These names are skipped during registration of all other modules.
-_URL_FACTORY_NAMES: frozenset[str] = frozenset({
-    "get_snapshot",
-    "get_monitoring_data",
-    "get_monitoring_history",
-    "get_monitoring_series",
-})
-
-import inspect as _inspect
-
-for _mod in _TOOL_MODULES:
-    _mod_name = _mod.__name__
-    for _name in dir(_mod):
-        if _name.startswith("_"):
-            continue
-        if _name in _URL_FACTORY_NAMES and _mod_name != "tools.url_factory":
-            continue  # registered from url_factory_tools — skip original module version
-        _fn = getattr(_mod, _name)
-        # Only register functions defined in this module (not imported names like Enum)
-        if (
-            callable(_fn)
-            and hasattr(_fn, "__module__")
-            and _fn.__module__ == _mod_name
-            and hasattr(_fn, "__doc__")
-            and _fn.__doc__
-        ):
-            mcp.add_tool(_fn)
+register_tools(mcp)
 
 # ── Register resources ─────────────────────────────────────────────────────────
 _RESOURCES = [

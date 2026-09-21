@@ -450,30 +450,81 @@ def _row_ams(printer_name: str) -> str:
 # ── Main tool ─────────────────────────────────────────────────────────────────
 
 def open_charts(name: str) -> dict:
-    """
-    Generate and open a responsive telemetry dashboard for the named printer.
+    """Generate and open a responsive telemetry dashboard for the named printer.
 
-    Renders 6 chart sections as inline SVGs assembled into a dark-themed
-    responsive HTML page and opens it in the default browser:
+    WHEN to use: the human user wants to see the printer's rolling telemetry (temperatures,
+    fans, print health, failure drivers) as charts in a browser tab. The dashboard also
+    carries a fixed H2D camera-calibration drawing and an AMS filament panel that currently
+    shows only a placeholder (see Notes).
 
-      1. Temperature history — nozzle(s), bed, chamber (separate panels)
-      2. Fan speeds — all 4 fans as a full-width step chart
-      3. Anomaly signals + print health timeline (side by side)
-      4. Failure driver spider chart + legend  |  print state pie
-      5. Camera calibration corner status
-      6. AMS filament remaining bars
+    Sibling disambiguation: ``render_charts_html`` returns the same dashboard HTML as a
+    string and opens nothing; ``render_charts_panels`` returns only the SVG panels.
+    ``open_job_state`` opens the background monitor's health images (camera composite,
+    annotated frame), not these time-series charts. ``get_monitoring_series`` returns a URL
+    to the raw JSON series for one field, which the caller then fetches, rather than a
+    rendered dashboard.
 
-    On H2D printers the nozzle panel shows "Left Nozzle" and "Right Nozzle"
-    ordered left-to-right as installed (T1 left, T0 right). On single-extruder
-    printers it shows a single "Nozzle" series.
-
-    Health timeline and anomaly data are populated by the background print
-    monitor and appear after the first active print analysis cycle (~60s into
-    a print).
+    Args:
+        name: Printer name as configured (case-sensitive; see ``get_configured_printers``).
 
     Returns:
-      output_path — path to the generated HTML file (/tmp/bambu-charts-{name}.html)
-      opened      — True if the browser was launched successfully
+        ``{"output_path": str, "opened": bool}`` on success. ``output_path`` is the static
+        HTML file ``/tmp/bambu-charts-{name}.html``, written on every call. ``opened`` is True
+        when an existing browser tab was focused or the browser was launched successfully,
+        False when the browser launch reported failure. Returns ``{"error": "not_connected"}``
+        when no telemetry collector exists for the printer: collectors are created only for
+        printers configured when the server started, so a printer added with ``add_printer``
+        at runtime returns this until the server restarts. A paused or disconnected printer
+        that has a collector renders its last-collected data instead of an error.
+
+    Notes:
+        Side effects: writes the HTML file above and focuses or opens a browser tab.
+        The opened URL is ``http://localhost:{api_port}/api/charts?printer={name}`` (the
+        page then auto-refreshes live data every 30 s) when the API server port is known,
+        otherwise the static ``file://`` URL of the written file (no live refresh).
+        An existing tab is reused only on macOS, and only when Google Chrome or Safari
+        already has a tab whose URL starts with the target URL (found with a 3-second
+        osascript query). On any other platform, or when no such tab exists, a new tab is
+        opened with ``webbrowser.open`` on the machine running the server.
+
+        Renders 6 chart sections as inline SVGs assembled into a dark-themed responsive HTML
+        page:
+
+          1. Temperature history — two side-by-side panels: nozzle(s), and bed and chamber
+             together
+          2. Fan speeds — all 4 fans as a full-width step chart
+          3. Anomaly signals + print health timeline (side by side)
+          4. Failure driver spider chart + legend  |  print state pie
+          5. Camera calibration corner status — a FIXED reference drawing of the H2D camera
+             calibration constants with a hardcoded calibration caption; not per-printer, not
+             telemetry, and identical for every printer including non-H2D models
+          6. AMS filament remaining bars — currently always the "No AMS spool data"
+             placeholder: the panel imports ``get_spool_info`` from ``tools.filament``, which
+             does not define it, and the resulting ImportError is caught and logged at debug
+             level only
+
+        Nozzle panel: when the second extruder (tool_1) has reported a nonzero temperature in
+        the retained window, the panel overlays two lines on one axes, "Right Nozzle" (T0) and
+        "Left Nozzle" (T1), in that legend order, with no spatial left-to-right ordering. That
+        data heuristic, not the printer model, selects the dual layout; otherwise a single
+        "Nozzle" series is shown.
+
+        History and resets: temperature, fan and event series cover the last 60 minutes and
+        are held in memory only, so they start empty at server start. The health and anomaly
+        panels hold the most recent 60 analysis records (roughly an hour) and are not reset
+        between jobs. The print-state pie shows time spent in each gcode_state for the current
+        job, including idle time, and resets only when a new job name is seen.
+
+        Health timeline and anomaly data come from the background print monitor. Records
+        begin on the monitor's next tick (ticks run about every 10 s) after the printer enters
+        RUNNING or PAUSE, not 60 s later, and then about every 60 s. Nothing is recorded while
+        the printer is idle, when no camera frame can be captured, or when the
+        failure-probability model returns no value.
+
+        Failure driver radar: with no analysis result yet (no ``factor_contributions``), the
+        radar renders a placeholder with every factor at 0.5, a uniform polygon that looks
+        like measured data but is not. Only a radar drawn from a real ``factor_contributions``
+        result reflects measured risk.
     """
     log.debug("open_charts: called for name=%s", name)
 
@@ -574,7 +625,38 @@ h2{{color:#f0f6fc;font-size:0.82rem;padding:9px 14px;background:#1c2128;border-b
 
 
 def render_charts_html(name: str) -> str:
-    """Render and return the full dashboard HTML for *name* (used by HTTP route)."""
+    """Render and return the full telemetry dashboard HTML for a printer as a string.
+
+    WHEN to use: you need the dashboard page markup itself (this is what the ``/api/charts``
+    HTTP route serves) without writing a file or opening a browser.
+
+    Sibling disambiguation: ``open_charts`` renders the same page, writes it to
+    ``/tmp/bambu-charts-{name}.html`` and opens it in a browser; ``render_charts_panels``
+    returns only the SVG panels as JSON for AJAX refresh instead of the full page.
+
+    Args:
+        name: Printer name as configured (case-sensitive; see ``get_configured_printers``).
+
+    Returns:
+        A ``str`` containing a complete HTML document (six inline-SVG chart sections plus a
+        30 s auto-refresh script). The AMS Filament section currently holds only a "No AMS
+        spool data" placeholder (its data fetch imports ``get_spool_info`` from the wrong
+        module); its heading is still emitted, and the calibration section is a fixed H2D
+        reference drawing (see ``open_charts`` Notes). The document is VERY LARGE (six inline
+        SVGs from 16-inch-wide figures carrying up to an hour of plotted points; several
+        hundred KB is typical, estimated rather than measured), so it suits the
+        ``/api/charts`` HTTP route or a human-facing consumer; an agent should call
+        ``open_charts`` or ``get_monitoring_series`` instead of pulling it into context.
+        This tool never returns a dict: when no telemetry collector exists for the printer
+        (the printer was not configured when the server started) it returns a short HTML
+        error page
+        (``<html><body style=...><h2>Printer '<name>' not connected</h2></body></html>``)
+        instead. It writes no file and opens no browser.
+
+    Notes:
+        History windows, reset behavior and health-data timing are the same as described in
+        ``open_charts`` Notes.
+    """
     from data_collector import data_collector
     from camera import job_monitor as _jm
 
@@ -608,9 +690,37 @@ def render_charts_html(name: str) -> str:
 
 
 def render_charts_panels(name: str) -> dict:
-    """Render only the SVG panels for AJAX refresh (used by /api/charts_panels route).
+    """Render only the telemetry dashboard SVG panels for a printer, for AJAX refresh.
 
-    Returns {"panels": [svg, ...], "ts": "<timestamp string>"} or {"error": "..."}.
+    WHEN to use: refreshing the dashboard charts in place (this is what the
+    ``/api/charts_panels`` HTTP route serves and what the dashboard page polls every 30 s),
+    when you do not need the surrounding HTML page.
+
+    Sibling disambiguation: ``render_charts_html`` returns the whole dashboard page as an
+    HTML string; ``open_charts`` writes that page to a file and opens it in a browser. This
+    tool returns only the six chart SVGs plus a timestamp.
+
+    Args:
+        name: Printer name as configured (case-sensitive; see ``get_configured_printers``).
+
+    Returns:
+        ``{"panels": [svg, ...], "ts": "YYYY-MM-DD HH:MM:SS"}`` on success. ``panels`` holds
+        six inline SVG strings in dashboard order: temperatures, fans, anomaly and health,
+        failure analysis, camera calibration (a fixed H2D reference drawing), AMS filament.
+        ``panels[5]`` currently always contains the "No AMS spool data" placeholder SVG
+        (its data fetch imports ``get_spool_info`` from the wrong module). The payload is
+        VERY LARGE (six inline SVG strings; several hundred KB is typical, estimated rather
+        than measured). It exists for the dashboard page's own AJAX refresh via
+        ``/api/charts_panels``; an agent should use ``open_charts`` or
+        ``get_monitoring_series`` instead of pulling it into context. Returns
+        ``{"error": "Printer '<name>' not connected"}`` when no telemetry collector exists
+        for the printer, i.e. it was not configured when the server started (note the
+        message text differs from ``open_charts``, which returns
+        ``{"error": "not_connected"}``).
+
+    Notes:
+        History windows, reset behavior and health-data timing are the same as described in
+        ``open_charts`` Notes.
     """
     from data_collector import data_collector
     from camera import job_monitor as _jm

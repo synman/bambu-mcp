@@ -48,8 +48,8 @@ def _no_printer(name: str) -> str:
     return f"Error: Printer '{name}' not connected."
 
 
-def _permission_denied() -> str:
-    return "Error: user_permission must be True to perform this action."
+def _permission_denied(consequence: str) -> str:
+    return f"Error: user_permission must be True to perform this action. {consequence}"
 
 
 def _resolve_ams_id(name: str, unit_id: int) -> int | None:
@@ -75,33 +75,60 @@ def get_ams_units(name: str) -> dict:
     """
     Return all AMS units and their slot states for the named printer.
 
-    Each unit includes temperature, humidity, heater state, drying status, and
-    the presence/absence of filament in each of the four slots.
+    WHEN to use: read AMS temperature, humidity, heater and drying state and which slots hold
+    a spool, or find the positional ``unit_id`` to pass to the AMS write tools in this module.
 
-    Field semantics:
-    - ams_id in the returned data is the raw chip hardware ID (0 for AMS 2 Pro first
-      unit, 128 for AMS HT). The 0-based positional unit_id used by load_filament() and
-      other write tools refers to the position of the unit in the ams_units list, not
-      this raw hardware value.
-    - Each unit has 4 slots (0–3). Slot presence is indicated by tray_exists flags.
-    - The AMS model is identified by the `model` field (AMSModel enum name, e.g.
-      'AMS_2_PRO', 'AMS_HT'). See the enums knowledge module for all values.
-    - On H2D: AMS 2 Pro (ams_id=0, first in list) feeds the RIGHT extruder (extruder 0);
-      AMS HT (ams_id=128, second in list) feeds the LEFT extruder (extruder 1).
-    - humidity_index scale: 1=WET (alert, filament needs drying), 5=DRY (good, no action
-      needed). IMPORTANT: higher numbers mean DRIER — the scale is counterintuitive.
-      Only humidity_index values of 1 or 2 indicate a moisture problem. A value of 5
-      means the filament is completely dry. 0 means the sensor reading is unavailable
-      (uninitialized or not supported by this AMS model — do not treat as wet).
-    - heater_state: AMSHeatingState enum name — OFF, CHECKING (transient), DRYING (active),
-      COOLING, STOPPING, ERROR. CHECKING is a brief transition state after issuing a
-      start_ams_dryer() command; DRYING with dry_sub_status=HEATING confirms active heating.
-    - dry_sub_status: AMSDrySubStatus enum name — OFF, HEATING, DEHUMIDIFY. Indicates the
-      current phase within an active drying cycle.
-    - dry_fan1_status: AMSDryFanStatus enum name — OFF or ON. Primary drying fan (bits 18–19
-      of ams_info). Only meaningful while heater_state=DRYING.
-    - dry_fan2_status: AMSDryFanStatus enum name — OFF or ON. Secondary drying fan (bits
-      20–21 of ams_info). Only meaningful while heater_state=DRYING.
+    Sibling disambiguation: ``get_ams_units`` and ``get_ams_status`` return the same
+    ``ams_status`` / ``ams_count`` / ``units`` payload from the same printer state; this
+    tool's description is the field reference for the units list, and the order of that list
+    is what ``unit_id`` indexes. ``get_spool_info`` is filament-centric (spool type, color,
+    remaining percentage). ``get_external_spool`` reports the external spool holder.
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+
+    Returns:
+        ``{"ams_count": int, "ams_status": str, "units": [dict]}``. ``ams_count`` is the
+        number of connected AMS units, ``ams_status`` is the global AMS status text, and
+        ``units`` is an empty list when the printer reports none. Each unit dict includes
+        temperature, humidity, heater state, drying status, and per-slot filament presence, as
+        the fields ams_id, chip_id, model, temp_actual, temp_target, humidity_index,
+        humidity_raw, ams_info, heater_state, dry_fan1_status, dry_fan2_status,
+        dry_sub_status, dry_time (minutes left), tray_exists (list of four booleans; see
+        Notes) and assigned_to_extruder; enum fields appear as their names. Error shape:
+        ``{"error": "Printer '<name>' not connected"}``.
+
+    Notes:
+        Field semantics:
+        - ams_id is the AMS unit id as reported by the printer (for example 0 for the first
+          AMS 2 Pro, 128 for AMS HT). chip_id is a separate field holding the unit's hardware
+          serial string; the two are not synonyms. The 0-based positional unit_id used by
+          load_filament() and other write tools refers to the position of the unit in the
+          ams_units list, not to either value.
+        - tray_exists is always emitted as four booleans. A standard AMS unit has four slots
+          (0–3) and all four are meaningful. bpm's data dictionary describes an AMS HT as a
+          single-slot unit (one bit checked), so treat only tray_exists[0] as meaningful
+          there; the parser still fills indices 1–3 and bpm's documentation does not define
+          them.
+        - The AMS model is identified by the `model` field (AMSModel enum name, e.g.
+          'AMS_2_PRO', 'AMS_HT'). See the enums knowledge module for all values.
+        - On H2D: AMS 2 Pro (ams_id=0, first in list) feeds the RIGHT extruder (extruder 0);
+          AMS HT (ams_id=128, second in list) feeds the LEFT extruder (extruder 1).
+        - humidity_index scale: 1=WET (alert, filament needs drying), 5=DRY (good, no action
+          needed). IMPORTANT: higher numbers mean DRIER — the scale is counterintuitive.
+          Only humidity_index values of 1 or 2 indicate a moisture problem. A value of 5
+          means the filament is completely dry. 0 means the sensor reading is unavailable
+          (uninitialized or not supported by this AMS model — do not treat as wet).
+        - heater_state: AMSHeatingState enum name — OFF, CHECKING (transient), DRYING (active),
+          COOLING, STOPPING, ERROR, CANNOT_STOP_HEAT_OOC, PRODUCT_TEST. CHECKING is a brief
+          transition state after issuing a start_ams_dryer() command; DRYING with
+          dry_sub_status=HEATING confirms active heating.
+        - dry_sub_status: AMSDrySubStatus enum name — OFF, HEATING, DEHUMIDIFY. Indicates the
+          current phase within an active drying cycle.
+        - dry_fan1_status: AMSDryFanStatus enum name — OFF or ON. Primary drying fan (bits
+          18–19 of ams_info). Only meaningful while heater_state=DRYING.
+        - dry_fan2_status: AMSDryFanStatus enum name — OFF or ON. Secondary drying fan (bits
+          20–21 of ams_info). Only meaningful while heater_state=DRYING.
     """
     log.debug("get_ams_units: called for name=%s", name)
     state = session_manager.get_state(name)
@@ -131,30 +158,83 @@ def set_ams_filament_setting(
     """
     Set filament details for a specific AMS slot on the named printer.
 
-    unit_id is the AMS unit index (0-based). slot_id is the slot within that unit (0-3).
-    filament_id is the Bambu Lab tray_info_idx (e.g. 'GFA00'). Pass 'no_filament' to
-    clear the slot. color may be a CSS name or RRGGBB hex string.
-    filament_id is the Bambu Lab catalog material code (tray_info_idx), e.g. 'GFA00' for
-    Bambu PLA Basic. This is a primary identity field — a lookup key from Bambu's filament
-    database that encodes temperature profiles, drying parameters, and flow characteristics.
-    Pass 'no_filament' to mark the slot as empty.
-    filament_name is a Bambu Lab vendor-specific brand label (e.g. 'Bambu PLA Basic').
-    It is optional, absent on third-party spools, and NOT a reliable spool identifier.
-    The true identity of a spool is color + filament_id (base profile), not this name field.
-    Pass -1 for nozzle_temp_min or nozzle_temp_max to keep the existing value or let the
-    printer use the filament_id defaults.
-    Requires user_permission=True.
+    WHEN to use: record or correct the filament identity, color, and nozzle temperature range
+    of one AMS slot, or clear the slot by passing filament_id 'no_filament'.
 
-    WARNING: This call sends ALL fields to the printer in a single command. Any field left
-    at its default (empty string for text fields, -1 for temps) will be applied as-is —
-    the printer interprets empty strings as "clear this field". Always pass ALL relevant
-    fields in a single call (filament_id, filament_type, color, nozzle_temp_min,
-    nozzle_temp_max) to avoid accidentally wiping existing slot metadata.
+    WRITE GUARD: sends the slot's filament setting (material code, name, type, color, and
+    nozzle temperature range) to the printer in a single command, overwriting what the slot
+    currently holds; filament_id, filament_name and filament_type left at their defaults are
+    sent as empty strings, an empty color is not sent (opaque white is written instead), and
+    temperatures left at -1 are sent as -1. With ``user_permission`` False the tool changes
+    nothing and returns the refusal string naming the overwrite.
+
+    Sibling disambiguation: ``set_ams_filament_setting`` writes the slot's stored filament
+    fields and moves no filament. ``calibrate_ams_remaining`` asks the printer to re-read the
+    slot's RFID tag instead of writing fields, ``load_filament`` and ``unload_filament`` move
+    filament, and ``get_spool_info`` reads the resulting spool data.
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        unit_id: AMS unit index (0-based position in the ``get_ams_units`` ``units`` list). A
+            value outside that range is matched against the raw hardware ams_id (for example
+            128 for AMS HT).
+        slot_id: Slot within that unit (0-3).
+        filament_id: Bambu Lab catalog material code (tray_info_idx), e.g. 'GFA00' for Bambu
+            PLA Basic. This is a primary identity field — a lookup key from Bambu's filament
+            database that encodes temperature profiles, drying parameters, and flow
+            characteristics. Pass 'no_filament' to clear the slot and mark it as empty.
+            Default "" (sent as empty).
+        filament_name: Bambu Lab vendor-specific brand label (e.g. 'Bambu PLA Basic'). It is
+            optional, absent on third-party spools, and NOT a reliable spool identifier. The
+            true identity of a spool is color + filament_id (base profile), not this name
+            field. Default "" (sent as empty).
+        filament_type: Short filament type string (e.g. 'PLA', 'PETG', 'ABS'). Default ""
+            (sent as empty).
+        color: CSS color name or RRGGBB hex string. Default "" is NOT sent as empty: the
+            library skips an empty color, so the command keeps its template default FFFFFFFF
+            and the slot color is set to opaque white. Always pass the color you want.
+        nozzle_temp_min: Minimum nozzle temperature in °C. The default -1 is sent as-is;
+            whether the printer treats -1 as "leave unchanged" is not established by this code.
+        nozzle_temp_max: Maximum nozzle temperature in °C. The default -1 is sent as-is;
+            whether the printer treats -1 as "leave unchanged" is not established by this code.
+        user_permission: Must be True to execute. Default False.
+
+    Returns:
+        A ``str``. Success: ``"Filament setting updated for AMS unit <unit_id> slot
+        <slot_id> on '<name>'."``. Errors are ``"Error: ..."`` strings, never a dict: the
+        ``_permission_denied`` refusal when ``user_permission`` is False,
+        ``"Error: Printer '<name>' not connected."``, ``"Error: AMS unit <unit_id> not found
+        on '<name>'."``, or ``"Error setting filament on '<name>': <exception>"`` when the
+        command fails.
+
+    Notes:
+        WARNING: This call sends ALL fields to the printer in a single command. Text fields
+        left at their default go out as empty strings and temperatures left at -1 go out as
+        -1; whether the printer treats an empty string as "clear this field" is not
+        established by this code, and the refusal text's "empty fields clear existing values"
+        is likewise unverified. Always pass ALL relevant fields in a single call (filament_id,
+        filament_type, color, nozzle_temp_min, nozzle_temp_max) to avoid overwriting existing
+        slot metadata.
+
+        To clear a slot, pass filament_id='no_filament': the library then ignores
+        filament_name, filament_type, color and both temperatures and writes name "", type "",
+        color FFFFFF00 and temperatures 0/0.
+
+        The tool computes the absolute tray id as ams_id + slot_id when the resolved ams_id is
+        128 or higher (AMS HT), otherwise ams_id * 4 + slot_id. The printer library then
+        re-derives the command's ams_id as tray_id // 4 and slot_id as tray_id % 4 (only
+        254/255 are special-cased), so on AMS HT tray_id 128 goes out as ams_id 32, slot_id 0,
+        tray_id 128. Whether that reaches an AMS HT slot is unverified against printer
+        firmware; do not rely on it.
     """
     log.debug("set_ams_filament_setting: called for name=%s unit_id=%s slot_id=%s", name, unit_id, slot_id)
     if not user_permission:
         log.debug("set_ams_filament_setting: permission denied for %s", name)
-        return _permission_denied()
+        return _permission_denied(
+            "This would overwrite the filament settings (material code, name, type, color, "
+            "nozzle temperature range) stored on the selected AMS slot, and empty fields clear "
+            "existing values."
+        )
     printer = session_manager.get_printer(name)
     if printer is None:
         log.warning("set_ams_filament_setting: printer not connected: %s", name)
@@ -190,29 +270,64 @@ def load_filament(
     """
     Load filament from a specific AMS unit and slot into the extruder.
 
-    unit_id is the AMS index (0-based), slot_id is the slot (0-3).
-    Use slot_id=254 to load from the external spool holder (same source as get_external_spool()).
-    The external spool holder is a separate filament feeder that attaches to the printer's side,
-    holding one spool outside the AMS unit. Use slot_id=254 to load from it.
-    Requires user_permission=True.
+    WHEN to use: feed the filament in one AMS slot, or on the external spool holder, into the
+    extruder while no print is active.
 
-    H2D dual-extruder wiring (fixed by hardware):
-    - AMS 2 Pro → RIGHT extruder (extruder 0).
-    - AMS HT → LEFT extruder (extruder 1).
-    Loading from a given AMS unit automatically targets its paired extruder.
+    WRITE GUARD: sends a load-filament command to the printer, which starts feeding filament
+    from the chosen slot into the extruder. With ``user_permission`` False the tool changes
+    nothing and returns the refusal string naming that consequence. A second gate blocks the
+    call while the printer is printing (see Returns).
 
-    To find the correct unit_id: call get_ams_units() and use the positional
-    index (0-based) of the desired unit in the returned list. chip_ids (ams_id)
-    are hardware-assigned and should never be hardcoded.
+    Sibling disambiguation: ``load_filament`` feeds filament into the extruder;
+    ``unload_filament`` retracts the loaded filament back into the AMS. ``set_ams_filament_setting``
+    only changes the filament metadata stored for a slot and moves no filament.
 
-    ⛔ BLOCKED during active prints (gcode_state RUNNING or PREPARE).
-    Defense-in-depth: AMS locks slots during prints and firmware rejects the
-    command, but the gate prevents a wasted round-trip and confusing error.
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        unit_id: AMS index (0-based position in the ``get_ams_units`` ``units`` list). A value
+            outside that range is matched against the raw hardware ams_id.
+        slot_id: Slot within the unit (0-3). Use 254 to load from the external spool holder.
+            On a dual-nozzle printer 254 is the LEFT holder and 255 is the RIGHT holder;
+            loading from 255 through this tool has not been verified. The external spool
+            holder is a separate filament feeder that attaches to the printer's side,
+            holding one spool outside the AMS unit. get_external_spool() reports what is
+            loaded on it.
+        user_permission: Must be True to execute. Default False.
+
+    Returns:
+        A ``str``. Success: ``"Load filament command sent for AMS unit <unit_id> slot
+        <slot_id> on '<name>'."``. Errors are strings, never a dict: the
+        ``_permission_denied`` refusal when ``user_permission`` is False,
+        ``"Error: Printer '<name>' not connected."``, the active-print block message
+        (``"Blocked: '<name>' is currently <gcode_state>. load_filament is not safe while
+        a print is active. ..."``), ``"Error: AMS unit <unit_id> not found on '<name>'."``, or
+        ``"Error loading filament on '<name>': <exception>"`` when the command fails.
+
+    Notes:
+        H2D dual-extruder pairing (AMS 2 Pro to the RIGHT extruder, AMS HT to the LEFT) is
+        printer behavior that get_ams_units reports per unit as assigned_to_extruder; this
+        code does not establish it. The tool sends only the resolved ams_id and slot_id: the
+        printer library copies slot_id into the command's target field, which bpm's protocol
+        reference describes as the extruder to load into, and it marks multi-unit loading
+        unfinished (TODO: refactor to support multiple AMSs). Loading from a unit other than
+        the first is therefore unverified.
+
+        To find the correct unit_id: call get_ams_units() and use the positional
+        index (0-based) of the desired unit in the returned list. ams_id values are assigned
+        by the printer and should not be hardcoded. unit_id must resolve to a
+        connected AMS unit even when slot_id is 254; otherwise the tool returns the
+        "AMS unit not found" error.
+
+        ⛔ BLOCKED during active prints (gcode_state RUNNING or PREPARE), because a filament
+        change during a print risks toolhead crashes or failed prints.
     """
     log.debug("load_filament: called for name=%s unit_id=%s slot_id=%s user_permission=%s", name, unit_id, slot_id, user_permission)
     if not user_permission:
         log.debug("load_filament: permission denied for %s", name)
-        return _permission_denied()
+        return _permission_denied(
+            "This would start loading filament from the selected AMS slot (or external spool "
+            "holder) into the extruder."
+        )
     printer = session_manager.get_printer(name)
     if printer is None:
         log.warning("load_filament: printer not connected: %s", name)
@@ -241,16 +356,47 @@ def unload_filament(
     """
     Unload the currently loaded filament from the extruder back into the AMS.
 
-    Requires user_permission=True.
+    WHEN to use: retract the filament that is currently loaded in the extruder back into the
+    AMS while no print is active.
 
-    ⛔ BLOCKED during active prints (gcode_state RUNNING or PREPARE).
-    Defense-in-depth: AMS locks slots during prints and firmware rejects the
-    command, but the gate prevents a wasted round-trip and confusing error.
+    WRITE GUARD: sends an unload-filament command to the printer, which starts retracting
+    the loaded filament out of the extruder. With ``user_permission`` False the tool changes
+    nothing and returns the refusal string naming that consequence. A second gate blocks the
+    call while the printer is printing (see Returns).
+
+    Sibling disambiguation: ``unload_filament`` retracts the loaded filament back into the
+    AMS and takes no unit or slot; ``load_filament`` feeds a chosen slot into the extruder.
+    ``get_spool_info`` shows which spool is currently loaded.
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        user_permission: Must be True to execute. Default False.
+
+    Returns:
+        A ``str``. Success: ``"Unload filament command sent to '<name>'."``. Errors are
+        strings, never a dict: the ``_permission_denied`` refusal when ``user_permission`` is
+        False, ``"Error: Printer '<name>' not connected."``, the active-print block message
+        (``"Blocked: '<name>' is currently <gcode_state>. unload_filament is not safe
+        while a print is active. ..."``), or ``"Error unloading filament on '<name>':
+        <exception>"`` when the command fails.
+
+    Notes:
+        ⛔ BLOCKED during active prints (gcode_state RUNNING or PREPARE), because a filament
+        change during a print risks toolhead crashes or failed prints.
+
+        The tool has no unit selector: it calls the printer library's unload with its
+        default ams_id (0), so the command always names AMS unit 0. It cannot name another
+        unit, such as AMS HT (ams_id 128, the left extruder), even though load_filament
+        accepts an AMS HT unit_id; whether the printer then unloads whichever filament is
+        loaded is not established by this code.
     """
     log.debug("unload_filament: called for name=%s user_permission=%s", name, user_permission)
     if not user_permission:
         log.debug("unload_filament: permission denied for %s", name)
-        return _permission_denied()
+        return _permission_denied(
+            "This would start unloading the filament currently loaded in the extruder back into "
+            "the AMS."
+        )
     printer = session_manager.get_printer(name)
     if printer is None:
         log.warning("unload_filament: printer not connected: %s", name)
@@ -280,40 +426,82 @@ def start_ams_dryer(
     """
     Start the AMS filament dryer on the specified unit.
 
-    target_temp is in °C (default 55°C). duration_hours is the drying time
-    (default 4 hours). Only supported on AMS 2 Pro and AMS HT models.
-    If the AMS unit model does not support drying (e.g. AMS Lite), the command is
-    silently ignored by the printer.
-    Requires user_permission=True.
+    WHEN to use: dry the filament in one AMS unit at a chosen temperature and duration, for
+    example when ``get_ams_units`` shows a low ``humidity_index``.
 
-    filament_type is derived automatically from the loaded spool in the target AMS unit
-    (spool.type, e.g. "ABS", "PLA"). Falls back to "" if no spool is loaded or type is
-    unavailable — the firmware accepts an empty string and applies default dryer behavior.
+    WRITE GUARD: sends a start-drying command that turns on the unit's dryer heater at the
+    given temperature for the given duration. With ``user_permission`` False the tool changes
+    nothing and returns the refusal string naming that consequence.
 
-    Heater state transition: after the command is sent, heater_state briefly shows CHECKING
-    (transition state — firmware verifying conditions). Active drying is confirmed by
-    heater_state=DRYING with dry_sub_status=HEATING. This tool polls up to 10 seconds
-    waiting for DRYING before returning.
+    Sibling disambiguation: ``start_ams_dryer`` turns the dryer on and waits up to 10
+    seconds to see it start; ``stop_ams_dryer`` turns it off. ``get_ams_units`` reads the
+    resulting heater_state and dry_sub_status.
 
-    Sticky preferences: before presenting parameters to the user, look up stored values:
-      from user_prefs import get_pref
-      target_temp    = get_pref(f"{name}:ams{unit_id}:target_temp",    55)
-      duration_hours = get_pref(f"{name}:ams{unit_id}:duration_hours", 4)
-      rotate_tray    = get_pref(f"{name}:ams{unit_id}:rotate_tray",    False)
-    Factory defaults: target_temp=55, duration_hours=4, rotate_tray=False.
-    Label each "(your preference)" if stored value differs from factory default, "(default)" otherwise.
-    After a successful call, store the confirmed values:
-      from user_prefs import set_pref
-      set_pref(f"{name}:ams{unit_id}:target_temp",    target_temp)
-      set_pref(f"{name}:ams{unit_id}:duration_hours", duration_hours)
-      set_pref(f"{name}:ams{unit_id}:rotate_tray",    rotate_tray)
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        unit_id: AMS unit index (0-based position in the ``get_ams_units`` ``units`` list). A
+            value outside that range is matched against the raw hardware ams_id.
+        target_temp: Drying temperature in °C. Default 55.
+        duration_hours: Drying time, passed unchanged as the command's ``duration`` field.
+            Default 4. bpm's method docstring says hours, but its MQTT protocol reference lists
+            the field in minutes (example: 120 for "2 hours"); the unit is unverified against
+            firmware.
+        rotate_tray: Passed to the printer as the rotate-tray flag for the drying command.
+            Default False.
+        user_permission: Must be True to execute. Default False.
+
+    Returns:
+        A ``str``. Success: ``"AMS dryer started on unit <unit_id> (ams_id=<ams_id>):
+        <target_temp>°C for <duration_hours>h on '<name>'. heater_state=DRYING"``. Errors are
+        ``"Error: ..."`` strings, never a dict: the ``_permission_denied`` refusal when
+        ``user_permission`` is False, ``"Error: Printer '<name>' not connected."``,
+        ``"Error: AMS unit <unit_id> not found on '<name>'."``, ``"Error: AMS dryer command
+        sent to unit <unit_id> (ams_id=<ams_id>) on '<name>' but heater_state did not reach
+        DRYING within 10s (final state: <STATE or unknown>). Check get_ams_units for current
+        state."`` (the command WAS sent in that case), or ``"Error starting AMS dryer on
+        '<name>': <exception>"`` when the command fails.
+
+    Notes:
+        The tool performs no model check: the command is published for any resolved unit.
+        bpm's data dictionary lists the drying states as AMS 2 Pro and AMS HT only. On another
+        model (e.g. AMS Lite) the call is not silent: it returns the "did not reach DRYING
+        within 10s" error below unless heater_state reaches DRYING.
+
+        filament_type is derived from the first spool in the target AMS unit that reports a
+        type (spool.type, e.g. "ABS", "PLA") and falls back to "" if there is none. bpm
+        documents it only as passed to firmware for validation; what the firmware does with
+        an empty value is not established by this code.
+
+        Heater state transition: after the command is sent, heater_state may briefly read
+        CHECKING (a transitional state). Active drying is confirmed by heater_state=DRYING with
+        dry_sub_status=HEATING. This tool polls once per second (first reading one second
+        after the publish), up to 10 seconds, waiting for DRYING before returning; it stops
+        polling early, and returns the "did not reach DRYING" error, if heater_state reads OFF
+        or ERROR. OFF is also the pre-command state, so an early error does not prove the
+        printer rejected the command; confirm with get_ams_units.
+
+        Sticky preferences: before presenting parameters to the user, look up stored values:
+          from user_prefs import get_pref
+          target_temp    = get_pref(f"{name}:ams{unit_id}:target_temp",    55)
+          duration_hours = get_pref(f"{name}:ams{unit_id}:duration_hours", 4)
+          rotate_tray    = get_pref(f"{name}:ams{unit_id}:rotate_tray",    False)
+        Factory defaults: target_temp=55, duration_hours=4, rotate_tray=False.
+        Label each "(your preference)" if stored value differs from factory default, "(default)" otherwise.
+        After a successful call, store the confirmed values:
+          from user_prefs import set_pref
+          set_pref(f"{name}:ams{unit_id}:target_temp",    target_temp)
+          set_pref(f"{name}:ams{unit_id}:duration_hours", duration_hours)
+          set_pref(f"{name}:ams{unit_id}:rotate_tray",    rotate_tray)
     """
     log.debug("start_ams_dryer: called for name=%s unit_id=%s target_temp=%s duration_hours=%s user_permission=%s", name, unit_id, target_temp, duration_hours, user_permission)
     import time
 
     if not user_permission:
         log.debug("start_ams_dryer: permission denied for %s", name)
-        return _permission_denied()
+        return _permission_denied(
+            "This would start the AMS dryer heater on the selected unit at the requested "
+            "temperature and duration."
+        )
     printer = session_manager.get_printer(name)
     if printer is None:
         log.warning("start_ams_dryer: printer not connected: %s", name)
@@ -377,12 +565,36 @@ def stop_ams_dryer(
     """
     Stop the AMS filament dryer on the specified unit.
 
-    Requires user_permission=True.
+    WHEN to use: end a drying cycle early on one AMS unit, or make sure its dryer is off.
+
+    WRITE GUARD: sends a turn-off-drying command that switches the unit's dryer off and ends
+    its drying cycle. With ``user_permission`` False the tool changes nothing and returns the
+    refusal string naming that consequence.
+
+    Sibling disambiguation: ``stop_ams_dryer`` turns the dryer off; ``start_ams_dryer`` turns
+    it on. ``get_ams_units`` reads the resulting heater_state.
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        unit_id: AMS unit index (0-based position in the ``get_ams_units`` ``units`` list). A
+            value outside that range is matched against the raw hardware ams_id.
+        user_permission: Must be True to execute. Default False.
+
+    Returns:
+        A ``str``. Success: ``"AMS dryer stopped on unit <unit_id> (ams_id=<ams_id>) on
+        '<name>'."``. Errors are ``"Error: ..."`` strings, never a dict: the
+        ``_permission_denied`` refusal when ``user_permission`` is False,
+        ``"Error: Printer '<name>' not connected."``, ``"Error: AMS unit <unit_id> not found
+        on '<name>'."``, or ``"Error stopping AMS dryer on '<name>': <exception>"`` when the
+        command fails.
     """
     log.debug("stop_ams_dryer: called for name=%s unit_id=%s user_permission=%s", name, unit_id, user_permission)
     if not user_permission:
         log.debug("stop_ams_dryer: permission denied for %s", name)
-        return _permission_denied()
+        return _permission_denied(
+            "This would turn off the AMS dryer heater on the selected unit and end its "
+            "drying cycle."
+        )
     printer = session_manager.get_printer(name)
     if printer is None:
         log.warning("stop_ams_dryer: printer not connected: %s", name)
@@ -409,21 +621,56 @@ def set_ams_user_setting(
     """
     Enable or disable an AMS user setting on the named printer.
 
-    Supported settings: 'calibrate_remain_flag' (spool-weight based remaining
-    estimation), 'startup_read_option' (RFID scan on power-on), 'tray_read_option'
-    (RFID scan on spool insert). Requires user_permission=True.
-    'calibrate_remain_flag' = estimate remaining filament by tracking spool weight.
-      Requires an AMS unit with built-in weight sensors (AMS 2 Pro only). AMS Lite
-      and AMS HT do not have weight sensors — enabling this on those units has no effect.
-    'startup_read_option' = scan RFID tags on all loaded spools when the printer powers on,
-      to detect filament changes made while the printer was off.
-    'tray_read_option' = scan the RFID tag when a spool is inserted into an AMS slot,
-      auto-populating filament type, color, and temperature profile from the tag.
+    WHEN to use: turn on or off spool-weight remaining estimation, the RFID scan at printer
+    power-on, or the RFID scan when a spool is inserted.
+
+    WRITE GUARD: sends the AMS user-setting command to the printer, which changes one of the
+    three AMS user settings on the printer. With ``user_permission`` False the tool changes
+    nothing and returns the refusal string naming that consequence.
+
+    Sibling disambiguation: ``set_ams_user_setting`` changes a standing AMS behavior setting.
+    ``calibrate_ams_remaining`` triggers a one-time RFID re-scan of a single slot, and
+    ``set_ams_filament_setting`` writes one slot's filament fields.
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        setting: One of 'calibrate_remain_flag', 'startup_read_option', 'tray_read_option'
+            (case-insensitive).
+        value: True to enable the setting, False to disable it.
+        user_permission: Must be True to execute. Default False.
+
+    Returns:
+        A ``str``. Success: ``"AMS setting '<setting>' set to <value> on '<name>'."``. Errors
+        are ``"Error: ..."`` strings, never a dict: the ``_permission_denied`` refusal when
+        ``user_permission`` is False, ``"Error: Printer '<name>' not connected."``,
+        ``"Error: Unknown setting '<setting>'. Supported: [...]"``, or ``"Error setting AMS
+        user setting on '<name>': <exception>"`` when the command fails.
+
+    Notes:
+        Supported settings: 'calibrate_remain_flag' (spool-weight based remaining
+        estimation), 'startup_read_option' (RFID scan on power-on), 'tray_read_option'
+        (RFID scan on spool insert).
+        'calibrate_remain_flag' = estimate remaining filament by tracking spool weight.
+          Requires an AMS unit with built-in weight sensors (AMS 2 Pro only). AMS Lite
+          and AMS HT do not have weight sensors — enabling this on those units has no effect.
+        'startup_read_option' = scan RFID tags on all loaded spools when the printer powers on,
+          to detect filament changes made while the printer was off.
+        'tray_read_option' = scan the RFID tag when a spool is inserted into an AMS slot,
+          auto-populating filament type, color, and temperature profile from the tag.
+
+        The tool passes no unit selector: the printer library sends the command with its
+        default ams_id (0). The command includes all three settings: the named one is set to
+        value and the other two come from the library's last-seen telemetry values, not a
+        fresh read from the printer. Those default to False until a status report arrives, so
+        calling this early in a session can write False for the other two.
     """
     log.debug("set_ams_user_setting: called for name=%s setting=%s value=%s user_permission=%s", name, setting, value, user_permission)
     if not user_permission:
         log.debug("set_ams_user_setting: permission denied for %s", name)
-        return _permission_denied()
+        return _permission_denied(
+            "This would change an AMS user setting (spool-weight remaining estimation, or RFID "
+            "scan at startup or on spool insert) on the printer."
+        )
     printer = session_manager.get_printer(name)
     if printer is None:
         log.warning("set_ams_user_setting: printer not connected: %s", name)
@@ -449,22 +696,50 @@ def set_ams_user_setting(
 
 def get_external_spool(name: str) -> dict:
     """
-    Return the filament info for the external spool holder (tray id 254).
+    Return the filament info for the external spool holder.
 
-    Returns the spool dict if a filament is configured on the external tray,
-    or a dict with 'loaded': False if not.
+    WHEN to use: check what filament sits on the external spool holder (or holders on a
+    dual-nozzle printer), for example before ``load_filament`` with slot_id 254.
+
+    Sibling disambiguation: ``get_external_spool`` returns the external holder trays alone.
+    ``get_spool_info`` returns every spool on the printer plus the active one, and
+    ``get_ams_units`` returns the AMS units and their slot states.
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+
+    Returns:
+        ``{"loaded": True, "spool": <dict>, "spools": [<dict>, ...]}`` when any external tray
+        entry exists, or ``{"loaded": False, "spool": None, "spools": []}`` when none does.
+        ``loaded`` True means an entry exists, not that filament is on a holder: when
+        telemetry carries ``vir_slot``, the printer library adds a placeholder entry (empty
+        ``type``, ``slot_id`` -1) for each of 254 and 255 the printer reported no tray for.
+        Check each entry's ``type``; an empty string means no filament type is reported for
+        that holder. Identify the holder by ``id`` (254 or 255), not by ``slot_id``.
+        "spool" is the entry that holds a filament type, preferring 254 over 255, and falls
+        back to the first entry when none holds one. "spools" lists every external entry so a
+        dual-nozzle caller can see both holders. Error shape:
+        ``{"error": "Printer '<name>' not connected"}``.
+
+    Notes:
+        Telemetry names the holders 254 and 255. A single-nozzle printer has one physical
+        holder, 254, but ``spools`` can still list both whenever ``vir_slot`` is reported.
+        A dual-nozzle printer has a LEFT holder, 254, and a RIGHT holder, 255.
     """
     log.debug("get_external_spool: called for name=%s", name)
     state = session_manager.get_state(name)
     if state is None:
         log.warning("get_external_spool: printer %s not connected", name)
         return {"error": f"Printer '{name}' not connected"}
-    for spool in (state.spools or []):
-        if spool.id == 254 or spool.slot_id == 254:
-            log.debug("get_external_spool: returning result for %s", name)
-            return {"loaded": True, "spool": _serialize(spool)}
+    external = [
+        s for s in (state.spools or [])
+        if s.id in (254, 255) or s.slot_id in (254, 255)
+    ]
+    external.sort(key=lambda s: (0 if getattr(s, "type", "") else 1, 0 if 254 in (s.id, s.slot_id) else 1))
     log.debug("get_external_spool: returning result for %s", name)
-    return {"loaded": False, "spool": None}
+    if external:
+        return {"loaded": True, "spool": _serialize(external[0]), "spools": [_serialize(s) for s in external]}
+    return {"loaded": False, "spool": None, "spools": []}
 
 
 def calibrate_ams_remaining(
@@ -474,18 +749,50 @@ def calibrate_ams_remaining(
     user_permission: bool = False,
 ) -> str:
     """
-    Trigger an RFID re-scan on the specified AMS slot to update remaining filament data.
+    Ask the printer to re-scan the RFID tag on the specified AMS slot.
 
-    Bambu Lab filament spools include an RFID tag. The tag stores remaining filament weight.
-    This call triggers a re-read of the tag for the specified slot and updates the spool's
-    remaining percentage shown in get_ams_units() and get_spool_info().
-    The printer will push updated spool telemetry after scanning. Only RFID-equipped
-    Bambu Lab spools carry tag data. Requires user_permission=True.
+    WHEN to use: have the printer re-read one slot's RFID tag so that slot's spool data, such
+    as its remaining percentage, may be refreshed.
+
+    WRITE GUARD: sends an RFID re-read request for the slot to the printer, which is asked to
+    rescan the tag. With ``user_permission`` False the tool changes nothing and returns the
+    refusal string naming that consequence.
+
+    Sibling disambiguation: ``calibrate_ams_remaining`` triggers a one-time RFID re-scan of a
+    single slot. ``set_ams_user_setting`` changes the standing RFID-scan and remaining-
+    estimation settings, ``set_ams_filament_setting`` writes the slot's filament fields by
+    hand, and ``get_spool_info`` reads the updated spool data.
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        unit_id: AMS unit index (0-based position in the ``get_ams_units`` ``units`` list). A
+            value outside that range is matched against the raw hardware ams_id.
+        slot_id: Slot within the unit to scan (0-3).
+        user_permission: Must be True to execute. Default False.
+
+    Returns:
+        A ``str``. Success: ``"RFID re-scan triggered for AMS unit <unit_id> slot <slot_id>
+        on '<name>'."``. Errors are ``"Error: ..."`` strings, never a dict: the
+        ``_permission_denied`` refusal when ``user_permission`` is False,
+        ``"Error: Printer '<name>' not connected."``, ``"Error: AMS unit <unit_id> not found
+        on '<name>'."``, or ``"Error triggering RFID scan on '<name>': <exception>"`` when
+        the command fails.
+
+    Notes:
+        This asks the printer to re-read the RFID tag in the specified slot. Updated spool
+        telemetry, which may include remaining_percent (see get_spool_info()), arrives later
+        in a normal state push. The success string only means the request was published; it
+        does not show that any value changed. Only RFID-equipped Bambu Lab spools carry tag
+        data, and what the tag itself stores (remaining weight or otherwise) is not
+        established by this code.
     """
     log.debug("calibrate_ams_remaining: called for name=%s unit_id=%s slot_id=%s user_permission=%s", name, unit_id, slot_id, user_permission)
     if not user_permission:
         log.debug("calibrate_ams_remaining: permission denied for %s", name)
-        return _permission_denied()
+        return _permission_denied(
+            "This would make the printer re-read the RFID tag in the selected AMS slot and "
+            "update that spool's data from it."
+        )
     printer = session_manager.get_printer(name)
     if printer is None:
         log.warning("calibrate_ams_remaining: printer not connected: %s", name)
@@ -511,21 +818,46 @@ def send_ams_control_command(
     """
     Send an AMS control command to pause, resume, or reset the AMS.
 
-    cmd must be one of: 'PAUSE', 'RESUME', 'RESET' (case-insensitive).
+    WHEN to use: recover from an AMS-triggered pause (filament runout, AMS fault) with
+    'RESUME', or pause the AMS feed or reset the AMS with 'PAUSE' or 'RESET'.
 
-    - 'PAUSE'  — pause the AMS feed mid-print.
-    - 'RESUME' — unblocks the AMS feed AND resumes the halted print job in a
-      single operation. Use this for AMS-triggered pauses (filament runout,
-      AMS fault). Do not also call resume_print() after this — that would be
-      a duplicate command.
-    - 'RESET'  — reset the AMS to its idle/ready state.
+    WRITE GUARD: sends the chosen AMS control command to the printer, which pauses the AMS
+    feed, resets the AMS, or, for 'RESUME', unblocks the AMS feed and resumes the halted
+    print job. With ``user_permission`` False the tool changes nothing and returns the
+    refusal string naming that consequence.
 
-    Requires user_permission=True.
+    Sibling disambiguation: ``send_ams_control_command`` acts on the AMS and, for 'RESUME',
+    also resumes the print. ``pause_print`` and ``resume_print`` act on the print job itself;
+    do not call ``resume_print`` after 'RESUME', as that would be a duplicate command.
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        cmd: One of 'PAUSE', 'RESUME', 'RESET' (case-insensitive).
+        user_permission: Must be True to execute. Default False.
+
+    Returns:
+        A ``str``. Success: ``"AMS control command <CMD> sent to '<name>'."`` with CMD in
+        upper case. Errors are ``"Error: ..."`` strings, never a dict: the
+        ``_permission_denied`` refusal when ``user_permission`` is False,
+        ``"Error: Printer '<name>' not connected."``, ``"Error: Unknown AMS control command
+        '<cmd>'. Must be one of: PAUSE, RESUME, RESET."``, or ``"Error sending AMS control
+        command to '<name>': <exception>"`` when the command fails.
+
+    Notes:
+        - 'PAUSE'  — pause the AMS feed mid-print.
+        - 'RESUME' — unblocks the AMS feed AND resumes the halted print job in a
+          single operation. Use this for AMS-triggered pauses (filament runout,
+          AMS fault). Do not also call resume_print() after this — that would be
+          a duplicate command.
+        - 'RESET'  — reset the AMS to its idle/ready state.
     """
     log.debug("send_ams_control_command: called for name=%s cmd=%s user_permission=%s", name, cmd, user_permission)
     if not user_permission:
         log.debug("send_ams_control_command: permission denied for %s", name)
-        return _permission_denied()
+        return _permission_denied(
+            "This would send a PAUSE, RESUME or RESET command to the AMS; RESUME also resumes "
+            "the halted print job."
+        )
     printer = session_manager.get_printer(name)
     if printer is None:
         log.warning("send_ams_control_command: printer not connected: %s", name)

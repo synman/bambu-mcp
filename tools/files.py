@@ -15,8 +15,8 @@ def _no_printer(name: str) -> dict:
     return {"error": f"Printer '{name}' not connected"}
 
 
-def _permission_denied() -> str:
-    return "Error: user_permission must be True to perform this action."
+def _permission_denied(consequence: str) -> str:
+    return f"Error: user_permission must be True to perform this action. {consequence}"
 
 
 def _to_dict(o):
@@ -76,31 +76,57 @@ def _find_file_in_tree(tree: dict, target_path: str) -> dict | None:
 
 def list_sdcard_files(name: str, path: str = "/", cached: bool = False) -> dict:
     """
-    Return the SD card directory listing for the named printer.
+    Return the SD card directory listing for the named printer, whole or one subtree.
 
-    When path="/" (default), returns the full top-level tree — backward compatible.
-    When path is a subdirectory (e.g. "/cache", "/model"), returns only that
-    subtree, which is much smaller than the full listing.
+    WHEN to use: see what files and folders are on the printer's SD card, or narrow the
+    listing to one folder such as ``/cache/`` or ``/model/`` to keep the response small.
 
-    Use this in a hierarchy:
-      list_sdcard_files(name)           → full top-level tree
-      list_sdcard_files(name, "/cache") → only the /cache subtree
-      list_sdcard_files(name, "/model") → only the /model subtree
+    Sibling disambiguation: ``list_sdcard_files`` returns a directory tree, while
+    ``get_file_info`` returns the single entry for one known path. ``refresh_sdcard`` only
+    re-reads the card into the cache and returns no listing; it matters when you then call
+    this tool with ``cached=True``. ``get_3mf_entry_by_name`` and ``get_3mf_entry_by_id``
+    search the .3mf-only tree for one entry.
 
-    cached=False (default): performs a live FTPS fetch from the printer — guaranteed
-    up-to-date but requires an active connection and takes a moment. Use for
-    reliable, current listings.
-    cached=True: returns the in-memory cached copy immediately without contacting
-    the printer. The cache is populated by the most recent list_sdcard_files() or
-    refresh_sdcard() call. Returns None fields if the cache has never been populated.
-    Use when stale data is acceptable and low latency matters.
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        path: ``"/"`` (default) returns the full top-level tree. A subdirectory returns only
+            that subtree, which is much smaller. The subtree is the first depth-first node
+            whose ``id`` or ``name`` equals ``path`` exactly. Directory ids carry a TRAILING
+            SLASH, so use ``"/cache/"`` or the bare name ``"cache"``; ``"/cache"`` matches
+            nothing and returns ``Path not found``.
+        cached: False (default) performs a live FTPS fetch from the printer: guaranteed
+            current, but it needs an active connection and takes a moment. True returns the
+            in-memory cached copy immediately without contacting the printer, for when stale
+            data is acceptable and low latency matters. The cache is populated by the most
+            recent live listing (this tool with ``cached=False``, or ``refresh_sdcard``). If
+            the cache has never been populated the call returns the
+            ``Failed to retrieve SD card contents`` error; that error is reachable only this
+            way. On a live listing a failed FTPS directory listing comes back as an EMPTY
+            ``children`` list, indistinguishable from an empty card, so an empty result does
+            not prove the card is empty.
 
-    Response may be gzip+base64 compressed if the full tree is large. Decompress:
-      import gzip, json, base64
-      data = json.loads(gzip.decompress(base64.b64decode(r["data"])))
-    If the compressed envelope itself exceeds the MCP response limit, use the HTTP fallback:
-      GET /api/get_sdcard_contents?printer=<name>
-    Or reduce scope by listing a specific subdirectory (e.g. path="/cache").    """
+    Returns:
+        ``{"path": <path>, "contents": <node>}`` on success, where a node is
+        ``{"id": <full SD card path>, "name", "size" (bytes), "timestamp", "children"
+        (directories only)}``. A response whose JSON exceeds 300 characters (in practice
+        almost every real listing) comes back instead as the gzip envelope
+        ``{"compressed": True, "encoding": "gzip+base64", "original_size_bytes",
+        "compressed_size_bytes", "data"}``. Errors are ``{"error": str}``:
+        ``"Printer '<name>' not connected"``, ``"Failed to retrieve SD card contents"``,
+        ``{"error": "Path not found: <path>", "path": <path>}``, or
+        ``"Error listing SD card: <exception>"``.
+
+    Notes:
+        Use it as a hierarchy: ``list_sdcard_files(name)`` for the full top-level tree,
+        ``list_sdcard_files(name, "/cache/")`` for only the /cache subtree,
+        ``list_sdcard_files(name, "/model/")`` for only the /model subtree.
+        A live listing (``cached=False``) also repopulates the printer library's cached tree.
+        To decompress the gzip envelope:
+        ``import gzip, json, base64; data = json.loads(gzip.decompress(base64.b64decode(r["data"])))``.
+        If the compressed envelope itself exceeds the MCP response limit, use the HTTP
+        fallback ``GET /api/get_sdcard_contents?printer=<name>``, or reduce scope by listing a
+        specific subdirectory (for example ``path="/cache/"``).
+    """
     log.debug("list_sdcard_files: called for name=%s path=%s cached=%s", name, path, cached)
     from tools._response import compress_if_large
     printer = session_manager.get_printer(name)
@@ -134,8 +160,34 @@ def get_file_info(name: str, file_path: str) -> dict:
     """
     Return metadata for a specific file on the printer's SD card.
 
-    Retrieves the full SD card listing and searches for the given file_path.
-    Returns file attributes such as name, size, timestamp, and whether it is a directory.
+    WHEN to use: check whether one known file or folder exists on the SD card and read its
+    size and timestamp, without pulling the whole tree into your context.
+
+    Sibling disambiguation: ``get_file_info`` returns the one entry for a path you already
+    know; ``list_sdcard_files`` returns a directory tree. ``get_3mf_entry_by_id`` does the
+    same exact-path lookup but only over the .3mf-only tree.
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        file_path: Full SD card path of the file or folder (for example
+            ``"/cache/part.gcode.3mf"``). The first depth-first node whose ``id`` or ``name``
+            equals this value exactly is returned, so a bare filename also matches. A folder's
+            ``id`` ends with a trailing slash, so pass ``"/cache/"`` or the bare name
+            ``"cache"``; ``"/cache"`` matches nothing.
+
+    Returns:
+        ``{"file": <entry>}`` on success, where the entry carries the file attributes
+        ``id`` (full SD card path), ``name``, ``size`` and ``timestamp``; a directory entry
+        also carries ``children``. Errors are ``{"error": str}``:
+        ``"Printer '<name>' not connected"``, ``"Failed to retrieve SD card contents"``
+        (not seen on a live listing, see Notes), ``"File not found: <file_path>"``, or
+        ``"Error getting file info: <exception>"``.
+
+    Notes:
+        Every call retrieves the full SD card listing live over FTPS (which also repopulates
+        the printer library's cached tree) and then searches it. A failed FTPS directory
+        listing comes back as an empty ``children`` list, not as the ``Failed to retrieve``
+        error, so it surfaces as ``File not found``.
     """
     log.debug("get_file_info: called for name=%s file_path=%s", name, file_path)
     printer = session_manager.get_printer(name)
@@ -161,23 +213,33 @@ def get_file_info(name: str, file_path: str) -> dict:
 
 def get_3mf_entry_by_name(name: str, target_name: str) -> dict:
     """
-    Search the SD card file tree for an entry matching the given filename.
+    Search the SD card 3MF file tree for the entry with a given filename.
 
-    Performs a depth-first search of the cached SD card 3MF file tree
-    (from get_sdcard_3mf_files()) looking for a node whose 'name' field
-    matches target_name exactly. Useful when you know the filename but not
-    the full SD card path.
+    WHEN to use: you know a .3mf filename but not its full SD card path, and need the path
+    (the ``id`` field) or the file's size and timestamp.
 
-    target_name is the filename only (not a full path). Examples:
-      "my_project.gcode.3mf", "part.3mf"
-    Matching is case-sensitive and exact — no wildcards or partial matches.
+    Sibling disambiguation: ``get_3mf_entry_by_name`` matches on the filename;
+    ``get_3mf_entry_by_id`` matches on the full SD card path. ``list_sdcard_files`` returns
+    the whole tree of every file, not just .3mf files.
 
-    Returns the matching node dict with keys: id (full SD card path), name,
-    size (bytes), timestamp (epoch float), and children (if a directory).
-    Returns {"error": "not found"} when no match is found.
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        target_name: Filename only, not a full path, for example ``"my_project.gcode.3mf"``
+            or ``"part.3mf"``. Matching is case-sensitive and exact: no wildcards or partial
+            matches.
 
-    To search by full SD card path instead of filename, use get_3mf_entry_by_id().
-    To get the full directory tree, use list_sdcard_files().
+    Returns:
+        ``{"entry": <node>}`` on success, where the node has ``id`` (full SD card path),
+        ``name``, ``size`` (bytes), ``timestamp`` (epoch) and ``children`` (directories
+        only). Errors are ``{"error": str}``: ``"Printer '<name>' not connected"``,
+        ``"Failed to retrieve SD card contents"``, ``"Not found: <target_name>"`` when no
+        entry matches, or ``"Error searching SD card: <exception>"``.
+
+    Notes:
+        The search is a depth-first walk of the tree returned by ``get_sdcard_3mf_files()``,
+        which runs a live FTPS listing and refreshes the printer library's cache before
+        filtering. That tree holds only directories and files whose path ends in ``.3mf``.
+        The first match wins.
     """
     log.debug("get_3mf_entry_by_name: called for name=%s target_name=%s", name, target_name)
     printer = session_manager.get_printer(name)
@@ -203,23 +265,33 @@ def get_3mf_entry_by_name(name: str, target_name: str) -> dict:
 
 def get_3mf_entry_by_id(name: str, target_id: str) -> dict:
     """
-    Search the SD card file tree for an entry matching the given full path.
+    Search the SD card 3MF file tree for the entry with a given full path.
 
-    Performs a depth-first search of the cached SD card 3MF file tree
-    (from get_sdcard_3mf_files()) looking for a node whose 'id' field
-    matches target_id exactly. The 'id' field is the full SD card path.
+    WHEN to use: you already have a full SD card path (for example from
+    ``list_sdcard_files``) and need that entry's size and timestamp, or need to confirm it
+    is a .3mf on the card.
 
-    target_id is the full SD card path as returned by list_sdcard_files().
-    Examples: "/cache/my_project.gcode.3mf", "/model/part.3mf"
-    Directory entries have a trailing slash: "/cache/"
-    Matching is case-sensitive and exact.
+    Sibling disambiguation: ``get_3mf_entry_by_id`` matches on the full SD card path;
+    ``get_3mf_entry_by_name`` matches on the filename alone. ``get_file_info`` does an
+    exact-path lookup over the full tree rather than the .3mf-only tree.
 
-    Returns the matching node dict with keys: id (full SD card path), name,
-    size (bytes), timestamp (epoch float), and children (if a directory).
-    Returns {"error": "not found"} when no match is found.
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        target_id: Full SD card path as returned by ``list_sdcard_files``, for example
+            ``"/cache/my_project.gcode.3mf"`` or ``"/model/part.3mf"``. Directory entries
+            have a trailing slash: ``"/cache/"``. Matching is case-sensitive and exact.
 
-    To search by filename instead of full path, use get_3mf_entry_by_name().
-    To get the full directory tree, use list_sdcard_files().
+    Returns:
+        ``{"entry": <node>}`` on success, where the node has ``id`` (full SD card path),
+        ``name``, ``size`` (bytes), ``timestamp`` (epoch) and ``children`` (directories
+        only). Errors are ``{"error": str}``: ``"Printer '<name>' not connected"``,
+        ``"Failed to retrieve SD card contents"``, ``"Not found: <target_id>"`` when no entry
+        matches, or ``"Error searching SD card: <exception>"``.
+
+    Notes:
+        The search is a depth-first walk of the tree returned by ``get_sdcard_3mf_files()``,
+        which runs a live FTPS listing and refreshes the printer library's cache before
+        filtering. That tree holds only directories and files whose path ends in ``.3mf``.
     """
     log.debug("get_3mf_entry_by_id: called for name=%s target_id=%s", name, target_id)
     printer = session_manager.get_printer(name)
@@ -245,61 +317,106 @@ def get_3mf_entry_by_id(name: str, target_id: str) -> dict:
 
 def get_project_info(name: str, file_path: str, plate_num: int = 1, include_images: bool = False) -> dict:
     """
-    Return 3MF metadata and thumbnail info for a project file on the SD card.
+    Return 3MF metadata and thumbnail info for one plate of a project file on the SD card.
 
-    Parses the .3mf file for the requested plate and returns filament info,
-    AMS mapping, and bounding box objects. Uses a local cache to avoid repeated
-    FTPS downloads.
+    WHEN to use: read a .3mf plate's filaments, AMS mapping placeholder and object bounding
+    boxes before choosing a plate, building a print summary, or calling ``print_file``.
 
-    By default (include_images=False), the metadata.topimg and metadata.thumbnail
-    image fields are omitted to keep the response small. Use get_plate_thumbnail()
-    or get_plate_topview() to fetch images for a specific plate on demand.
+    Sibling disambiguation: ``get_project_info`` returns one plate per call;
+    ``get_all_project_info`` returns every plate in the file in one call. The image tools
+    ``get_plate_thumbnail`` and ``get_plate_topview`` fetch a single plate's picture, and
+    ``get_current_job_project_info`` resolves the file and plate of the active job for you.
 
-    When include_images=True, both data URIs are included in the response (large).
-    Note: these are raw base64 data URIs — not directly visible to a human user in
-    a chat or terminal context. If the human wants to *view* all plates visually,
-    call open_plate_viewer() instead. Use include_images=True only when the AI
-    agent needs to process the raw image bytes directly (vision analysis, comparison,
-    etc.) or is describing the image content on the human's behalf.
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        file_path: Full SD card path of the .3mf file.
+        plate_num: Plate to parse (default 1). If the requested plate does not exist in the
+            .3mf, the library SILENTLY falls back to the file's first available plate: compare
+            the returned ``plate_num`` with the one you asked for, and read ``plates`` to see
+            which plates exist.
+        include_images: False (default) omits the ``metadata.topimg`` and
+            ``metadata.thumbnail`` image fields to keep the response small. True includes
+            both as raw base64 data URIs (large). Use True only when the AI agent needs to
+            process the image bytes directly (vision analysis, comparison) or is describing
+            the image on the human's behalf; a human cannot see raw base64 in a chat or
+            terminal, so to let the human *view* the plates call ``open_plate_viewer``.
 
-    Multi-level call hierarchy:
-      Level 1 — get_project_info(name, file, 1)  → {plates:[1..N], ...}  (index)
-      Level 2 — get_project_info(name, file, N)  → per-plate metadata, bbox_objects
-      Level 3 — get_plate_thumbnail(name, file, N) → just the isometric image
-               get_plate_topview(name, file, N)   → just the top-down image
+    Returns:
+        The serialized project info for the plate: ``id``, ``name``, ``size``, ``timestamp``,
+        ``md5``, ``plate_num``, ``plates`` and ``metadata`` (see Notes for the key fields).
+        Errors are ``{"error": str}``: ``"Printer '<name>' not connected"``,
+        ``"Could not retrieve project info for '<file_path>'"``, or
+        ``"Error getting project info: <exception>"``.
 
-    The .3mf file is created by BambuStudio or OrcaSlicer — the slicing applications
-    used to prepare 3D model files for Bambu Lab printers. They convert .STL/.3MF model
-    files into printable G-code and package everything into a .3mf project file.
+    Notes:
+        The .3mf file is created by BambuStudio or OrcaSlicer, the slicing applications that
+        turn .STL/.3MF model files into printable G-code and package everything into a .3mf
+        project file. The tool parses the requested plate using a local metadata cache. A
+        cache HIT still performs a live FTPS listing of the whole SD card to validate the cache
+        (the printer must be reachable) and repopulates the printer library's cached trees;
+        only the .3mf download is skipped. On a miss the .3mf is downloaded over FTPS and the
+        cache is written. The same applies to every tool that reads project info, so
+        ``open_plate_viewer`` performs one such call per plate plus one.
 
-    Key fields in the returned dict:
-    - plates:           List of all plate numbers in the file (e.g. [1,2,...,14]).
-                        Iterate over this list and call get_project_info once per
-                        plate to retrieve all plates.
-    - metadata.map.bbox_objects: List of {name, ...} dicts for objects on this plate.
-                        Filter out entries whose name contains 'wipe_tower' to get
-                        the human-readable part list.
-    - metadata.topimg:  Present only when include_images=True. Complete base64 data
-                        URI (data:image/png;base64,...). Use DIRECTLY as img src.
-    - metadata.thumbnail: Present only when include_images=True. Isometric thumbnail
-                        data URI. Use DIRECTLY as img src.
+        Three ``metadata`` keys say which external spool holder each filament prints from
+        (bpm 1.0.4 and later; a daemon running an older bpm omits them). All are lists indexed
+        by ``filament id - 1``. ``filament_extruders`` is the slicer's 1-based logical extruder
+        per filament, from ``slice_info.config``; it is empty when the slicer wrote none.
+        ``physical_extruder_map`` is the physical extruder (0 main, 1 deputy) per logical
+        extruder, from the plate gcode config block; it is empty when absent, and is ``[1, 0]``
+        on an H2D, so logical extruder 1 is the LEFT one. ``external_spool_trays`` is the wire
+        id of the external holder feeding each filament: 255 main (right), 254 deputy (left),
+        -1 unused; a single-nozzle printer reports 255 for every used filament although its
+        telemetry calls its one holder tray 254, so do not match this list to a spool's
+        ``slot_id``. It is empty when a dual-nozzle plate has no extruder map, and it is
+        derived on every read, never cached. ``print_file`` with ``use_ams=False`` uses the
+        same derivation, so a caller passes no holder.
 
-    Coordinate system for bbox fields:
-    - bbox values are [x_min, y_min, x_max, y_max] in millimetres, absolute bed position.
-    - Origin (0,0) is BOTTOM-LEFT of the build plate (slicer convention).
-    - To map to image pixel coords (origin top-left): flip Y → pixel_y = img_height - (y_mm / bed_h * img_height)
-    - Apply uniform scale: scale = min(img_w / bed_w, img_h / bed_h); add centring offsets.
-    - Bed dimensions by model (mm, W×H): H2D/H2S=350×320, X1C/X1/X1E/P1S/P1P/P2S/A1=256×256, A1_MINI=180×180
-    - Use printer.config.printer_model.value to get the model string for dimension lookup.
+        Multi-level call hierarchy:
+          Level 1: ``get_project_info(name, file, 1)`` returns ``{plates: [1..N], ...}`` (index).
+          Level 2: ``get_project_info(name, file, N)`` returns per-plate metadata and
+          bbox_objects.
+          Level 3: ``get_plate_thumbnail(name, file, N)`` returns just the isometric image;
+          ``get_plate_topview(name, file, N)`` returns just the top-down image.
 
-    Cross-tool link: bbox_objects[].id values are the identify_id integers required by skip_objects().
-    Filter bbox_objects to exclude entries whose name contains 'wipe_tower' to get human-readable part names.
+        Key fields in the returned dict:
+        - ``plates``: list of all plate numbers in the file (e.g. [1,2,...,14]). Iterate over
+          it and call ``get_project_info`` once per plate to retrieve all plates (or use
+          ``get_all_project_info``).
+        - ``metadata.filament``: list of ``{"id": int (1-based), "type": str, "color": str}``
+          for the plate's filaments, the colour being a hex string such as "#RRGGBB". These ids index the ``ams_mapping`` array
+          that ``print_file`` and ``preview_ams_mapping`` use.
+        - ``metadata.ams_mapping``: a filament-id PLACEHOLDER only, never a real slot
+          assignment; do not pass it to ``print_file``.
+        - ``metadata.map.bbox_objects``: list of ``{name, ...}`` dicts for objects on this
+          plate. Filter out entries whose name contains ``wipe_tower`` to get the
+          human-readable part list.
+        - ``metadata.topimg``: present only when ``include_images=True``. Complete base64
+          data URI (``data:image/png;base64,...``). Use DIRECTLY as an img src.
+        - ``metadata.thumbnail``: present only when ``include_images=True``. Isometric
+          thumbnail data URI. Use DIRECTLY as an img src.
+        - With ``include_images=False`` those two fields are replaced by an omission marker
+          string naming the tool to fetch them.
 
-    Note: when include_images=True this tool returns raw base64 data URIs which may exceed
-    the CLI inline display limit. If output is truncated, use the HTTP fallback:
-    GET http://localhost:{api_port}/api/get_3mf_props_for_file?printer={name}&file={file_path}&plate={plate_num}
-    Call kb_get('bambu-http-files') for full route docs. Pre-authorized, no human
-    permission needed.
+        Coordinate system for bbox fields:
+        - bbox values are [x_min, y_min, x_max, y_max] in millimetres, absolute bed position.
+        - Origin (0,0) is the BOTTOM-LEFT of the build plate (slicer convention).
+        - To map to image pixel coords (origin top-left): flip Y, pixel_y = img_height -
+          (y_mm / bed_h * img_height).
+        - Apply uniform scale: scale = min(img_w / bed_w, img_h / bed_h); add centring offsets.
+        - Bed dimensions by model (mm, W x H): H2D/H2S=350x320,
+          X1C/X1/X1E/P1S/P1P/P2S/A1=256x256, A1_MINI=180x180.
+        - Use ``printer.config.printer_model.value`` to get the model string for dimension lookup.
+
+        Cross-tool link: ``bbox_objects[].id`` values are the identify_id integers required by
+        ``skip_objects``. Filter bbox_objects to exclude entries whose name contains
+        ``wipe_tower`` to get human-readable part names.
+
+        When ``include_images=True`` the response carries raw base64 data URIs which may
+        exceed the CLI inline display limit. If output is truncated, use the HTTP fallback:
+        ``GET http://localhost:{api_port}/api/get_3mf_props_for_file?printer={name}&file={file_path}&plate={plate_num}``.
+        Call ``kb_get('bambu-http-files')`` for full route docs. Pre-authorized, no human
+        permission needed.
     """
     log.debug("get_project_info: called for name=%s file_path=%s plate_num=%s include_images=%s", name, file_path, plate_num, include_images)
     printer = session_manager.get_printer(name)
@@ -327,24 +444,36 @@ def get_all_project_info(name: str, file_path: str, include_images: bool = False
     """
     Return 3MF metadata for every plate in a project file, in a single call.
 
-    Batch counterpart to get_project_info() — instead of iterating plate
-    numbers one round-trip at a time, this fetches the .3mf's actual plate
-    set and returns every plate's metadata in one response. Use this when
-    you need all plates (e.g. surveying a multi-plate project, or building a
-    plate picker) instead of calling get_project_info() once per plate.
+    WHEN to use: you need all plates of a multi-plate project at once, for example to survey
+    the file or build a plate picker, instead of one round trip per plate.
 
-    Plate numbers are not assumed to be contiguous — a .3mf may contain a
-    sparse set of plates (e.g. [1,5,6,7,8,12,15]) if plates were deleted in
-    the slicer; only plates that genuinely exist are returned.
+    Sibling disambiguation: ``get_all_project_info`` is the batch counterpart of
+    ``get_project_info``, which returns one plate per call. Use ``get_plate_thumbnail`` or
+    ``get_plate_topview`` to fetch a single plate's image on demand.
 
-    include_images behaves exactly as in get_project_info(): when False
-    (default) the metadata.topimg/thumbnail fields are omitted per plate to
-    keep the response small; when True both data URIs are included for
-    every plate (large). Use get_plate_thumbnail()/get_plate_topview() to
-    fetch a single plate's image on demand instead.
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        file_path: Full SD card path of the .3mf file.
+        include_images: Behaves exactly as in ``get_project_info``. False (default) omits the
+            ``metadata.topimg`` and ``metadata.thumbnail`` fields per plate to keep the
+            response small; True includes both data URIs for every plate (large).
 
-    Returns a list of per-plate dicts, each shaped exactly like a single
-    get_project_info() response, ordered by plate number.
+    Returns:
+        A list of per-plate dicts on success, each shaped exactly like a single
+        ``get_project_info`` response, ordered by plate number. Errors are a dict, not a
+        list: ``{"error": "Printer '<name>' not connected"}``,
+        ``{"error": "Could not retrieve project info for '<file_path>'"}``, or
+        ``{"error": "Error getting all project info: <exception>"}``.
+
+    Notes:
+        The tool fetches the .3mf's actual plate set. Plate numbers are not assumed to be
+        contiguous: a .3mf may contain a sparse set of plates (e.g. [1,5,6,7,8,12,15]) if
+        plates were deleted in the slicer, and only plates that genuinely exist are returned.
+        The plate set is bounded by the library's ``max_plates`` safety ceiling of 30: a plate
+        numbered above 30 is ignored and does not appear in the result. The .3mf may be
+        downloaded over FTPS once and its metadata cache written. Each plate's ``metadata``
+        carries ``filament_extruders``, ``physical_extruder_map`` and ``external_spool_trays``
+        exactly as ``get_project_info`` describes them.
     """
     log.debug("get_all_project_info: called for name=%s file_path=%s include_images=%s", name, file_path, include_images)
     printer = session_manager.get_printer(name)
@@ -375,38 +504,47 @@ def get_plate_thumbnail(
     """
     Return the isometric thumbnail image for a single plate in a 3MF project file.
 
-    This is the separated visual sub-call for get_project_info — it returns only
-    the thumbnail data URI, without any metadata or bbox objects.
+    WHEN to use: the AI agent itself is the consumer of the image, either to describe or
+    analyze the plate on the human's behalf ("what does it look like?", "describe the plate",
+    "is there anything on it?") or to process the raw bytes directly (vision model input,
+    pixel comparison, local image library). It is the separated visual sub-call of
+    ``get_project_info`` and returns only the thumbnail, without metadata or bbox objects.
 
-    quality controls image size and JPEG compression:
-      "preview"  — ~5 KB  (320×180, JPEG q=65)  — quick overview
-      "standard" — ~16 KB (640×360, JPEG q=75)  — default, renders cleanly inline
-      "full"     — ~71 KB (original resolution)  — maximum detail
+    Sibling disambiguation: ``get_plate_thumbnail`` returns the isometric view and
+    ``get_plate_topview`` returns the top-down view of the same plate. When the human is the
+    intended viewer ("show me", "open it", "let me see it") call ``open_plate_viewer`` for all
+    plates or ``open_plate_layout`` for an annotated single-plate view; returning a raw
+    ``data_uri`` to a human in a chat or terminal is never the right choice. For
+    ``print_file`` pre-flight and print job prep, always use ``open_plate_viewer``, never
+    this tool (see the confirmation gate in ``print_file``).
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        file_path: Full SD card path of the .3mf file.
+        plate_num: Plate number (default 1). An absent plate silently yields the file's first
+            available plate; check ``plates`` from ``get_project_info`` first.
+        quality: Image size and JPEG compression tier, default ``"standard"``. The dimensions
+            are a MAXIMUM bounding box with aspect ratio preserved and no upscaling, so the
+            returned ``width``/``height`` are usually smaller: ``"preview"`` = max 320x180 at
+            JPEG q=65, ``"standard"`` = max 640x360 at q=75, ``"full"`` = original dimensions
+            at q=85. An unknown tier falls back to ``"standard"``. Read ``width`` and
+            ``height`` from the result.
 
     Returns:
-      data_uri  — complete data:image/jpeg;base64,... (embed directly as img src)
-      plate_num — the plate number
-      quality   — the quality tier used
+        ``{"data_uri": <complete data:image/jpeg;base64,... string, embed directly as an img
+        src>, "plate_num": <the plate_num you PASSED, not necessarily the plate rendered>,
+        "quality": <tier as passed>, "width": <int>, "height": <int>}`` on success. Errors
+        are ``{"error": str}``: ``"Printer '<name>' not connected"``,
+        ``"Could not retrieve project info for '<file_path>'"``,
+        ``"No thumbnail image available for plate <plate_num>"``, or
+        ``"Error retrieving plate image: <exception>"``.
 
-    Human viewability note: This tool returns a raw base64 data URI.
-
-    Use this tool when the AI agent is the consumer of the image — either to
-    describe or analyze the asset on the human's behalf ("what does it look like?",
-    "describe the plate", "is there anything on it?") or to process the raw bytes
-    directly (vision model input, pixel comparison, local image library).
-
-    When the human user is the intended viewer — "show me", "open it", "display
-    the thumbnail", "let me see it" — call open_plate_viewer() to show all plates
-    or open_plate_layout() for an annotated single-plate view. Returning a raw
-    data_uri to a human in a chat or terminal context is never the right choice.
-
-    For print_file pre-flight / print job prep, always use open_plate_viewer() —
-    never this tool. See print_file STEP 1 for the correct sequence.
-
-    Note: this tool returns a raw base64 data URI which may exceed the CLI inline
-    display limit. If output is truncated, call kb_get('bambu-http-files')
-    for the equivalent HTTP endpoints, then use bash/curl to retrieve the data
-    directly — this is pre-authorized and requires no human permission.
+    Notes:
+        The result is a raw base64 data URI, which may exceed the CLI inline display limit.
+        If output is truncated, call ``kb_get('bambu-http-files')`` for the equivalent HTTP
+        endpoints, then use bash/curl to retrieve the data directly; this is pre-authorized
+        and requires no human permission. The .3mf may be downloaded over FTPS and its
+        metadata cache written as a side effect.
     """
     log.debug("get_plate_thumbnail: called for name=%s file_path=%s plate_num=%s quality=%s", name, file_path, plate_num, quality)
     return _get_plate_image(name, file_path, plate_num, quality, image_key="thumbnail")
@@ -421,38 +559,48 @@ def get_plate_topview(
     """
     Return the top-down view image for a single plate in a 3MF project file.
 
-    This is the separated visual sub-call for get_project_info — it returns only
-    the top-down view data URI, without any metadata or bbox objects.
+    WHEN to use: the AI agent itself is the consumer of the image, either to describe or
+    analyze the plate on the human's behalf ("what does it look like?", "describe the
+    plate", "is there anything on it?") or to process the raw bytes directly (vision model
+    input, pixel comparison, local image library). It is the separated visual sub-call of
+    ``get_project_info`` and returns only the top-down view, without metadata or bbox
+    objects.
 
-    quality controls image size and JPEG compression:
-      "preview"  — ~5 KB  (320×180, JPEG q=65)  — quick overview
-      "standard" — ~16 KB (640×360, JPEG q=75)  — default, renders cleanly inline
-      "full"     — ~71 KB (original resolution)  — maximum detail
+    Sibling disambiguation: ``get_plate_topview`` returns the top-down view and
+    ``get_plate_thumbnail`` returns the isometric view of the same plate. When the human is
+    the intended viewer ("show me", "open it", "let me see it") call ``open_plate_viewer``
+    for all plates or ``open_plate_layout`` for an annotated single-plate view; returning a
+    raw ``data_uri`` to a human in a chat or terminal is never the right choice. For
+    ``print_file`` pre-flight and print job prep, always use ``open_plate_viewer``, never
+    this tool (see the confirmation gate in ``print_file``).
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        file_path: Full SD card path of the .3mf file.
+        plate_num: Plate number (default 1). An absent plate silently yields the file's first
+            available plate; check ``plates`` from ``get_project_info`` first.
+        quality: Image size and JPEG compression tier, default ``"standard"``. The dimensions
+            are a MAXIMUM bounding box with aspect ratio preserved and no upscaling, so the
+            returned ``width``/``height`` are usually smaller: ``"preview"`` = max 320x180 at
+            JPEG q=65, ``"standard"`` = max 640x360 at q=75, ``"full"`` = original dimensions
+            at q=85. An unknown tier falls back to ``"standard"``. Read ``width`` and
+            ``height`` from the result.
 
     Returns:
-      data_uri  — complete data:image/jpeg;base64,... (embed directly as img src)
-      plate_num — the plate number
-      quality   — the quality tier used
+        ``{"data_uri": <complete data:image/jpeg;base64,... string, embed directly as an img
+        src>, "plate_num": <the plate_num you PASSED, not necessarily the plate rendered>,
+        "quality": <tier as passed>, "width": <int>, "height": <int>}`` on success. Errors
+        are ``{"error": str}``: ``"Printer '<name>' not connected"``,
+        ``"Could not retrieve project info for '<file_path>'"``,
+        ``"No topimg image available for plate <plate_num>"``, or
+        ``"Error retrieving plate image: <exception>"``.
 
-    Human viewability note: This tool returns a raw base64 data URI.
-
-    Use this tool when the AI agent is the consumer of the image — either to
-    describe or analyze the asset on the human's behalf ("what does it look like?",
-    "describe the plate", "is there anything on it?") or to process the raw bytes
-    directly (vision model input, pixel comparison, local image library).
-
-    When the human user is the intended viewer — "show me", "open it", "display
-    the top view", "let me see it" — call open_plate_viewer() to show all plates
-    or open_plate_layout() for an annotated single-plate view. Returning a raw
-    data_uri to a human in a chat or terminal context is never the right choice.
-
-    For print_file pre-flight / print job prep, always use open_plate_viewer() —
-    never this tool. See print_file STEP 1 for the correct sequence.
-
-    Note: this tool returns a raw base64 data URI which may exceed the CLI inline
-    display limit. If output is truncated, call kb_get('bambu-http-files')
-    for the equivalent HTTP endpoints, then use bash/curl to retrieve the data
-    directly — this is pre-authorized and requires no human permission.
+    Notes:
+        The result is a raw base64 data URI, which may exceed the CLI inline display limit.
+        If output is truncated, call ``kb_get('bambu-http-files')`` for the equivalent HTTP
+        endpoints, then use bash/curl to retrieve the data directly; this is pre-authorized
+        and requires no human permission. The .3mf may be downloaded over FTPS and its
+        metadata cache written as a side effect.
     """
     log.debug("get_plate_topview: called for name=%s file_path=%s plate_num=%s quality=%s", name, file_path, plate_num, quality)
     return _get_plate_image(name, file_path, plate_num, quality, image_key="topimg")
@@ -524,13 +672,45 @@ def upload_file(
     """
     Upload a local file to the printer's SD card.
 
-    Requires user_permission=True. Returns the updated SD card listing after upload.
-    If the file is a .3mf, project metadata is also cached automatically.
+    WHEN to use: put a file from this host onto the printer's SD card, for example a sliced
+    .3mf you want to print, or to replace a file already on the card.
+
+    WRITE GUARD: writes the file to the printer's SD card over FTPS, replacing any existing
+    file at that remote path. With ``user_permission`` False the tool changes nothing and
+    returns the ``{"error": ...}`` refusal naming that consequence.
+
+    Sibling disambiguation: ``upload_file`` copies a file from this host to the printer;
+    ``download_file`` copies the other way, from the printer to this host.
+    ``rename_sdcard_file`` moves a file that is already on the card without re-uploading it.
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        local_path: Full path of the file on this host to upload. It is not constrained to any
+            directory: any file readable by this host can be copied to the printer's SD card.
+        remote_path: Full destination path on the printer's SD card.
+        user_permission: Must be True to execute. Default False.
+
+    Returns:
+        ``{"success": True, "remote_path": <remote_path>, "contents": <refreshed SD card
+        tree>}`` on success; ``contents`` is the printer library's SD card listing taken after
+        the upload, and shows an empty ``children`` list rather than null if that listing
+        silently failed. Errors are ``{"error": str}``: the ``_permission_denied`` refusal when
+        ``user_permission`` is False, ``"Printer '<name>' not connected"``, or
+        ``"Error uploading file: <exception>"``.
+
+    Notes:
+        If ``local_path`` ends in ``.3mf``, the project metadata is parsed and cached after the
+        transfer, and the SD card is then re-listed. A failure in either step (for example an
+        unsliced .3mf lacking ``Metadata/slice_info.config``) surfaces as ``"Error uploading
+        file: ..."`` even though the file is ALREADY on the card; check with ``get_file_info``
+        before retrying.
     """
     log.debug("upload_file: called for name=%s local_path=%s remote_path=%s user_permission=%s", name, local_path, remote_path, user_permission)
     if not user_permission:
         log.debug("upload_file: permission denied for %s", name)
-        return {"error": _permission_denied()}
+        return {"error": _permission_denied(
+            "This would upload the local file to the printer's SD card, replacing any file already at that remote path."
+        )}
     printer = session_manager.get_printer(name)
     if printer is None:
         log.warning("upload_file: printer not connected: %s", name)
@@ -555,13 +735,40 @@ def download_file(
     """
     Download a file from the printer's SD card to the local filesystem.
 
-    Requires user_permission=True. remote_path is the full path on the printer;
-    local_path is the destination path on the host.
+    WHEN to use: copy a file off the printer's SD card onto this host, for example to inspect
+    or back up a .3mf.
+
+    WRITE GUARD: writes the downloaded file to ``local_path`` on this host, creating it or
+    truncating and overwriting whatever file is already there. The file is created or
+    truncated BEFORE the transfer begins, so a failed download (missing remote file, dropped
+    connection) leaves ``local_path`` emptied or partly written even though the tool returns
+    an error. ``local_path`` is not constrained to any directory on this tool. With
+    ``user_permission`` False the tool changes nothing and returns the ``{"error": ...}``
+    refusal naming that consequence.
+
+    Sibling disambiguation: ``download_file`` copies from the printer to this host;
+    ``upload_file`` copies the other way, from this host to the printer's SD card.
+    ``list_sdcard_files`` and ``get_file_info`` only read the card's listing and do not
+    transfer any file.
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        remote_path: Full path of the file on the printer's SD card.
+        local_path: Destination path on this host.
+        user_permission: Must be True to execute. Default False.
+
+    Returns:
+        ``{"success": True, "remote_path": <remote_path>, "local_path": <local_path>}`` on
+        success. Errors are ``{"error": str}``: the ``_permission_denied`` refusal when
+        ``user_permission`` is False, ``"Printer '<name>' not connected"``, or
+        ``"Error downloading file: <exception>"``.
     """
     log.debug("download_file: called for name=%s remote_path=%s local_path=%s user_permission=%s", name, remote_path, local_path, user_permission)
     if not user_permission:
         log.debug("download_file: permission denied for %s", name)
-        return {"error": _permission_denied()}
+        return {"error": _permission_denied(
+            "This would write the SD card file to the local path on this host, overwriting any file already there."
+        )}
     printer = session_manager.get_printer(name)
     if printer is None:
         log.warning("download_file: printer not connected: %s", name)
@@ -583,16 +790,40 @@ def delete_file(
     user_permission: bool = False,
 ) -> dict:
     """
-    Delete a file from the printer's SD card.
+    Delete a file or folder from the printer's SD card.
 
-    Requires user_permission=True. Returns the updated SD card listing after deletion.
-    Paths ending with '/' delete folders (calls delete_sdcard_folder); all other paths
-    delete files (calls delete_sdcard_file).
+    WHEN to use: remove a file, or a whole folder, from the printer's SD card, for example to
+    free space or clear out old jobs.
+
+    WRITE GUARD: permanently deletes the file from the printer's SD card; a path ending in
+    ``/`` deletes the folder and everything inside it, recursively. With ``user_permission``
+    False the tool changes nothing and returns the ``{"error": ...}`` refusal naming that
+    consequence.
+
+    Sibling disambiguation: ``delete_file`` removes the data from the card;
+    ``rename_sdcard_file`` only moves or renames a file, keeping its contents. ``create_folder``
+    is the opposite operation for directories.
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        remote_path: Full path on the SD card. A path ending in ``/`` is treated as a folder
+            (``delete_sdcard_folder``, recursive); any other path is treated as a file
+            (``delete_sdcard_file``).
+        user_permission: Must be True to execute. Default False.
+
+    Returns:
+        ``{"success": True, "remote_path": <remote_path>, "contents": <SD card tree>}`` on
+        success; ``contents`` is the printer library's cached SD card tree with the deleted
+        entry removed (null if the cache was never populated). Errors are ``{"error": str}``:
+        the ``_permission_denied`` refusal when ``user_permission`` is False,
+        ``"Printer '<name>' not connected"``, or ``"Error deleting file: <exception>"``.
     """
     log.debug("delete_file: called for name=%s remote_path=%s user_permission=%s", name, remote_path, user_permission)
     if not user_permission:
         log.debug("delete_file: permission denied for %s", name)
-        return {"error": _permission_denied()}
+        return {"error": _permission_denied(
+            "This would permanently delete the file from the printer's SD card (a path ending in '/' deletes the folder and everything in it)."
+        )}
     printer = session_manager.get_printer(name)
     if printer is None:
         log.warning("delete_file: printer not connected: %s", name)
@@ -620,13 +851,34 @@ def create_folder(
     """
     Create a directory on the printer's SD card.
 
-    Requires user_permission=True. Returns the updated SD card listing after creation.
-    Calls printer.make_sdcard_directory(path) via FTPS mkdir.
+    WHEN to use: make a new folder on the printer's SD card, for example to organise uploads.
+
+    WRITE GUARD: creates a new directory on the printer's SD card over FTPS (an FTPS mkdir).
+    With ``user_permission`` False the tool changes nothing and returns the ``{"error": ...}``
+    refusal naming that consequence.
+
+    Sibling disambiguation: ``create_folder`` makes an empty directory; ``upload_file`` puts a
+    file on the card, and ``delete_file`` (with a trailing ``/``) removes a directory.
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        path: Full path of the directory to create on the SD card.
+        user_permission: Must be True to execute. Default False.
+
+    Returns:
+        ``{"success": True, "path": <path>, "contents": <refreshed SD card tree>}`` on
+        success; ``contents`` is the printer library's SD card listing taken after the
+        creation, and shows an empty ``children`` list rather than null if that listing
+        silently failed. Errors are ``{"error": str}``: the ``_permission_denied`` refusal
+        when ``user_permission`` is False, ``"Printer '<name>' not connected"``, or
+        ``"Error creating folder: <exception>"``.
     """
     log.debug("create_folder: called for name=%s path=%s user_permission=%s", name, path, user_permission)
     if not user_permission:
         log.debug("create_folder: permission denied for %s", name)
-        return {"error": _permission_denied()}
+        return {"error": _permission_denied(
+            "This would create a new directory on the printer's SD card."
+        )}
     printer = session_manager.get_printer(name)
     if printer is None:
         log.warning("create_folder: printer not connected: %s", name)
@@ -903,24 +1155,47 @@ def _resolve_print_mapping(name: str, printer, file_path: str, plate_num: int) -
 
 def preview_ams_mapping(name: str, file_path: str, plate_num: int = 1) -> dict:
     """
-    Resolve — WITHOUT printing — the ams_mapping that print_file would send for a
-    .3mf plate, from the spools the printer last reported loaded.
+    Resolve, WITHOUT printing, the ams_mapping that print_file would send for a .3mf plate,
+    from the spools the printer last reported loaded.
 
-    Read-only. Call it in STEP 1 of the print_file confirmation gate and show the
-    result in the summary: each filament → tray_id with the spool it matched, its
-    colour distance, and a BPA match label (Excellent Match / Good Match / Type Match /
-    Color Match Only / Poor Match). "Type Match" means the material matches but the
-    colour is off — print_file WILL print on it, so surface it to the user.
-    "Color Match Only" means the MATERIAL DOES NOT MATCH (e.g. project wants PLA,
-    only PETG is loaded) and the spool was accepted purely because its colour is
-    close — print_file WILL print on it too. Call this out explicitly for any
-    "quality": "poor" match; it is a stronger warning than a colour mismatch.
+    WHEN to use: STEP 1 of the ``print_file`` confirmation gate. Call it, then show the
+    result in the summary: each filament to its tray_id with the spool it matched, its colour
+    distance, and a BPA match label (Excellent Match / Good Match / Type Match / Color Match
+    Only / Poor Match).
 
-    Returns resolved_ams_mapping (list, indexed by 1-based filament id, -1 for an
-    unused id), ams_mapping_json (the exact string print_file sends), matches,
-    unmatched, loaded_spools (the AMS spools that could be printed from), and
-    external_spools. When "error" is present print_file would refuse with the same
-    message; pass ams_mapping explicitly or use use_ams=False.
+    Sibling disambiguation: ``preview_ams_mapping`` is read-only and never prints;
+    ``print_file`` runs the same resolution and then starts the physical print.
+    ``get_project_info`` reports the plate's filaments but its ``ams_mapping`` is only a
+    filament-id placeholder, and ``get_spool_info`` reports the loaded spools.
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        file_path: Full SD card path of the .3mf file.
+        plate_num: Plate to resolve the mapping for (default 1). An absent plate silently
+            resolves against the file's first available plate; check ``plates`` from
+            ``get_project_info`` first.
+
+    Returns:
+        A resolution payload dict: ``file_path``, ``plate_num`` (the value you PASSED, not
+        necessarily the plate resolved), ``filaments``,
+        ``resolved_ams_mapping`` (list indexed by 1-based filament id, -1 for an unused id),
+        ``ams_mapping_json`` (the exact string ``print_file`` sends), ``matches``,
+        ``unmatched``, ``loaded_spools`` (the AMS spools that could be printed from) and
+        ``external_spools``. When ``"error"`` is present in the payload ``print_file`` would
+        refuse with the same message; pass ``ams_mapping`` explicitly or use ``use_ams=False``.
+        The payload may then hold only ``{"error": str}``, for a metadata read failure or a plate
+        with no filament metadata. If the printer is not connected the result is
+        ``{"error": "Printer '<name>' not connected"}``.
+
+    Notes:
+        Read-only in purpose: it changes nothing on the printer, though reading the project
+        metadata may download the .3mf over FTPS and write the local metadata cache.
+        "Type Match" means the material matches but the colour is off: ``print_file`` WILL
+        print on it, so surface it to the user. "Color Match Only" means the MATERIAL DOES NOT
+        MATCH (for example the project wants PLA and only PETG is loaded) and the spool was
+        accepted purely because its colour is close: ``print_file`` WILL print on it too. Call
+        this out explicitly for any ``"quality": "poor"`` match; it is a stronger warning than
+        a colour mismatch.
     """
     log.debug("preview_ams_mapping: called for name=%s file_path=%s plate_num=%s", name, file_path, plate_num)
     printer = session_manager.get_printer(name)
@@ -942,105 +1217,160 @@ def print_file(
     user_permission: bool = False,
 ) -> dict:
     """
-    Start printing a .3mf file already stored on the printer's SD card.
+    Send the command to start printing a .3mf file already stored on the printer's SD card.
 
-    Requires user_permission=True. bed_type must be one of: auto, cool_plate,
-    eng_plate, hot_plate, textured_plate (case-insensitive). When use_ams=True
-    and no ams_mapping is given, the mapping is resolved from the spools the
-    printer last reported loaded: each project filament is matched to an AMS
-    spool by exact type then closest colour (bambu-printer-app's print-dialog
-    scoring; exact pairs are assigned first, then best unused, then reuse).
-    A same-material spool of the WRONG colour is accepted ("Type Match"). A
-    WRONG-MATERIAL spool is ALSO accepted if its colour is close enough
-    ("Color Match Only" — no material check at all) — call preview_ams_mapping()
-    first and show the user every match label, "Color Match Only" especially.
-    The 3mf carries no usable tray ids — get_project_info()'s ams_mapping is a
-    filament-id placeholder, never a slot assignment. If any filament finds no
-    loaded match, or the plate carries no filament metadata, the print is
-    REFUSED with the unmatched filaments and the loaded spools listed; pass
-    ams_mapping explicitly (or use_ams=False) to proceed.
-    Calls printer.print_3mf_file() with the given parameters.
-    bed_type values: 'cool_plate' = smooth cold plate (PLA, TPU at low temp).
-    'eng_plate' = smooth engineering plate (PETG, PA, ABS). 'hot_plate' = smooth
-    high-temp plate (ASA, PC). 'textured_plate' = textured PEI surface (good
-    general-purpose adhesion). 'auto' = let the printer decide based on the sliced
-    settings in the file.
-    use_ams=True = load filament from AMS slots, resolved as described above.
-    use_ams=False = print using only the external spool holder (for single-color
-    prints without AMS). Leave ams_mapping empty: bpm derives the holder for each
-    filament from the plate's own extruder assignment (right holder for a filament
-    sliced for the right extruder, left holder for the left) and refuses the print
-    with an error when the plate has no extruder map. The holder cannot be chosen.
-    ams_mapping overrides the live-spool resolution above. Provide a JSON array
-    string or a list of integers indexed by 1-based filament id (index 0 = filament
-    1), each element an absolute tray_id, -1 for a filament id the plate does not use.
+    WHEN to use: only as the last step, after the confirmation gate in Notes (STEP 0 to
+    STEP 3) has been completed in a single turn and the user has given an explicit go-ahead
+    after seeing the complete summary. Never call it on a partial confirmation.
 
-    tray_id encoding — ALWAYS derive from live telemetry (the spool's ams_id is the
-    hardware chip_id from get_ams_units() / get_spool_info()), NEVER hardcode:
-      4-slot AMS (ams_id 0..127):  tray_id = ams_id * 4 + slot_id   → 0..103
-      AMS HT / N3S (ams_id ≥ 128): tray_id = ams_id + slot_id       → 128..
-      Unused filament id = -1. External spool: not part of this array, use use_ams=False.
-    NEVER use the 0-based unit_index in place of ams_id, and NEVER apply the
-    4-slot formula to an AMS HT (ams_id 128 → 512 is wrong; 128 is right).
+    WRITE GUARD: starts a physical print on the named printer, which heats, moves and
+    extrudes immediately. Once started the job can only be paused (``pause_print``) or
+    cancelled (``stop_print``); it cannot be recalled. With ``user_permission`` False the tool
+    changes nothing and returns the ``{"error": ...}`` refusal naming that consequence.
+    Separately from the guard, the tool is BLOCKED while the printer's LAST REPORTED
+    gcode_state is RUNNING or PREPARE (an active-print guard that ``user_permission=True``
+    cannot override). That block reads cached telemetry and does not fire when the state is
+    empty or unreadable, as it is until the first status report after a session or daemon
+    restart.
 
-    Correct workflow when overriding:
-      1. Call preview_ams_mapping() to see what the tool would resolve, then
-         get_spool_info() for each spool's ams_id and slot_id.
-      2. Encode each chosen spool with the formula above.
-      3. Build the array indexed by 1-based filament id from get_project_info().
+    Sibling disambiguation: ``print_file`` starts the print; ``preview_ams_mapping`` resolves
+    the same ams_mapping without printing and is the read-only step before it.
+    ``get_project_info`` reads the plate's filaments, and ``open_plate_viewer`` shows the
+    plates to the human.
 
-    Example: if AMS 2 Pro has ams_id=0, slot 1 → tray_id=1.
-             if AMS HT has ams_id=128, slot 0 → tray_id=128.
-    When ams_mapping is provided, use_ams is automatically set to True.
-    Always call get_project_info() first to see which filaments the .3mf plate uses.
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        file_path: Full SD card path of the .3mf file to print.
+        plate_num: Plate to print (default 1).
+        bed_type: One of ``auto``, ``cool_plate``, ``eng_plate``, ``hot_plate``,
+            ``textured_plate`` (case-insensitive); any other value silently falls back to
+            ``auto``. ``cool_plate`` = smooth cold plate (PLA, TPU at low temp);
+            ``eng_plate`` = smooth engineering plate (PETG, PA, ABS); ``hot_plate`` = smooth
+            high-temp plate (ASA, PC); ``textured_plate`` = textured PEI surface (good
+            general-purpose adhesion); ``auto`` = let the printer decide based on the sliced
+            settings in the file. Default ``"auto"``.
+        use_ams: True (default) loads filament from AMS slots, with the mapping resolved as
+            described under ``ams_mapping``. False prints using only the external spool
+            holder (single-colour prints without AMS): leave ``ams_mapping`` empty, and bpm
+            derives the holder for each filament from the plate's own extruder assignment
+            (right holder for a filament sliced for the right extruder, left holder for the
+            left) and refuses the print with an error when the plate has no extruder map. The
+            holder cannot be chosen.
+        ams_mapping: Optional override, default None. When empty (None, ``""`` or ``[]``) and
+            ``use_ams`` is True, the mapping is resolved from the spools the printer last
+            reported loaded: each project filament is matched to an AMS spool by exact type
+            then closest colour (bambu-printer-app's print-dialog scoring; exact pairs are
+            assigned first, then best unused, then reuse). A same-material spool of the WRONG
+            colour is accepted ("Type Match"). A WRONG-MATERIAL spool is ALSO accepted if its
+            colour is close enough ("Color Match Only", no material check at all), so call
+            ``preview_ams_mapping`` first and show the user every match label, "Color Match
+            Only" especially. The 3mf carries no usable tray ids: ``get_project_info``'s
+            ams_mapping is a filament-id placeholder, never a slot assignment. If any filament
+            finds no loaded match, or the plate carries no filament metadata, the print is
+            REFUSED with the unmatched filaments and the loaded spools listed. To override,
+            provide a JSON array string or a list of integers indexed by 1-based filament id
+            (index 0 = filament 1), each element an absolute tray_id, -1 for a filament id the
+            plate does not use. When ``ams_mapping`` is provided, ``use_ams`` is automatically
+            set to True. See Notes for the tray_id encoding.
+        timelapse: Record a timelapse (default False).
+        bed_leveling: Run bed leveling before printing (default True).
+        flow_calibration: Run flow calibration before printing (default False).
+        user_permission: Must be True to execute. Default False.
 
-    ⚠️ CONFIRMATION REQUIRED — DO NOT CALL THIS TOOL until all steps below are done
-    IN A SINGLE TURN. This tool starts an irreversible physical print.
+    Returns:
+        ``{"success": True, ...}`` means the print command was PUBLISHED; the printer's
+        acceptance and the job's start are not confirmed. Follow up with ``get_print_progress``
+        or ``get_job_info``, and ``get_hms_errors`` if nothing starts. The full success shape
+        is ``{"success": True, "file_path": <file_path>, "plate_num": <plate_num>,
+        "bed_type": <resolved bed type name>, "use_ams": <bool>, "ams_mapping": <JSON string
+        sent, empty when none>, "matches": <list of per-filament match dicts from the
+        live-spool resolution, empty when ``ams_mapping`` was provided or ``use_ams`` is
+        False>}``. Errors are ``{"error": str}``: the ``_permission_denied`` refusal when
+        ``user_permission`` is False, ``"Printer '<name>' not connected"``, the active-print
+        block ``"Blocked: '<name>' is currently <state>. ..."``, or
+        ``"Error starting print: <exception>"``. When the live-spool resolution fails, the
+        return is the resolution payload of ``preview_ams_mapping`` (``file_path``,
+        ``plate_num``, ``filaments``, ``resolved_ams_mapping``, ``ams_mapping_json``,
+        ``matches``, ``unmatched``, ``loaded_spools``, ``external_spools``) plus an
+        ``"error"`` message, or only ``{"error": str}`` when the project metadata could not be
+        read.
 
-    STEP 0 — Active-print guard:
-      This tool is ⛔ BLOCKED when gcode_state is RUNNING or PREPARE (defense-in-depth;
-      firmware also rejects with "printer busy"). Check get_print_progress() first if unsure.
+    Notes:
+        Calls ``printer.print_3mf_file()`` with the given parameters.
 
-    STEP 1 — Gather everything first (no user interaction yet):
-      Call get_project_info(), preview_ams_mapping(), get_ams_units(), get_spool_info()
-      to collect all data needed to build the complete summary before asking the user
-      anything. preview_ams_mapping() is the mapping print_file will actually send.
-      To show plate visuals to the user, call open_plate_viewer(name, file_path) — do NOT
-      call get_plate_thumbnail() or get_plate_topview() and embed the data_uri in the
-      response. Humans cannot see raw base64 in a terminal or chat context.
-      Also look up stored preferences for each sticky field using user_prefs:
-        from user_prefs import get_pref
-        bed_leveling     = get_pref(f"{name}:bed_leveling",     True)
-        flow_calibration = get_pref(f"{name}:flow_calibration", False)
-        timelapse        = get_pref(f"{name}:timelapse",        False)
-      Factory defaults: bed_leveling=True, flow_calibration=False, timelapse=False.
-      Label each field "(your preference)" if the stored value differs from the factory
-      default, or "(default)" if it matches the factory default.
+        tray_id encoding for ``ams_mapping``: ALWAYS derive from live telemetry (the spool's
+        ams_id is the hardware chip_id from ``get_ams_units`` / ``get_spool_info``), NEVER
+        hardcode:
+          4-slot AMS (ams_id 0..127):  tray_id = ams_id * 4 + slot_id   -> 0..103
+          AMS HT / N3S (ams_id >= 128): tray_id = ams_id + slot_id      -> 128..
+          Unused filament id = -1. External spool: not part of this array, use use_ams=False.
+        NEVER use the 0-based unit_index in place of ams_id, and NEVER apply the 4-slot formula
+        to an AMS HT (ams_id 128 -> 512 is wrong; 128 is right).
 
-    STEP 2 — Present ONE complete summary containing ALL of the following:
-      - Part name(s) and filament(s) from the project metadata
-      - bed_type (from metadata) — ask: is this correct for the plate physically on the bed?
-      - ams_mapping — from preview_ams_mapping(): each filament → tray with its match
-        label; call out any "Type Match" (right material, wrong colour); ask: correct?
-      - flow_calibration — show stored value with label; ask: run flow calibration before printing?
-      - timelapse — show stored value with label; ask: record a timelapse?
-      - bed_leveling — show stored value with label; ask: run bed leveling, or skip for speed?
+        Correct workflow when overriding:
+          1. Call ``preview_ams_mapping`` to see what the tool would resolve, then
+             ``get_spool_info`` for each spool's ams_id and slot_id.
+          2. Encode each chosen spool with the formula above.
+          3. Build the array indexed by 1-based filament id from ``get_project_info``.
 
-    STEP 3 — Wait for explicit go-ahead AFTER the complete summary.
-      Do NOT call print_file after confirming individual parameters across separate turns.
-      Confirming flow_calibration, timelapse, or bed_leveling mid-conversation does NOT
-      satisfy this gate. The go-ahead must come in the turn immediately after the full
-      summary is shown with all six items visible.
-      After print_file is called successfully, update stored preferences:
-        from user_prefs import set_pref
-        set_pref(f"{name}:bed_leveling",     bed_leveling)
-        set_pref(f"{name}:flow_calibration", flow_calibration)
-        set_pref(f"{name}:timelapse",        timelapse)
+        Example: if AMS 2 Pro has ams_id=0, slot 1 -> tray_id=1.
+                 if AMS HT has ams_id=128, slot 0 -> tray_id=128.
+        Always call ``get_project_info`` first to see which filaments the .3mf plate uses.
+
+        CONFIRMATION REQUIRED. DO NOT CALL THIS TOOL until all steps below are done IN A
+        SINGLE TURN. This tool starts a physical print that can only be paused or cancelled
+        afterwards, not recalled.
+
+        STEP 0, active-print guard: this tool is BLOCKED when the last reported gcode_state is
+        RUNNING or PREPARE (defense-in-depth, read from cached telemetry). Check
+        ``get_print_progress`` first if unsure.
+
+        STEP 1, gather everything first (no user interaction yet): call ``get_project_info``,
+        ``preview_ams_mapping``, ``get_ams_units`` and ``get_spool_info`` to collect all data
+        needed to build the complete summary before asking the user anything.
+        ``preview_ams_mapping`` is the mapping print_file will actually send. To show plate
+        visuals to the user, call ``open_plate_viewer(name, file_path)``; do NOT call
+        ``get_plate_thumbnail`` or ``get_plate_topview`` and embed the data_uri in the
+        response. Humans cannot see raw base64 in a terminal or chat context. Also look up
+        stored preferences for each sticky field using user_prefs:
+          from user_prefs import get_pref
+          bed_leveling     = get_pref(f"{name}:bed_leveling",     True)
+          flow_calibration = get_pref(f"{name}:flow_calibration", False)
+          timelapse        = get_pref(f"{name}:timelapse",        False)
+        Factory defaults: bed_leveling=True, flow_calibration=False, timelapse=False. Label
+        each field "(your preference)" if the stored value differs from the factory default,
+        or "(default)" if it matches the factory default.
+
+        STEP 2, present ONE complete summary containing ALL of the following:
+          - Part name(s) and filament(s) from the project metadata
+          - bed_type (from metadata): ask whether it is correct for the plate physically on
+            the bed
+          - ams_mapping, from ``preview_ams_mapping``: each filament to a tray with its match
+            label; call out any "Type Match" (right material, wrong colour); ask whether it is
+            correct
+          - flow_calibration: show the stored value with its label; ask whether to run flow
+            calibration before printing
+          - timelapse: show the stored value with its label; ask whether to record a timelapse
+          - bed_leveling: show the stored value with its label; ask whether to run bed
+            leveling or skip it for speed
+
+        STEP 3, wait for explicit go-ahead AFTER the complete summary. Do NOT call print_file
+        after confirming individual parameters across separate turns. Confirming
+        flow_calibration, timelapse, or bed_leveling mid-conversation does NOT satisfy this
+        gate. The go-ahead must come in the turn immediately after the full summary is shown
+        with all six items visible. After print_file is called successfully, update stored
+        preferences:
+          from user_prefs import set_pref
+          set_pref(f"{name}:bed_leveling",     bed_leveling)
+          set_pref(f"{name}:flow_calibration", flow_calibration)
+          set_pref(f"{name}:timelapse",        timelapse)
     """
     log.debug("print_file: called for name=%s file_path=%s plate_num=%s bed_type=%s user_permission=%s", name, file_path, plate_num, bed_type, user_permission)
     if not user_permission:
         log.debug("print_file: permission denied for %s", name)
-        return {"error": _permission_denied()}
+        return {"error": _permission_denied(
+            "This would start a physical print on the printer, which heats, moves and extrudes and cannot be undone."
+        )}
     printer = session_manager.get_printer(name)
     if printer is None:
         log.warning("print_file: printer not connected: %s", name)
@@ -1173,20 +1503,42 @@ def _build_layout_uri(topimg_uri: str, objs: list, model_key) -> str:
 
 def open_plate_viewer(name: str, file_path: str, target_plate: int = None) -> dict:
     """
-    Build and open an HTML viewer showing both the isometric thumbnail and
-    top-down image for all plates in a 3MF project file on the printer's SD card.
+    Build and open an HTML viewer of the isometric and top-down images for the plates of a
+    3MF project file on the printer's SD card.
 
-    Opens a browser window showing all plates in the project as thumbnail images
-    (isometric view + top-down view side by side). Use this to visually confirm
-    which plate to print before calling print_file().
-    Fetches project info for every plate via the local cache, embeds the
-    base64 images directly in the HTML, writes it to /tmp, and opens it in
-    the default browser. Returns the output path and plate count.
+    WHEN to use: the human should see the plates, for example to visually confirm which plate
+    to print before calling ``print_file``, or to jump to the plate a finished job printed.
 
-    target_plate: optional plate number to scroll directly to on open. If set,
-    the browser opens with the URL fragment #plate-{target_plate}, scrolling to
-    that plate automatically. Useful after a job completes — pass the plate number
-    from get_job_info() to jump straight to the printed plate.
+    Sibling disambiguation: ``open_plate_viewer`` shows plates 1 to N of the file, N being the
+    length of plate 1's ``plates`` list (isometric, top-down and, when objects are known, a
+    layout image per plate) in a browser page;
+    ``open_plate_layout`` shows one plate as a single annotated top-down PNG. The
+    ``get_plate_thumbnail`` and ``get_plate_topview`` tools return raw image data for the AI
+    agent rather than opening anything for the human.
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        file_path: Full SD card path of the .3mf file.
+        target_plate: Optional plate number to scroll straight to on open. If set, the browser
+            opens with the URL fragment ``#plate-{target_plate}``. Useful after a job
+            completes: pass the plate number from ``get_job_info`` to jump to the printed plate.
+
+    Returns:
+        ``{"success": True, "path": <path of the HTML file written under /tmp>, "plates":
+        <plate count>}`` on success. Errors are ``{"error": str}``: ``"Printer '<name>' not
+        connected"``, ``"Could not retrieve project info for '<file_path>'"``, or
+        ``"Error building plate viewer: <exception>"``.
+
+    Notes:
+        Fetches project info for the plates via the local cache (the .3mf may be downloaded
+        over FTPS and the cache written on a miss), embeds the base64 images directly in the
+        HTML, writes it to ``/tmp/plate_viewer_<name>.html`` (overwriting any earlier viewer
+        for that printer), and opens it in the default browser. The plate count N comes from
+        the length of the ``plates`` list of plate 1's project info, and the tool then fetches
+        plate numbers 1 through N. Files whose plate numbers are non-contiguous (for example
+        [1,5,6,12]) are shown incorrectly: a missing number renders another available plate's
+        images under the wrong heading, and plates numbered above N never appear.
+        Nothing is skipped. Use ``get_all_project_info`` for the accurate plate set.
     """
     log.debug("open_plate_viewer: called for name=%s file_path=%s", name, file_path)
     printer = session_manager.get_printer(name)
@@ -1310,23 +1662,51 @@ _BBOX_PALETTE = [
 
 def open_plate_layout(name: str, file_path: str, plate_num: int = 1) -> dict:
     """
-    Generate and open an annotated top-down image for a single plate showing
-    each object's bounding box overlaid on the top-view image.
+    Generate and open an annotated top-down image for a single plate, with each object's
+    bounding box overlaid on the top-view image.
 
-    Bed dimensions are selected by printer model (mm, W×H):
-      H2D/H2S=350×320, X1C/X1/X1E/P1S/P1P/P2S/A1=256×256, A1_MINI=180×180.
+    WHEN to use: the human should see where each part sits on one plate's build surface, with
+    a colour legend of part names, for example to confirm object placement before printing.
 
-    Coordinate mapping applied internally:
-    - Slicer bbox coordinates use bottom-left origin (mm); image uses top-left origin.
-    - scale = min(img_w / bed_w, img_h / bed_h)  — uniform scale, no distortion.
-    - x_off = (img_w - bed_w * scale) / 2; y_off = (img_h - bed_h * scale) / 2  — centring.
-    - pixel_x = x_off + x_mm * scale; pixel_y = img_h - y_off - y_mm * scale  — Y flip.
+    Sibling disambiguation: ``open_plate_layout`` produces one annotated PNG for a single
+    plate; ``open_plate_viewer`` opens an HTML page showing all plates of the file.
+    ``get_plate_topview`` returns the plain top-down image data for the AI agent without
+    annotation or opening anything.
 
-    Each unique part name is assigned a distinct colour; a legend with part names
-    and colours is appended below the annotated image.
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        file_path: Full SD card path of the .3mf file.
+        plate_num: Plate to render (default 1). An absent plate silently renders another
+            available plate; check ``plates`` from ``get_project_info`` first.
 
-    The PNG is saved to /tmp and opened in the default viewer.
-    Returns: {"output_path": str, "object_count": int}.
+    Returns:
+        ``{"success": True, "path": <PNG path under /tmp>, "plate": <the plate_num you
+        PASSED, not necessarily the plate rendered>, "objects": <bounding-box object count>,
+        "unique_parts": <distinct part name count>, "bed_mm": "<W>x<H>"}`` on success.
+        ``objects`` and ``unique_parts`` COUNT wipe-tower entries, and the wipe tower is drawn
+        on the image and listed in the legend; unlike ``open_plate_viewer`` this tool applies
+        no wipe_tower filter, so subtract entries whose name contains ``wipe_tower`` when
+        reporting a part count. Errors are ``{"error": str}``: ``"Printer '<name>' not
+        connected"``, ``"Could not retrieve project info for plate <plate_num>"``,
+        ``"No top-down image available for this plate"``, ``"No bounding-box objects found for
+        this plate"``, or ``"Error building plate layout: <exception>"``.
+
+    Notes:
+        The PNG is saved to ``/tmp/plate_layout_<name>_p<plate_num>.png`` (overwriting any
+        earlier one) and opened in the default viewer. Reading the project info may download
+        the .3mf over FTPS and write the local metadata cache.
+
+        Bed dimensions are selected by printer model (mm, W x H): H2D/H2S=350x320,
+        X1C/X1/X1E/P1S/P1P/P2S/A1=256x256, A1_MINI=180x180.
+
+        Coordinate mapping applied internally:
+        - Slicer bbox coordinates use a bottom-left origin (mm); the image uses a top-left origin.
+        - scale = min(img_w / bed_w, img_h / bed_h): uniform scale, no distortion.
+        - x_off = (img_w - bed_w * scale) / 2; y_off = (img_h - bed_h * scale) / 2: centring.
+        - pixel_x = x_off + x_mm * scale; pixel_y = img_h - y_off - y_mm * scale: Y flip.
+
+        Each unique part name is assigned a distinct colour; a legend with part names and
+        colours is appended below the annotated image.
     """
     log.debug("open_plate_layout: called for name=%s file_path=%s plate_num=%s", name, file_path, plate_num)
     printer = session_manager.get_printer(name)
@@ -1461,15 +1841,42 @@ def rename_sdcard_file(
     """
     Rename or move a file on the printer's SD card.
 
-    src_path and dest_path are full paths on the SD card (e.g.
-    '/cache/my_old_name.gcode.3mf'). Both paths must be on the SD card —
-    this is an FTPS rename operation, not a copy. The file is moved/renamed
-    in place; no data is re-uploaded.
-    Requires user_permission=True.
+    WHEN to use: change a file's name, or move it to another folder on the card, without
+    re-uploading it.
+
+    WRITE GUARD: renames or moves the file on the printer's SD card over FTPS, so it no longer
+    exists at its old path. With ``user_permission`` False the tool changes nothing and returns
+    the ``{"error": ...}`` refusal naming that consequence.
+
+    Sibling disambiguation: ``rename_sdcard_file`` moves or renames a file that is already on
+    the card; ``upload_file`` copies a new file from this host, and ``delete_file`` removes a
+    file's data.
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        src_path: Full SD card path of the existing file, for example
+            ``'/cache/my_old_name.gcode.3mf'``.
+        dest_path: Full SD card path to move it to. Both paths must be on the SD card.
+        user_permission: Must be True to execute. Default False.
+
+    Returns:
+        ``{"success": True, "src_path": <src_path>, "dest_path": <dest_path>}`` on success (no
+        listing is returned). Errors are ``{"error": str}``: the ``_permission_denied`` refusal
+        when ``user_permission`` is False, ``"Printer '<name>' not connected"``, or
+        ``"Error renaming file on '<name>': <exception>"``.
+
+    Notes:
+        This is an FTPS rename operation, not a copy: the file is moved or renamed in place and
+        no data is re-uploaded. Each call then performs a FULL live FTPS listing of the card
+        and repopulates the printer library's cached trees; a failure in that listing surfaces
+        as a rename error even though the rename succeeded. Cached plate metadata keyed to the
+        old path is not renamed.
     """
     log.debug("rename_sdcard_file: called for name=%s src=%s dest=%s user_permission=%s", name, src_path, dest_path, user_permission)
     if not user_permission:
-        return {"error": _permission_denied()}
+        return {"error": _permission_denied(
+            "This would rename or move the file on the printer's SD card, so it would no longer exist at its old path."
+        )}
     printer = session_manager.get_printer(name)
     if printer is None:
         return _no_printer(name)
@@ -1486,24 +1893,43 @@ def get_current_job_project_info(name: str, include_images: bool = False) -> dic
     """
     Return 3MF project properties for the currently active print job.
 
-    Reads the active gcode_file path from the printer's live job state and
-    returns project metadata for the corresponding plate. Equivalent to calling
-    get_project_info() with the active job's file path and plate number — but
-    without needing to know the file path in advance.
+    WHEN to use: intended to find out which plate and parts the running (or just-finished) job
+    is printing without knowing the file path in advance. CURRENTLY IT ALWAYS RETURNS THE
+    ``no_active_job`` ERROR (see Returns), so use ``get_job_info`` plus
+    ``get_3mf_entry_by_name`` and ``get_project_info`` instead, or the HTTP route
+    ``GET /api/get_current_3mf_props``.
 
-    Returns {error: "no_active_job"} when gcode_state is IDLE (i.e. no print is
-    running, paused, or recently finished). FINISH and FAILED jobs still return
-    project info so agents can identify which plate ran immediately after completion.
-    A PAUSED job still returns project info.
+    Sibling disambiguation: ``get_current_job_project_info`` is meant to read the active job's
+    gcode_file and plate from the printer's live job state and return what ``get_project_info``
+    returns for them. ``get_project_info`` needs you to supply the file path and plate;
+    ``get_job_info`` returns the job's own record (subtask name, gcode file, plate, layer
+    counts, times), not the project's metadata.
 
-    include_images=True embeds base64 thumbnail and top-view data URIs in the
-    response (large). See get_project_info() for full field documentation.
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        include_images: True embeds the base64 thumbnail and top-view data URIs in the response
+            (large). Default False. See ``get_project_info`` for the full field documentation.
 
-    Note: when include_images=True this tool returns raw base64 data URIs which may
-    exceed the CLI inline display limit. If output is truncated, use the HTTP fallback:
-    GET http://localhost:{api_port}/api/get_current_3mf_props?printer={name}
-    Call kb_get('bambu-http-files') for full route docs. Pre-authorized, no
-    human permission needed.
+    Returns:
+        In practice ``{"error": "no_active_job", "gcode_state": "", "note": "No print is
+        currently running or paused."}`` on every call, even mid-print: the tool reads
+        ``gcode_state`` from the job record, which has no such field, so the state is always
+        empty and the no-job branch is always taken. The other errors are ``{"error": str}``:
+        ``"Printer '<name>' not connected"`` and ``"Error retrieving current job project info
+        for '<name>': <exception>"``. The intended (currently unreachable) success value is the
+        ``get_project_info`` result for the active job's file and plate plus a ``"gcode_state"``
+        key.
+
+    Notes:
+        Code defect for the owner: ``gcode_state`` should come from the printer state, the .3mf
+        should be resolved from the job's ``subtask_name`` (``<subtask_name>.gcode.3mf``) or
+        its ``project_info`` rather than from ``gcode_file`` (which is the printer-internal
+        ``/data/Metadata/plate_N.gcode`` path, not an SD card path), and a ``plate_num`` of -1
+        means unknown. When ``include_images=True`` the intended response carries raw base64
+        data URIs which may exceed the CLI inline display limit. The HTTP route
+        ``GET http://localhost:{api_port}/api/get_current_3mf_props?printer={name}`` returns the
+        active job's cached project info. Call ``kb_get('bambu-http-files')`` for full route
+        docs. Pre-authorized, no human permission needed.
     """
     log.debug("get_current_job_project_info: called for name=%s include_images=%s", name, include_images)
     printer = session_manager.get_printer(name)
@@ -1532,18 +1958,32 @@ def refresh_sdcard(name: str, mode: str = "full") -> dict:
     """
     Force a fresh SD card listing from the printer.
 
-    Triggers an explicit re-read of the SD card contents over FTPS. Use this
-    before calling list_sdcard_files() when you need guaranteed up-to-date
-    results (e.g. after uploading a file or after a print completes).
+    WHEN to use: you need up-to-date cached SD card data, for example after uploading a file or
+    after a print completes, before reading it with ``list_sdcard_files(cached=True)``.
 
-    mode must be one of:
-    - 'full' (default) — refresh the complete SD card directory tree via
-      printer.get_sdcard_contents(). Slower but comprehensive.
-    - '3mf' — refresh only the .3mf file list via printer.get_sdcard_3mf_files().
-      Faster; use this when you only need the printable file list.
+    Sibling disambiguation: ``refresh_sdcard`` re-reads the card and returns no listing;
+    ``list_sdcard_files`` returns the listing itself, and with its default ``cached=False`` it
+    already does a live FTPS fetch of its own.
 
-    After this call, use list_sdcard_files() to retrieve the updated listing.
-    The refresh is synchronous — the updated data is available immediately.
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+        mode: ``'full'`` (default) and ``'3mf'`` both perform ONE full live FTPS listing of the
+            whole SD card and repopulate BOTH cached trees (the .3mf tree is derived by
+            filtering the full one). The mode only selects whether the tool calls
+            ``printer.get_sdcard_contents()`` or ``printer.get_sdcard_3mf_files()``, and the
+            tool discards the return value; there is no cost or scope difference. Case-insensitive.
+
+    Returns:
+        ``{"success": True, "mode": <'full' or '3mf'>, "printer": <name>}`` on success. Errors
+        are ``{"error": str}``: ``"Printer '<name>' not connected"``,
+        ``"Unknown mode '<mode>'. Must be 'full' or '3mf'."``, or
+        ``"Error refreshing SD card on '<name>': <exception>"``.
+
+    Notes:
+        The refresh is synchronous: the updated data is available immediately. It triggers an
+        explicit re-read of the SD card contents over FTPS and repopulates the printer library's
+        cache; it changes nothing on the printer. The tool reports success once the call returns
+        without raising; it does not inspect whether the listing itself came back empty.
     """
     log.debug("refresh_sdcard: called for name=%s mode=%s", name, mode)
     printer = session_manager.get_printer(name)

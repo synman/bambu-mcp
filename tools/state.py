@@ -105,39 +105,53 @@ def _apply_hms_historical(errors: list) -> list:
 
 
 def get_printer_state(name: str) -> dict:
-    """
-    Return the full live BambuState for the named printer as a dict.
+    """Return the full live BambuState for the named printer as a dict.
 
-    Includes extruder info, AMS units, spools, climate, HMS errors, and
-    print-progress fields. Returns an error dict if the printer is not connected.
+    WHEN to use: you need many state fields at once (extruders, AMS units, spools, climate,
+    HMS errors, print progress) and one bundled response is cheaper than several calls.
 
-    This is a convenience tool that bundles all printer state into one response.
-    For routine queries, prefer the targeted tools — they are smaller and faster:
-      get_temperatures()     — nozzle, bed, and chamber temperatures
-      get_spool_info()       — active spool and all AMS spools
-      get_job_info()         — current print job progress
-      get_nozzle_info()      — nozzle diameter, type, and tray state
-      get_print_progress()   — print percentage, layer, and time remaining
-      get_ams_units()        — AMS unit and slot details
-      get_hms_errors()       — active and historical HMS errors
-      get_fan_speeds()       — all fan speeds as percentages
-      get_climate()          — temperatures and chamber door state
+    Sibling disambiguation: ``get_printer_state`` bundles all printer state into one large
+    response. For routine queries prefer the targeted tools, which are smaller and faster:
+    ``get_temperatures`` (nozzle, bed, and chamber temperatures), ``get_spool_info`` (active
+    spool and all AMS spools), ``get_job_info`` (current print job details),
+    ``get_nozzle_info`` (nozzle diameter, type, and tray state), ``get_print_progress``
+    (print percentage, layer, and time remaining), ``get_ams_units`` (AMS unit and slot
+    details), ``get_hms_errors`` (active and historical HMS errors), ``get_fan_speeds`` (all
+    fan speeds as percentages), and ``get_climate`` (temperatures and chamber door state).
 
-    recent_update: bool — True when BPM's watchdog considers the MQTT report
-    stream live; False when the watchdog found no message for
-    watchdog_timeout seconds (or none yet), asked the printer to
-    re-announce its version/push info, and is waiting for that reply.
-    Ordinary report messages only reset the watchdog's staleness clock
-    while this is True; it flips back True only when a fresh info/module
-    reply arrives. An idle (non-printing) printer with a healthy report
-    stream still reads recent_update=True — this field flags a stalled
-    telemetry connection, not printer activity.
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
 
-    Response may be gzip+base64 compressed if the payload is large. Decompress:
-      import gzip, json, base64
-      data = json.loads(gzip.decompress(base64.b64decode(r["data"])))
-    If the compressed envelope itself exceeds the MCP response limit, fall back to:
-      GET /api/printer?printer=<name>
+    Returns:
+        The serialized BambuState dict, with enum fields as their names, ``hms_errors`` passed
+        through the active/historical rule, ``extension_tool.mounted`` (bool, whether the
+        enhanced cooling fan is mounted) added, and ``recent_update`` (bool) added. Any payload
+        over 300 characters is returned as a gzip+base64 envelope instead:
+        ``{"compressed": True, "encoding": "gzip+base64", "original_size_bytes": int,
+        "compressed_size_bytes": int, "data": str}``. Error shape: ``{"error": "Printer '<name>'
+        not connected"}``.
+
+    Notes:
+        recent_update: bool. True when BPM's watchdog considers the MQTT report stream live;
+        False when the watchdog found no message for watchdog_timeout seconds (or none yet),
+        asked the printer to re-announce its version/push info, and is waiting for that reply.
+        Ordinary report messages only reset the watchdog's staleness clock while this is True;
+        it flips back to True only when a fresh info/module reply arrives. An idle
+        (non-printing) printer with a healthy report stream still reads recent_update=True.
+        This field flags a stalled telemetry connection, not printer activity.
+
+        Decompress an envelope with:
+          import gzip, json, base64
+          data = json.loads(gzip.decompress(base64.b64decode(r["data"])))
+        If the compressed envelope itself exceeds the MCP response limit, fall back to
+        GET /api/printer?printer=<name>. That route returns a DIFFERENT, larger document (a
+        serialization of the whole BambuPrinter object, not this BambuState dict) and answers
+        HTTP 304 ("no data yet") while recent_update is False.
+
+        Incidental side effect: building the response records its size in
+        ~/.bambu-mcp/response_size_tracker.json when it sets a new high-water mark, and may
+        then rewrite MAX_MCP_OUTPUT_TOKENS in ~/.copilot/mcp-config.json. It does not touch
+        the printer.
     """
     from tools._response import compress_if_large
     state = session_manager.get_state(name)
@@ -162,42 +176,68 @@ def get_printer_state(name: str) -> dict:
 
 
 def get_job_info(name: str) -> dict:
-    """
-    Return the ActiveJobInfo for the current (or last) print job as a dict.
+    """Return the ActiveJobInfo for the current (or last) print job as a dict.
 
-    Includes subtask name, gcode file, plate number, stage_id, layer counts,
-    print percentage, and elapsed/remaining time in minutes.
+    WHEN to use: you need the job's identity and detail (subtask name, gcode file, plate,
+    stage code, layer counts, elapsed/remaining minutes), for example to locate its project
+    file or to decode why a job is paused.
 
-    Field semantics:
-    - stage_id: integer stage code —
-        0=idle/finished, 1=auto-leveling, 2=heatbed preheating,
-        3=sweeping XY mech, 4=changing filament, 6=M400 pause,
-        7=paused by filament runout, 8=heating nozzle,
-        9=calibrating extrusion, 10=scanning bed surface,
-        11=inspecting first layer, 12=identifying build plate,
-        13=calibrating micro lidar, 14=homing toolhead, 15=cleaning nozzle,
-        16=checking extruder temp, 17=paused by user,
-        18=paused by front cover removal, 19=calibrating extrusion flow,
-        20=paused by nozzle temp malfunction,
-        21=paused by heat bed temp malfunction, 255=printing normally.
+    Sibling disambiguation: ``get_job_info`` returns the full ActiveJobInfo record, including
+    the job's identity fields. ``get_print_progress`` returns a compact progress summary and is
+    the one that carries ``gcode_state``. ``get_printer_state`` bundles every state field in
+    one large response.
 
-    Empty result interpretation:
-    - When all fields are empty/zeroed (subtask_name="", gcode_file="",
-      print_percentage=0, stage_id=-1): no job has been executed since the
-      printer's last power cycle or reboot. Job info persists across idle
-      periods — it does NOT clear over time. Empty always means reboot
-      boundary, never "idle too long."
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
 
-    Note: gcode_state is NOT a field of ActiveJobInfo and is not returned by this
-    tool. Read gcode_state from get_print_progress() or get_printer_state() instead.
+    Returns:
+        The whole serialized ActiveJobInfo dict, uncompressed: subtask_name, gcode_file,
+        plate_num (-1 when unknown), plate_type, stage_id, stage_name, current_layer,
+        total_layers, print_percentage, elapsed_minutes, remaining_minutes, wall_start_time,
+        print_type, project_file_command, project_info_fetch_attempted, and project_info. While
+        a job runs, project_info.metadata carries ``thumbnail`` and ``topimg`` as full base64
+        PNG data URIs, so the payload can be very large; for project data prefer
+        ``get_current_job_project_info(include_images=False)``. Error shape:
+        ``{"error": "Printer '<name>' not connected"}``.
 
-    Shortcuts for agent efficiency:
-    - Current plate number: parse gcode_file path — pattern is /data/Metadata/plate_N.gcode
-      where N is the plate number. Example: "/data/Metadata/plate_3.gcode" → plate 3.
-      No extra tool call needed.
-    - Find the project file on the SD card: use get_3mf_entry_by_name(name, subtask_name
-      + ".gcode.3mf") to search the cached file tree by filename directly, instead of
-      calling list_sdcard_files() and scanning the full listing.
+    Notes:
+        Field semantics:
+        - stage_id: integer stage code. ``stage_name`` is the decoded label (bpm parseStage);
+            read it rather than decoding the code yourself. 0 and -1 decode to "";
+            1=Auto bed leveling, 2=Heatbed preheating, 3=Sweeping XY mech mode,
+            4=Changing filament, 5=M400 pause, 6=Filament runout pause, 7=Heating hotend,
+            8=Calibrating extrusion, 9=Scanning bed surface, 10=Inspecting first layer,
+            11=Identifying build plate, 12=Calibrating Micro Lidar, 13=Homing toolhead,
+            14=Cleaning nozzle tip, 15=Temp check, 16=Paused by user,
+            17=Front cover falling, 18=Lidar calibration (alt), 19=Calibrating flow,
+            20=Nozzle temp malfunction, 21=Bed temp malfunction, 22=Filament unloading,
+            23=Skip step pause, 24=Filament loading; 25-58 and 70-77 name further
+            calibration, check, pause and AMS filament-change steps; 100=Printing;
+            255=Completed. An unlisted code decodes as "Stage [N]".
+
+        Empty result interpretation:
+        - Every field is empty or zeroed (subtask_name="", gcode_file="",
+          print_percentage=0, stage_id=0; a -1 stage_id, when it appears, is the printer's
+          own stg_cur) until this session's first status report. A just-connected,
+          restarted or re-created session therefore reads empty even if the printer has run
+          jobs; "no job since the printer's last power cycle" is one possible explanation,
+          not a guarantee.
+
+        gcode_state is NOT a field of ActiveJobInfo and is not returned by this
+        tool. Read gcode_state from get_print_progress() or get_printer_state() instead.
+
+        Shortcuts for agent efficiency:
+        - Current plate number: parse gcode_file path — pattern is /data/Metadata/plate_N.gcode
+          where N is the plate number. Example: "/data/Metadata/plate_3.gcode" → plate 3.
+          No extra tool call needed.
+        - Find the project file on the SD card: use get_3mf_entry_by_name(name, subtask_name
+          + ".gcode.3mf") to look it up by filename instead of scanning list_sdcard_files().
+          That call runs a LIVE FTPS listing of the SD card (it contacts the printer; it
+          does not read a cache). On a miss, try subtask_name + ".3mf", the form bpm falls
+          back to.
+
+        Values are the last telemetry received; they go stale, with no error, while the MQTT
+        session is paused (pause_mqtt_session) or the connection has dropped.
     """
     log.debug("get_job_info: called for printer=%s", name)
     job = session_manager.get_job(name)
@@ -209,11 +249,31 @@ def get_job_info(name: str) -> dict:
 
 
 def get_temperatures(name: str) -> dict:
-    """
-    Return current and target temperatures for all nozzles, the bed, and chamber.
+    """Return current and target temperatures for all nozzles, the bed, and chamber.
 
-    For single-extruder printers the nozzles list has one entry.
-    For dual-extruder (H2D) printers it has two entries.
+    WHEN to use: check whether the nozzle(s), bed, or chamber have reached their target
+    temperatures, for example before starting a print or while it heats.
+
+    Sibling disambiguation: ``get_temperatures`` returns temperatures only, in a fixed
+    nozzles/bed/chamber shape. ``get_climate`` returns temperatures and chamber door state.
+    ``get_fan_speeds`` returns fan percentages. ``get_printer_state`` bundles everything in one
+    large response.
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+
+    Returns:
+        ``{"nozzles": [{"id", "temp", "target"}], "bed": {"temp", "target"},
+        "chamber": {"temp", "target"}}``. For single-extruder printers the nozzles list has one
+        entry; for dual-extruder (H2D) printers it has two. Error shape:
+        ``{"error": "Printer '<name>' not connected"}``.
+
+    Notes:
+        Values are the last telemetry this server received, not a fresh read. They go stale,
+        with no error returned, while the MQTT session is paused (``pause_mqtt_session``) or
+        the connection has dropped. Check ``get_session_status`` /
+        ``get_printer_connection_status``, or ``recent_update`` in ``get_printer_state``, when
+        freshness matters.
     """
     log.debug("get_temperatures: called for printer=%s", name)
     state = session_manager.get_state(name)
@@ -236,17 +296,34 @@ def get_temperatures(name: str) -> dict:
 
 
 def get_fan_speeds(name: str) -> dict:
-    """
-    Return the current fan speeds as percentages for all fans on the printer.
+    """Return the current fan speeds as percentages for all fans on the printer.
 
-    Fans reported: part_cooling, aux (recirculation), exhaust (chamber), heatbreak,
-    enhanced_cooling (Toolhead Enhanced Cooling Fan, H2-series extension-tool only).
+    WHEN to use: check the part-cooling, aux, exhaust, or heatbreak fan speed. For the
+    enhanced-cooling fan this reports the last value commanded through this server's current
+    session, not a measured run state.
 
-    enhanced_cooling_pct is NOT a measured speed — the printer publishes no run-state
-    telemetry for this fan. It is the last COMMANDED target (sticky): it persists
-    unchanged across telemetry updates and is zeroed only when the extension tool
-    leaves the MOUNTED state (unplugged/removed). On printers with no extension-tool
-    module, this reads 0.
+    Sibling disambiguation: ``get_fan_speeds`` returns fan percentages only. ``get_climate``
+    returns temperatures and chamber door state, and ``get_temperatures`` returns temperatures
+    only. ``set_fan_speed`` is the tool that changes a fan.
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+
+    Returns:
+        ``{"part_cooling_pct", "aux_pct", "exhaust_pct", "heatbreak_pct",
+        "enhanced_cooling_pct"}``, each a percentage. Fans reported: part_cooling, aux
+        (recirculation), exhaust (chamber), heatbreak, enhanced_cooling (Toolhead Enhanced
+        Cooling Fan, H2-series extension-tool only). Error shape:
+        ``{"error": "Printer '<name>' not connected"}``.
+
+    Notes:
+        enhanced_cooling_pct is NOT a measured speed — the printer publishes no run-state
+        telemetry for this fan. It is the last target commanded through THIS server's
+        current session (sticky): it persists unchanged across telemetry updates, reads 0
+        after a session start or restart and on printers with no extension-tool module, is
+        zeroed when the extension tool leaves the MOUNTED state, and never reflects a command
+        sent by another client. The other fan values are the last telemetry received and go
+        stale, with no error, while the MQTT session is paused or the connection has dropped.
     """
     log.debug("get_fan_speeds: called for printer=%s", name)
     state = session_manager.get_state(name)
@@ -286,30 +363,66 @@ def _enrich_spool(spool: dict) -> dict:
 
 
 def get_spool_info(name: str) -> dict:
-    """
-    Return the active spool and a list of all spools associated with the printer.
+    """Return the active spool and a list of all spools associated with the printer.
 
-    The active spool is identified by matching active_ams_id / active_tray_id from
-    BambuState. Each spool dict includes filament type, color, remaining percentage,
-    nozzle temp range, and drying parameters.
+    WHEN to use: find out which filament is loaded and in use, or list every spool with its
+    type, color, remaining percentage, nozzle temperature range, and drying parameters.
 
-    Field semantics:
-    - active_ams_id: internal chip_id of the AMS unit. 0 = first AMS unit (AMS 2 Pro);
-      128 = AMS HT unit (Bambu's internal ID for AMS HT). NOT the same as the
-      0-based unit_id used by get_ams_units() / load_filament().
-    - active_tray_id: slot index within the AMS (0–3). 254 = external spool holder.
-    - Each spool dict: type (str), color (hex string e.g. '#FF0000'),
-      remaining_percent (0–100), nozzle_temp_min/max (°C), drying_temp (°C), drying_time (hours).
-    - name (if present): Bambu Lab vendor-specific brand label (e.g. "Bambu PLA Basic").
-      Not present on third-party spools and not a reliable identifier. The true identity
-      of a spool is color + tray_info_idx (base profile catalog code, e.g. "GFA00").
-      When name is absent, the vendor name can be derived from tray_info_idx:
-      GFA00="Bambu PLA Basic", GFA01="Bambu PLA Matte", GFB00="Bambu ABS", GFB01="Bambu ASA".
-    - display_name: synthesized human-readable label always present in each spool dict.
-      Rule: "{catalog or type} ({color_name})".
-    - color_name: nearest CSS3 color name for the spool color hex (e.g. "darkorange").
-      Derived from color field; alpha channel stripped before lookup. Use color for
-      programmatic/swatch use; use color_name for human-readable descriptions.
+    Sibling disambiguation: ``get_spool_info`` is filament-centric (one dict per spool, plus
+    the active one). ``get_ams_units`` and ``get_ams_status`` return the same unit payload
+    (temperature, humidity, heater and drying state, tray-existence flags), not filament.
+    ``get_external_spool`` returns the external holder trays alone: 254, and also 255 on a
+    dual-nozzle printer.
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+
+    Returns:
+        ``{"active_spool": dict | None, "spools": [dict]}``. The active spool is the one whose
+        ams_id and slot_id match the state's active_ams_id and active_tray_id; it is None when
+        none matches. The list has an entry for every AMS slot the printer reports, empty ones
+        included, plus the external holder entries, so its length is not the number of
+        physical spools; an entry with an empty ``type`` holds no filament. Per-spool keys:
+        ``id`` (0-23 for AMS trays, 254/255 for external holders), ``slot_id`` (slot within
+        the unit, or the holder id; -1 on a placeholder), ``ams_id`` (firmware unit id; -1 for
+        external), name, type, sub_brands, color, tray_info_idx, k, bed_temp,
+        nozzle_temp_min/max, drying_temp, drying_time, remaining_percent, state, total_length,
+        tray_weight, plus the added color_name and display_name. Error shape:
+        ``{"error": "Printer '<name>' not connected"}``.
+
+    Notes:
+        Field semantics:
+        - active_ams_id, active_tray_id: BambuState values used to select active_spool; this
+          tool does not return them (read them from ``get_printer_state``).
+        - active_ams_id: internal chip_id of the AMS unit. 0 = first AMS unit (AMS 2 Pro);
+          128 = AMS HT unit (Bambu's internal ID for AMS HT). NOT the same as the
+          0-based unit_id used by get_ams_units() / load_filament().
+        - active_tray_id: -1 when no tray is active. On a single-extruder printer it is the
+          printer's raw tray_now value (255 mapped to -1). On a dual-extruder printer it is
+          the active extruder's tray id as parsed from its own report. 254 and 255 are the
+          external spool holders (254 = the only holder on a single-nozzle printer, the LEFT
+          holder on a dual-nozzle one; 255 = the RIGHT holder).
+        - Each spool dict: type (str), remaining_percent (0–100, or -1 when the tray reports
+          no 'remain' value; always -1 for a reported external holder, 0 on the placeholder
+          for an absent one), nozzle_temp_min/max (°C), drying_temp (°C), drying_time (hours).
+        - color: a CSS3 colour NAME when the spool's RGB matches one exactly (e.g. "red",
+          "black", "white"), otherwise an 8-digit "#RRGGBBAA" string that includes alpha. It
+          is not always a hex string, so handle both forms. An empty external holder reports
+          tray_color "00000000", which resolves to "black".
+        - name (if present): Bambu Lab vendor-specific brand label (e.g. "Bambu PLA Basic").
+          Not present on third-party spools and not a reliable identifier. The true identity
+          of a spool is color + tray_info_idx (base profile catalog code, e.g. "GFA00").
+          When name is absent, the vendor name can be derived from tray_info_idx:
+          GFA00="Bambu PLA Basic", GFA01="Bambu PLA Matte", GFB00="Bambu ABS",
+          GFB01="Bambu ASA".
+        - display_name: synthesized human-readable label always present in each spool dict.
+          Rule: "{catalog or type} ({color_name})".
+        - color_name: nearest CSS3 color name for the spool color (e.g. "darkorange").
+          Derived from the color field with the alpha channel stripped; when color is already
+          a name, color_name equals it. Use color_name for human-readable descriptions.
+
+        Values are the last telemetry received; they go stale, with no error, while the MQTT
+        session is paused (pause_mqtt_session) or the connection has dropped.
     """
     log.debug("get_spool_info: called for printer=%s", name)
     state = session_manager.get_state(name)
@@ -327,16 +440,34 @@ def get_spool_info(name: str) -> dict:
 
 
 def get_ams_status(name: str) -> dict:
-    """
-    Return the status of all AMS units and their slots.
+    """Return the status of all AMS units.
 
-    Each unit includes temperature, humidity, heater state, drying state, and
-    tray-existence flags. The global AMS status string is also included.
+    WHEN to use: check AMS health, such as humidity, heater and drying state, or the global
+    AMS status, and how many AMS units are connected.
 
-    humidity_index scale: 1=WET (alert, filament needs drying), 5=DRY (good, no
-    action needed). Higher numbers mean DRIER — the scale is counterintuitive.
-    Only values of 1 or 2 indicate a moisture problem. Value 5 = completely dry.
-    Value 0 = sensor reading unavailable (do not treat as wet).
+    Sibling disambiguation: ``get_ams_status`` and ``get_ams_units`` return the identical
+    ``{ams_status, ams_count, units}`` payload from the same printer state; they differ only
+    in name, and ``get_ams_units`` carries the field reference for the units list. A unit
+    reports slot presence (``tray_exists`` booleans), not per-slot filament: use
+    ``get_spool_info`` for filament type, color, and remaining percentage.
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+
+    Returns:
+        ``{"ams_status": str, "ams_count": int, "units": [dict]}``. Each unit includes
+        temperature, humidity, heater state, drying state, and tray-existence flags; ams_status
+        is the global AMS status string and ams_count the number of connected AMS units. Error
+        shape: ``{"error": "Printer '<name>' not connected"}``.
+
+    Notes:
+        humidity_index scale: 1=WET (alert, filament needs drying), 5=DRY (good, no
+        action needed). Higher numbers mean DRIER — the scale is counterintuitive.
+        Only values of 1 or 2 indicate a moisture problem. Value 5 = completely dry.
+        Value 0 = sensor reading unavailable (do not treat as wet).
+
+        Values are the last telemetry received; they go stale, with no error, while the MQTT
+        session is paused (pause_mqtt_session) or the connection has dropped.
     """
     log.debug("get_ams_status: called for printer=%s", name)
     state = session_manager.get_state(name)
@@ -352,27 +483,50 @@ def get_ams_status(name: str) -> dict:
 
 
 def get_hms_errors(name: str) -> dict:
-    """
-    Return the list of active HMS (Health Management System) errors.
+    """Return the printer's HMS (Health Management System) errors, labelled active or Historical.
 
-    Each entry is a dict with numeric error code and a human-readable description.
-    Returns an empty list when no errors are active.
+    WHEN to use: decide whether the printer has a live hardware fault before submitting a
+    job, or explain a failed or paused print.
 
-    Active vs. historical error logic:
-    - An error is ACTIVELY FAULTED only when BOTH a `device_hms` entry AND a
-      `device_error` entry are present for the same code. Only the first device_hms
-      entry paired with a device_error is treated as actively faulted.
-    - A `device_hms` entry with no matching `device_error` = historical / cleared
-      error (no longer active). These are returned with severity="Historical" and
-      is_critical=False.
-    - Historical errors do NOT indicate a current hardware problem and do NOT block
-      printing. Only actively faulted errors (is_critical=True or severity≠"Historical")
-      require attention before submitting a new job.
-    - gcode_state="FAILED" combined with only historical HMS errors means the last
-      job failed but the printer is idle and healthy — ready for a new print.
-    - Error codes follow pattern HMS_XXXX-XXXX-XXXX-XXXX. The first segment encodes
-      the hardware module (e.g. 0x05=AMS, 0x07=Toolhead); the second segment encodes
-      the error category and severity.
+    Sibling disambiguation: ``get_hms_errors`` returns only the HMS error list and the raw
+    print_error code, with the active/historical rule already applied. ``get_printer_state``
+    also carries the same ``hms_errors`` inside its full payload. ``get_pending_alerts``
+    returns pending state-change alerts rather than the current error list.
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+
+    Returns:
+        ``{"hms_errors": [dict], "print_error": int}``. Each hms_errors entry is
+        ``{"code": str (e.g. "HMS_0300-0400-0002-000C"), "msg": str (human-readable
+        description), "module": str, "severity": str, "is_critical": bool, "type":
+        "device_hms" | "device_error", "url": str}``; the code is a string, not a number. The
+        list holds both the active entry and the Historical-labelled ones (see Notes), and is
+        empty only when the printer reports no HMS entries and print_error is 0. Filter on
+        ``severity != "Historical"`` (or ``is_critical``) to see only the active fault.
+        print_error is the printer's numeric print error code (0 when none). Error shape:
+        ``{"error": "Printer '<name>' not connected"}``.
+
+    Notes:
+        Active vs. historical rule (applied by THIS SERVER, not reported by the printer):
+        - A `device_error` entry exists only when print_error != 0, and is listed first.
+        - If a `device_error` is present, the FIRST `device_hms` entry is returned as
+          reported and every later `device_hms` entry is relabelled severity="Historical",
+          is_critical=False. If none is present, EVERY `device_hms` entry is relabelled
+          Historical. Codes are never compared, and `device_error` entries are never relabelled.
+        - "Historical" is a positional label, not a printer-reported cleared state. With
+          print_error == 0, every entry the printer sends is relabelled Historical. Do not read
+          it as proof the hardware is healthy: check print_error and the non-Historical
+          entries, and consider ``clear_print_error`` before submitting a new job.
+        - gcode_state="FAILED" means the last job failed; it says nothing about whether the
+          printer will accept a new one.
+        - `device_hms` codes follow HMS_XXXX-XXXX-XXXX-XXXX. The first segment carries the
+          module byte (0x03=Mainboard, 0x05/0x12=AMS, 0x07=Toolhead, 0x0B=Webcam, 0x10=HMS) in
+          its high byte and the severity mask in its low byte; the other segments are
+          module-specific identifiers. Entries derived from print_error (type "device_error")
+          have two segments: HMS_XXXX-XXXX.
+        - Values are the last telemetry received; they go stale, with no error, while the MQTT
+          session is paused (pause_mqtt_session) or the connection has dropped.
     """
     log.debug("get_hms_errors: called for printer=%s", name)
     state = session_manager.get_state(name)
@@ -386,22 +540,42 @@ def get_hms_errors(name: str) -> dict:
 
 
 def get_print_progress(name: str) -> dict:
-    """
-    Return print progress: percentage complete, current/total layers, and time remaining.
+    """Return print progress: percentage complete, current/total layers, and time remaining.
 
-    Also includes elapsed time in minutes, the current stage name, gcode state, and
-    skipped_objects (list of identify_id integers for objects skipped via skip_objects()).
+    WHEN to use: poll how far along a print is and whether the printer is idle, running,
+    paused, or finished, without pulling the whole job record.
 
-    Field semantics:
-    - gcode_state: string — "IDLE", "PREPARE", "RUNNING", "PAUSE", "FINISH",
-      "FAILED", "SLICING", "INIT".
-      IMPORTANT: "FAILED" means the *last* job failed — the printer is now idle and
-      ready to accept a new print. It does NOT mean the printer is currently broken
-      or blocked. Do NOT treat FAILED gcode_state as a reason to withhold a new job.
-    - stage: integer stage code — see get_job_info() for the full table (0=idle,
-      255=printing normally, 17=paused by user, etc.).
-    - skipped_objects: list of identify_id integers skipped in the current print job.
-      Empty list when no objects have been skipped or no print is active.
+    Sibling disambiguation: ``get_print_progress`` is the compact progress summary and the one
+    that returns ``gcode_state``. ``get_job_info`` returns the full ActiveJobInfo (gcode file,
+    plate number, stage_id) but no gcode_state. ``get_printer_state`` bundles all state in one
+    large response.
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+
+    Returns:
+        ``{"gcode_state", "print_percentage", "current_layer", "total_layers",
+        "elapsed_minutes", "remaining_minutes", "stage_name", "subtask_name",
+        "skipped_objects"}``. Elapsed and remaining time are in minutes. When the printer is
+        connected but has no job record, the job-derived fields read 0 (or "" for stage_name and
+        subtask_name). Error shape: ``{"error": "Printer '<name>' not connected"}``.
+
+    Notes:
+        Field semantics:
+        - gcode_state: string — "IDLE", "PREPARE", "RUNNING", "PAUSE", "FINISH",
+          "FAILED", "SLICING", "INIT".
+          "FAILED" means the *last* job ended in failure; it says nothing about whether the
+          printer will accept a new one. Check get_hms_errors() (print_error and non-Historical
+          entries) and, if a fault error is lingering, clear_print_error(), before submitting
+          a job.
+        - stage: this tool returns the decoded stage as the string ``stage_name``, not as a
+          code. See get_job_info() for the code table (100=Printing, 255=Completed).
+        - skipped_objects: list of identify_id integers skipped in the current print job
+          (objects skipped via skip_objects()). Empty list when no objects have been
+          skipped or no print is active.
+
+        Values are the last telemetry received; they go stale, with no error, while the MQTT
+        session is paused (pause_mqtt_session) or the connection has dropped.
     """
     log.debug("get_print_progress: called for printer=%s", name)
     state = session_manager.get_state(name)
@@ -425,11 +599,24 @@ def get_print_progress(name: str) -> dict:
 
 
 def get_capabilities(name: str) -> dict:
-    """
-    Return the hardware capabilities dict for the printer.
+    """Return the hardware capabilities dict for the printer.
 
-    Capabilities are discovered during the initial MQTT handshake and telemetry
-    analysis. Fields include has_ams, has_dual_extruder, has_camera, etc.
+    WHEN to use: check what the printer supports (AMS, dual extruder, camera, chamber
+    temperature control, detector and auto-recovery support) before choosing a tool or option.
+
+    Sibling disambiguation: ``get_capabilities`` returns the feature flags discovered for this
+    printer. ``get_printer_info`` returns the model, serial number, and firmware version, and
+    ``get_detector_settings`` returns the current detector settings rather than what is
+    supported.
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+
+    Returns:
+        The serialized capabilities dict of boolean flags, for example has_ams,
+        has_dual_extruder, has_camera, has_lidar, has_air_filtration, has_chamber_temp, and the
+        has_*_support flags. Capabilities are discovered during the initial MQTT handshake and
+        telemetry analysis. Error shape: ``{"error": "Printer '<name>' not connected"}``.
     """
     log.debug("get_capabilities: called for printer=%s", name)
     config = session_manager.get_config(name)
@@ -441,10 +628,24 @@ def get_capabilities(name: str) -> dict:
 
 
 def get_printer_info(name: str) -> dict:
-    """
-    Return the printer model, serial number, and firmware version.
+    """Return the printer model, serial number, and firmware version.
 
-    Also includes the AMS firmware version when available.
+    WHEN to use: identify which printer this is (model and serial) and which firmware it runs.
+
+    Sibling disambiguation: ``get_printer_info`` returns identity plus firmware in one call.
+    ``get_firmware_version`` returns the firmware versions alone, and ``get_capabilities``
+    returns what the hardware supports rather than which unit it is.
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+
+    Returns:
+        ``{"model": str, "serial": str, "firmware_version": str, "ams_firmware_version": str}``.
+        model is the printer model enum name, or "UNKNOWN" when the model is not set.
+        firmware_version and ams_firmware_version are strings and read "" until the printer's
+        version/module handshake reply arrives; ams_firmware_version stays "" when no module
+        reports an AMS version. Neither is ever None. Error shape:
+        ``{"error": "Printer '<name>' not connected"}``.
     """
     log.debug("get_printer_info: called for printer=%s", name)
     config = session_manager.get_config(name)
@@ -461,10 +662,23 @@ def get_printer_info(name: str) -> dict:
 
 
 def get_wifi_signal(name: str) -> dict:
-    """
-    Return the Wi-Fi signal strength for the printer in dBm.
+    """Return the Wi-Fi signal strength for the printer in dBm.
 
-    A stronger (less negative) value indicates a better signal.
+    WHEN to use: diagnose flaky telemetry or dropped MQTT messages by checking how strong the
+    printer's Wi-Fi link is.
+
+    Sibling disambiguation: ``get_wifi_signal`` returns only the signal strength. The same
+    value is the ``wifi_signal_strength`` field of ``get_printer_state``.
+    ``get_session_status`` and ``get_printer_connection_status`` report the MQTT session and
+    connection state, not radio signal.
+
+    Args:
+        name: Configured printer name (see ``get_configured_printers``).
+
+    Returns:
+        ``{"wifi_signal": str}``, the signal strength as the printer reports it. A stronger
+        (less negative) value indicates a better signal. Error shape:
+        ``{"error": "Printer '<name>' not connected"}``.
     """
     log.debug("get_wifi_signal: called for printer=%s", name)
     state = session_manager.get_state(name)
