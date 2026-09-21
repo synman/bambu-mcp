@@ -32,44 +32,71 @@ def _api_base() -> str:
 
 
 def get_snapshot(name: str, resolution: str = "native", quality: int = 85, include_status: bool = False) -> dict:
-    """
-    Return a single still frame from the printer camera.
+    """Return a URL for a single still frame from the printer camera (the frame itself is fetched from the URL).
 
-    Returns a URL to fetch the frame via HTTP — do not call MCP recursively.
-    Fetch immediately via bash: `curl -s "$url"` — pre-authorized, no permission needed.
+    WHEN to use: the agent is the consumer of the image, either to describe or analyze the camera view on the
+    human's behalf ("what does the printer look like right now?", "is the print stuck?") or to process the
+    frame directly (vision model input, comparison). The URL returns a JSON document, not raw JPEG bytes, so do
+    not print it to stdout: save it, e.g. `curl -s "$url" -o /tmp/snap.json` — pre-authorized, no permission
+    needed (local GET, read-only) — then read ``saved_path`` from that file and open the JPEG, or decode
+    ``data_uri``. Do not call MCP recursively.
 
-    This tool returns a URL instead of embedding the frame because native-resolution
-    snapshots during active prints reach ~4 MB (well above the MCP token budget).
+    Sibling disambiguation: ``view_stream`` starts the local MJPEG server and opens it in the browser, so use it
+    when the human wants to see the camera feed ("show me", "open the camera"); a raw data_uri is never the right
+    thing to hand a human. ``analyze_active_job`` captures a frame and returns a full active-job state report
+    instead of the raw image. ``get_stream_url`` only reports stream URL information and captures no frame.
 
-    resolution controls image dimensions (resizes before JPEG encoding):
-      "native" — original camera resolution (varies by model; may be 1920×1080 or larger)
-      "1080p"  — 1920×1080
-      "720p"   — 1280×720
-      "480p"   — 854×480
-      "360p"   — 640×360
-      "180p"   — 320×180
+    Args:
+        name: Printer name (see ``get_configured_printers``).
+        resolution: Output image dimensions, resized before JPEG encoding. One of "native" (original camera
+            resolution, varies by model, may be 1920x1080 or larger; default), "1080p" (1920x1080),
+            "720p" (1280x720), "480p" (854x480), "360p" (640x360), "180p" (320x180).
+        quality: JPEG compression, 1-100 (higher = less compression, larger file). Default 85. Typical useful
+            range: 55-95.
+        include_status: When True, the HTTP response also carries a "status" key with live print telemetry.
+            Default False.
 
-    quality controls JPEG compression (1–100, higher = less compression, larger file):
-      Default 85. Typical useful range: 55–95.
+    Returns:
+        ``{"url": "http://localhost:{port}/api/snapshot?printer=...&resolution=...&quality=...&include_status=..."}``
+        on success. ``{"error": "not_connected"}`` if no session is registered under that printer name (never
+        added, or removed by ``disconnect_printer`` / ``remove_printer``); a paused MQTT session still yields a
+        URL, because the frame comes from the camera, not MQTT. This tool captures no frame itself; see Notes
+        for what the URL returns.
 
-    Named profiles (documentation-only — agent picks resolution + quality):
-      native   resolution="native"  quality=85  ~1–4 MB    Calibration, max fidelity
-      high     resolution="1080p"   quality=85  ~500KB–2MB Anomaly detection, strand analysis
-      standard resolution="720p"    quality=75  ~200–400KB Routine AI analysis (default)
-      low      resolution="480p"    quality=65  ~80–150KB  Quick status checks
-      preview  resolution="180p"    quality=55  ~20–40KB   Thumbnails, rapid overviews
+    Notes:
+        This tool returns a URL instead of embedding the frame because native-resolution snapshots during
+        active prints reach ~4 MB (well above the MCP token budget); printing the fetched JSON to stdout would
+        reproduce that overflow, so save it to a file.
 
-    Default to standard (resolution="720p", quality=75) for routine analysis calls.
-    Never use native in polling loops — payload reaches 4 MB per call.
+        Named profiles (documentation-only — the agent picks resolution + quality):
+          native   resolution="native"  quality=85  ~1-4 MB    Calibration, max fidelity
+          high     resolution="1080p"   quality=85  ~500KB-2MB Anomaly detection, strand analysis
+          standard resolution="720p"    quality=75  ~200-400KB Routine AI analysis (default)
+          low      resolution="480p"    quality=65  ~80-150KB  Quick status checks
+          preview  resolution="180p"    quality=55  ~20-40KB   Thumbnails, rapid overviews
+        Default to standard (resolution="720p", quality=75) for routine analysis calls. Never use native in
+        polling loops — payload reaches 4 MB per call.
 
-    include_status=True adds a "status" key with live print telemetry in the HTTP response.
+        The URL returns a JSON document with the keys data_uri (complete data:image/jpeg;base64,... string),
+        saved_path (temp-file copy of the JPEG), width, height, resolution, quality, protocol ("rtsps" for
+        X1/H2D, "tcp_tls" for A1/P1), timestamp (ISO8601 capture time), and status (only when
+        include_status=True). Keys are emitted sorted, so data_uri precedes saved_path and a truncated console
+        dump loses the key that locates the image file. The HTTP endpoint answers 400 with
+        {"error": "not_connected"} (optionally with "detail": "Printer hostname is not set"),
+        {"error": "no_camera", "detail": ...} (printer model has no camera) or
+        {"error": "stream_failed", "detail": ...} (any failure while capturing, resizing or encoding), and 500
+        with {"status": "error", "message": ...} on an unexpected exception.
 
-    The HTTP response shape is identical to the prior direct return:
-      data_uri, width, height, resolution, quality, protocol, timestamp, [status]
+        Each fetch opens a new camera connection (RTSPS: 15 s timeout) unless an RTSPS stream started by
+        ``start_stream`` / ``view_stream`` is already running, in which case its latest frame is reused (RTSPS
+        models only). saved_path is not unique: it is bambu_snap_{name}_{resolution}_{quality}.jpg in the temp
+        directory and the next call with the same parameters overwrites it. resolution="native" with
+        quality=85 returns the camera's original bytes with no re-encode, so quality is not applied. Any
+        resolution string outside the listed values is treated as native (no resize) while the response echoes
+        the string you passed.
 
-    Returns {"url": "http://localhost:{port}/api/snapshot?printer=...&..."}
-    Returns {"error": "not_connected"} if the printer MQTT session is not active.
-    Returns {"error": "no_camera"} if this printer model has no camera (HTTP response).
+        The URL is built from the printer name and parameter values as given, without URL-escaping. The port is
+        the currently bound API server port, falling back to 49152 if it cannot be read.
     """
     log.debug("get_snapshot (url_factory): name=%s resolution=%s quality=%d", name, resolution, quality)
     from session_manager import session_manager
@@ -83,28 +110,52 @@ def get_snapshot(name: str, resolution: str = "native", quality: int = 85, inclu
 
 
 def get_monitoring_data(name: str) -> dict:
-    """
-    Return telemetry history for charting: temperature and fan speed time-series.
+    """Return a URL for the full telemetry history (temperature and fan speed time-series) of a printer.
 
-    Returns a URL to fetch the data via HTTP — the raw payload (~280K chars) exhausts
-    the MCP token budget. Fetch immediately via bash: `curl -s "$url"` — pre-authorized.
+    WHEN to use: you need every rolling telemetry series for charting or analysis in one document. The raw
+    payload (~280K chars) exhausts the MCP token budget, so do not print it: save it immediately via bash,
+    e.g. `curl -s "$url" -o /tmp/monitoring.json` — pre-authorized, no permission needed (local GET,
+    read-only) — then query the file selectively (jq).
 
-    Data is provided as rolling 60-minute collections sampled every ~2.5 seconds.
-    Also includes gcode_state_durations (time spent in each print state per job).
+    Sibling disambiguation: ``get_monitoring_data`` returns all series in full (no health records);
+    ``get_monitoring_history`` with ``raw=False`` returns only a lightweight per-field summary, and with
+    ``raw=True`` returns the same full series plus the job health records; ``get_monitoring_series`` returns one
+    field only. ``open_charts`` renders the same data as a dashboard for a human.
 
-    Note on gcode_state_durations: a FAILED entry does not mean the current job failed.
-    The rolling window captures the prior job's terminal state before the current job
-    started. A print that has been RUNNING continuously will show a small FAILED duration
-    from the previous job alongside its dominant RUNNING duration.
+    Args:
+        name: Printer name (see ``get_configured_printers``).
 
-    Response may be gzip+base64 compressed if the payload is large. Decompress:
-      import gzip, json, base64
-      data = json.loads(gzip.decompress(base64.b64decode(r["data"])))
-    No HTTP fallback route exists for this tool. If the response exceeds the MCP
-    limit, use get_monitoring_series(name, field) to fetch individual fields instead.
+    Returns:
+        ``{"url": "http://localhost:{port}/api/monitoring_data?printer=..."}`` on success.
+        ``{"error": "not_connected"}`` if no session is registered under that printer name (never added, or
+        removed by ``disconnect_printer`` / ``remove_printer``). A paused or dropped MQTT session still returns a
+        URL, but the data stops updating and the URL serves frozen points with no error; check
+        ``get_printer_connection_status`` when freshness matters. This tool fetches no data itself; see Notes
+        for what the URL returns.
 
-    Returns {"url": "http://localhost:{port}/api/monitoring_data?printer=..."}
-    Returns {"error": "not_connected"} if the printer MQTT session is not active.
+    Notes:
+        The URL returns plain JSON (rolling 60-minute collections; one point is recorded per MQTT state update,
+        so spacing follows the printer's update rate and the point count varies) with the keys collections
+        (each series as {"name", "data": [{"t", "v"}, ...]}), gcode_state_durations (see below) and events
+        (heater target-change annotations only: {"t": epoch seconds, "label"}, with labels like "Bed → 60°C",
+        "Chamber → 40°C", "Nozzle 0 → 220°C"; the first target seen for each key emits no event, entries older
+        than 60 minutes are pruned, and no gcode_state or fan-speed events are produced). tool_1 and
+        tool_1_target receive points only when a second extruder is reported, so on a single-nozzle printer
+        they are empty series. A reading the collector could not obtain is stored as 0.0, not omitted. The HTTP
+        endpoint answers 400 with {"error": "not_connected"} if no session is registered for the printer. The
+        endpoint serves this directly, with no gzip+base64 wrapper.
+
+        Note on gcode_state_durations: a flat {gcode_state: seconds} dict for the CURRENT job, not a per-job
+        record and not limited to the 60-minute window. It is reset only when a new, non-empty job name is
+        seen (or the server restarts), so a reprint of the same file, or a job reporting an empty name, keeps
+        accumulating; a FAILED entry can be residue from an earlier run and can keep growing. Read the current
+        gcode_state rather than inferring failure from these durations.
+
+        If the full document is too large to handle, use get_monitoring_series(name, field) to fetch individual
+        fields instead.
+
+        The URL is built from the printer name as given, without URL-escaping. The port is the currently bound
+        API server port, falling back to 49152 if it cannot be read.
     """
     log.debug("get_monitoring_data (url_factory): name=%s", name)
     from session_manager import session_manager
@@ -117,33 +168,60 @@ def get_monitoring_data(name: str) -> dict:
 
 
 def get_monitoring_history(name: str, raw: bool = False) -> dict:
-    """
-    Return telemetry history for charting: temperature and fan speed time-series.
+    """Return a URL for telemetry history: a per-field summary (default) or the full time-series (raw=True).
 
-    Returns a URL to fetch the data via HTTP — raw=True payload (~280K chars) can exhaust
-    the MCP token budget. Fetch immediately via bash: `curl -s "$url"` — pre-authorized.
+    WHEN to use: a quick overview of thermal and fan activity for a printer (default), or precise charting data
+    across all fields (raw=True). The raw=True payload (~280K chars) can exhaust the MCP token budget, which is
+    why this tool returns a URL; do not print it, save it immediately via bash, e.g.
+    `curl -s "$url" -o /tmp/monitoring.json` — pre-authorized, no permission needed (local GET, read-only) —
+    then query the file selectively (jq).
 
-    When raw=False (default), returns a lightweight summary with {min, max, avg,
-    last, count} statistics for each field, plus gcode_state_durations. Use this
-    for a quick overview of thermal and fan activity without transferring the full
-    time-series.
+    Sibling disambiguation: ``get_monitoring_series`` returns the full series for a single field and is the
+    better choice when you need only one metric; ``get_monitoring_data`` returns the full series for every
+    field without the job health records, whereas ``get_monitoring_history(raw=True)`` adds them.
 
-    When raw=True, returns the complete rolling 60-minute time-series for all 8
-    fields (~1440 data points each). Use raw=True only when you need precise
-    charting data. For a single field, prefer get_monitoring_series() instead.
+    Args:
+        name: Printer name (see ``get_configured_printers``).
+        raw: False (default) for a lightweight summary of {min, max, avg, last, count} per field plus
+            gcode_state_durations, with no transfer of the full time-series. True for the complete rolling
+            60-minute time-series for all fields (one point per MQTT state update); use it only when you need
+            precise charting data. For a single field, prefer ``get_monitoring_series``.
 
-    Data is sampled every ~2.5 seconds. Fields: tool, tool_1 (H2D second nozzle),
-    bed, chamber, part_fan, aux_fan, exhaust_fan, heatbreak_fan.
+    Returns:
+        ``{"url": "http://localhost:{port}/api/monitoring_history?printer=...&raw=true|false"}`` on success.
+        ``{"error": "not_connected"}`` if no session is registered under that printer name (never added, or
+        removed by ``disconnect_printer`` / ``remove_printer``). A paused or dropped MQTT session still returns
+        a URL, but the data stops updating and the URL serves frozen points with no error; check
+        ``get_printer_connection_status`` when freshness matters. This tool fetches no data itself; see Notes
+        for what the URL returns.
 
-    Also includes gcode_state_durations (time spent in each print state per job).
+    Notes:
+        One point is recorded per MQTT state update, so spacing follows the printer's update rate and the
+        point count varies. Fields include tool, tool_1 (H2D second nozzle), bed, chamber, part_fan, aux_fan,
+        exhaust_fan, heatbreak_fan, plus the target series tool_target, tool_1_target, bed_target,
+        chamber_target. tool_1 and tool_1_target receive points only when a second extruder is reported, so on
+        a single-nozzle printer they are empty (count 0, null stats), not an error. A reading the collector
+        could not obtain is stored as 0.0, not omitted.
 
-    Note on gcode_state_durations: a FAILED entry does not mean the current job failed.
-    The rolling window captures the prior job's terminal state before the current job
-    started. A print that has been RUNNING continuously will show a small FAILED duration
-    from the previous job alongside its dominant RUNNING duration.
+        With raw=False the URL returns plain JSON {"summary": {field: {count, min, max, avg, last}},
+        gcode_state_durations}. With raw=True it returns {"collections": {field: {"name", "data": [{"t", "v"},
+        ...]}}, gcode_state_durations, events}, where events are heater target-change annotations only
+        ({"t": epoch seconds, "label"}, e.g. "Bed → 60°C"; no gcode_state or fan events). In both cases a
+        "health" key is added when job health history exists for the printer: with raw=True it is the list of
+        health records, with raw=False it is {min, max, avg, last, count} statistics for success_pct,
+        confidence, hot_pct, strand_score, diff_score and remaining_min. Health data comes from the job
+        monitor's history, capped at the 60 most recent analysis records. The HTTP endpoint answers 400 with
+        {"error": "not_connected"} if no session is registered for the printer, and serves the JSON directly
+        with no gzip+base64 wrapper.
 
-    Returns {"url": "http://localhost:{port}/api/monitoring_history?printer=...&raw=..."}
-    Returns {"error": "not_connected"} if the printer MQTT session is not active.
+        gcode_state_durations is a flat {gcode_state: seconds} dict for the CURRENT job, not a per-job record
+        and not limited to the 60-minute window. It is reset only when a new, non-empty job name is seen (or
+        the server restarts), so a reprint of the same file, or a job reporting an empty name, keeps
+        accumulating; a FAILED entry can be residue from an earlier run and can keep growing. Read the current
+        gcode_state rather than inferring failure from these durations.
+
+        The URL is built from the printer name as given, without URL-escaping. The port is the currently bound
+        API server port, falling back to 49152 if it cannot be read.
     """
     log.debug("get_monitoring_history (url_factory): name=%s raw=%s", name, raw)
     from session_manager import session_manager
@@ -157,25 +235,48 @@ def get_monitoring_history(name: str, raw: bool = False) -> dict:
 
 
 def get_monitoring_series(name: str, field: str) -> dict:
-    """
-    Return the full time-series for a single telemetry field.
+    """Return a URL for the full rolling time-series of a single telemetry field.
 
-    Returns a URL to fetch the data via HTTP — the time-series payload (~120K chars)
-    consumes 40%+ of the MCP token budget. Fetch immediately via bash:
-    `curl -s "$url"` — pre-authorized, no permission needed.
+    WHEN to use: you want to chart or inspect one metric (for example the bed temperature) without pulling all
+    series. The time-series payload (~120K chars) consumes 40%+ of the MCP token budget, so do not print it:
+    save it immediately via bash, e.g. `curl -s "$url" -o /tmp/series.json` — pre-authorized, no permission
+    needed (local GET, read-only) — then query the file selectively (jq).
+    Call ``get_monitoring_history`` first (default raw=False) to see the summary for all fields, then call this
+    for the specific field(s) you want to chart.
 
-    field must be one of: tool, tool_1, bed, chamber, part_fan, aux_fan,
-    exhaust_fan, heatbreak_fan.
+    Sibling disambiguation: ``get_monitoring_series`` returns the complete rolling 60-minute data for one field
+    only, served as plain uncompressed JSON (roughly 120K characters). Use it instead of
+    ``get_monitoring_history(raw=True)`` (or ``get_monitoring_data``), which transfer all series at once.
 
-    Returns the complete rolling 60-minute data for that field only (~1440 points,
-    ~22 KB compressed). Use this instead of get_monitoring_history(raw=True) when
-    you only need one metric — it avoids transferring all 8 series at once.
+    Args:
+        name: Printer name (see ``get_configured_printers``).
+        field: Telemetry field to fetch. Must be one of: tool, tool_1, bed, chamber, part_fan, aux_fan,
+            exhaust_fan, heatbreak_fan. The HTTP endpoint also accepts the target series (tool_target,
+            tool_1_target, bed_target, chamber_target) and the job health fields (success_pct, confidence,
+            hot_pct, strand_score, diff_score, remaining_min). The tool does not validate ``field``; an
+            unknown value is rejected by the HTTP endpoint.
 
-    Call get_monitoring_history() first (default raw=False) to see the summary
-    for all fields, then call this for the specific field(s) you want to chart.
+    Returns:
+        ``{"url": "http://localhost:{port}/api/monitoring_series?printer=...&field=..."}`` on success.
+        ``{"error": "not_connected"}`` if no session is registered under that printer name (never added, or
+        removed by ``disconnect_printer`` / ``remove_printer``). A paused or dropped MQTT session still returns
+        a URL, but the data stops updating and the URL serves frozen points with no error; check
+        ``get_printer_connection_status`` when freshness matters. This tool fetches no data itself; see Notes
+        for what the URL returns.
 
-    Returns {"url": "http://localhost:{port}/api/monitoring_series?printer=...&field=..."}
-    Returns {"error": "not_connected"} if the printer MQTT session is not active.
+    Notes:
+        The URL returns plain JSON {"field": field, "series": {"name": field, "data": [{"t", "v"}, ...]}}. One
+        point is recorded per MQTT state update over a rolling 60-minute window, so the point count varies.
+        tool_1 and tool_1_target receive points only when a second extruder is reported, so on a single-nozzle
+        printer they return an empty series rather than an error. The health fields come from the job
+        monitor's history, capped at the 60 most recent analysis records and empty when no print has been
+        analyzed; the 60-minute window does not apply to them. A telemetry reading the collector could not
+        obtain is stored as 0.0, not omitted. The HTTP endpoint answers 400 with {"error": "not_connected"} if
+        no session is registered for the printer, {"error": "field parameter required"} if field is empty, and
+        {"error": "Unknown field: '<field>'"} for a field that is not a telemetry or health field.
+
+        The URL is built from the printer name and field as given, without URL-escaping. The port is the
+        currently bound API server port, falling back to 49152 if it cannot be read.
     """
     log.debug("get_monitoring_series (url_factory): name=%s field=%s", name, field)
     from session_manager import session_manager

@@ -360,14 +360,19 @@ def _redact_rtsps_url(url: str | None) -> str | None:
 
 
 def get_stream_url(name: str) -> dict:
-    """
-    Return camera stream URL information without starting a server or connecting to the camera.
+    """Return camera stream URL information without starting a server or connecting to the camera.
+
+    WHEN to use: to learn which camera protocol a printer uses, to get the redacted RTSPS URL for an external player (VLC, ffplay), or to check whether a local MJPEG stream is already running before starting one.
+
+    Sibling disambiguation: ``get_stream_url`` only reports state and starts nothing; ``start_stream`` starts the local MJPEG server, ``view_stream`` starts it and opens the browser, and ``get_snapshot`` returns a URL for one still frame.
+
+    Args:
+        name: Printer name (as returned by ``get_configured_printers``).
 
     Returns:
-      protocol        — "rtsps", "tcp_tls", or "none"
-      rtsps_url       — RTSPS URL for X1/H2D printers (password redacted; open with VLC/ffplay), or null
-      local_mjpeg_url — URL of running local MJPEG server, or null if not started
-      streaming       — bool: whether a local MJPEG server is currently active
+        ``{"protocol": "rtsps" | "tcp_tls" | "none", "rtsps_url": str | None, "local_mjpeg_url": str | None, "streaming": bool}``.
+        ``rtsps_url`` is set only for RTSPS printers (X1/H2D) with the password redacted (``rtsps://user:****@host``), otherwise null; ``local_mjpeg_url`` is null when no local MJPEG server is running; ``streaming`` is True when one is.
+        Errors are dicts: ``{"error": "Printer '<name>' not connected"}`` when the printer is not registered, or ``{"error": "not_connected", "detail": "Printer hostname is not set"}`` when it has no hostname.
     """
     log.debug("get_stream_url: called for %s", name)
     printer, err = _get_printer_checked(name)
@@ -386,55 +391,53 @@ def get_stream_url(name: str) -> dict:
 
 
 def start_stream(name: str, port: int | None = None) -> dict:
-    """
-    Start a local MJPEG HTTP server for this printer's camera feed.
+    """Start a local MJPEG HTTP server for this printer's camera feed.
 
-    Connects to the printer camera and begins serving Motion JPEG frames at a local
-    HTTP URL. Any web browser can open this URL to watch the live feed.
+    WHEN to use: to make the live camera feed available at a local URL without opening a browser (for example to hand the URL to the user or another tool). To watch the feed in a browser use ``view_stream`` instead.
 
-    If a stream is already running for this printer, returns the existing server URL
-    without starting a duplicate.
+    Side effects: starts a local MJPEG HTTP server on a port from the shared ephemeral pool (49152-49351 by default; 200 ports, overridable with ``BAMBU_PORT_POOL_START`` / ``BAMBU_PORT_POOL_END``). The server listens on ALL network interfaces, not loopback only, and has NO authentication: anyone on the network who can reach the port can view the live camera feed and the printer's job name, temperatures, fan speeds and HMS errors until ``stop_stream`` is called. The returned URL says ``localhost`` for convenience only. The tool also opens a camera session to the printer (RTSPS or TCP-TLS) and waits up to 15 s (RTSPS) or 30 s (TCP-TLS) for a first frame; a timeout does NOT fail the call and the server still starts. For RTSPS that wait normally runs to the full timeout, because the RTSPS buffer stores frames only while a consumer is attached. Auto-stop applies to RTSPS printers ONLY: it fires 10 s after the last connected MJPEG consumer disconnects and never arms if no consumer ever attached. TCP-TLS streams run until ``stop_stream``. ``start_stream`` itself only creates ``~/.bambu-mcp`` and pre-loads any plate images already on disk; while a browser has the HUD page open, its plate panels poll ``/thumbnail`` and ``/layout``, which resolve the running job's project info (this may download the .3mf over FTPS) and write ``plate_thumb_{name}.png``, ``plate_layout_{name}.png`` and ``active_project_{name}.json`` under ``~/.bambu-mcp``, deleting the two PNGs when a different job is detected. If a stream is already running for this printer nothing is changed and the existing URL is returned.
 
-    The served page includes a live HUD overlay with the following components:
-
-    Top-left HUD panel (dark semi-transparent, polls /status every 2 s):
-      - Badge row: state badge (IDLE/RUNNING/PAUSE/FINISH/FAILED — color-coded) +
-        speed badge (Quiet/Standard/Sport/Ludicrous — shown only while active)
-      - Subtask line: job/file name, truncated with ellipsis
-      - Progress bar: thin 3-px bar, color tracks state
-      - Rows (label + value pairs): Stage, Layers (current/total), Elapsed, Remaining
-      - Temps section: nozzle temp(s) (°C / target), bed temp, chamber temp
-      - Fans section: part cooling %, aux %, exhaust %, heatbreak % (zero-value fans hidden)
-      - Filament swatch: colored dot + type label for the active spool
-      - AMS humidity index
-      - Wi-Fi signal bars (unicode block chars, color-tiered by strength)
-      - HMS error links (clickable, open Bambu error page in popup)
-      - Chamber door/lid warning: orange banner when chamber door or lid is open (H2D only)
-
-    Top-right FPS counter:
-      - Numeric FPS readout + 5-column animated bar graph (green/amber/red by rate)
-
-    Bottom image panels (appear when a print job is active):
-      - PLATE PREVIEW panel (bottom-left): side-by-side isometric thumbnail (left) + plate layout (right)
-
-    Right-side JOB HEALTH panel (appears when a print is active):
-      - Verdict badge: CLEAN / WARNING / CRITICAL / STANDBY (color-coded composite score)
-      - Metrics section: Hot px %, Strand, Diff, Layer, Progress
-      - Trends section: 4 rolling sparklines (Success %, Confidence %, Nozzle °C, Bed °C)
-      - AI Detection section: annotated anomaly overlay + Air Zone / Plate Zone / Heat Map
-        legend; expands health panel to full width
-      - Failure Drivers section: 8-factor spider chart (factors_radar image)
-      - Polls /job_state every 8 s; auto-expands when RUNNING/PAUSE/FAILED/FINISH
+    Sibling disambiguation: ``start_stream`` only starts the server; ``view_stream`` starts it (if needed) and also opens it in the browser; ``stop_stream`` shuts it down; ``get_stream_url`` reports whether it is running without starting it.
 
     Args:
-      name — printer name
-      port — optional preferred port; defaults to next available port in the shared
-             ephemeral pool (IANA RFC 6335 range 49152–49251 by default)
+        name: Printer name (as returned by ``get_configured_printers``).
+        port: Optional preferred port; defaults to the next available port in the shared ephemeral pool (49152-49351 by default). Ignored when a stream is already running.
 
     Returns:
-      url      — http://localhost:{port}/ — open in any browser to watch live
-      port     — the allocated port number
-      protocol — "rtsps" or "tcp_tls"
+        ``{"url": "http://localhost:{port}/", "port": int, "protocol": "rtsps" | "tcp_tls"}``; the same shape is returned whether the stream was just started or was already running.
+        Errors are dicts: ``{"error": "Printer '<name>' not connected"}`` when the printer is not registered; ``{"error": "not_connected", "detail": "Printer hostname is not set"}``; ``{"error": "no_camera", "detail": "This printer model does not have a camera"}``; ``{"error": "stream_failed", "detail": str}`` when opening the camera session or starting the server raises.
+
+    Notes:
+        The served page includes a live HUD overlay with the following components.
+
+        Top-left HUD panel (dark semi-transparent, polls /status every 2 s):
+          - Badge row: state badge (IDLE/RUNNING/PAUSE/FINISH/FAILED — color-coded) +
+            speed badge (Quiet/Standard/Sport/Ludicrous — shown only while active)
+          - Subtask line: job/file name, truncated with ellipsis
+          - Progress bar: thin 3-px bar, color tracks state
+          - Rows (label + value pairs): Stage, Layers (current/total), Elapsed, Remaining
+          - Temps section: nozzle temp(s) (°C / target), bed temp, chamber temp
+          - Fans section: part cooling %, aux %, exhaust %, heatbreak % (zero-value fans hidden)
+          - Filament swatch: colored dot + type label for the active spool
+          - AMS humidity index (shown only when the index is 1 or 2)
+          - Wi-Fi signal bars (unicode block chars, color-tiered by strength)
+          - HMS error links (clickable, open Bambu error page in popup)
+          - Chamber door/lid warning: orange banner when chamber door or lid is open (no model gate)
+
+        Top-right FPS counter:
+          - Numeric FPS readout + line chart of the last 60 FPS samples (hidden when FPS is 0)
+
+        Bottom image panels (appear when a print job is active):
+          - PLATE PREVIEW panel (bottom-left): side-by-side isometric thumbnail (left) + plate layout (right)
+
+        Right-side JOB HEALTH panel (appears when a print is active):
+          - Verdict badge: CLEAN / WARNING / CRITICAL / STANDBY (color-coded composite score)
+          - Metrics section: Hot px %, Strand, Diff
+          - Trends section: 4 rolling sparklines (Success %, Confidence %, Nozzle °C, Bed °C)
+          - Failure Drivers section: 8-factor spider chart (factors_radar image)
+          - Polls /job_state every 8 s; auto-expands when RUNNING/PAUSE/FAILED/FINISH
+
+        The HUD's FPS gauge is scaled to 0.5 fps for TCP-TLS printers (A1/P1) and 30 fps for RTSPS printers; the server does NOT throttle, and frames are served at whatever rate the camera delivers them. The stream itself always carries native frames; per-client resolution and quality are applied by ``view_stream``.
     """
     log.debug("start_stream: called for %s port=%s", name, port)
     printer, err = _get_printer_checked(name)
@@ -627,12 +630,20 @@ def start_stream(name: str, port: int | None = None) -> dict:
 
 
 def stop_stream(name: str) -> dict:
-    """
-    Stop the local MJPEG HTTP server for this printer and disconnect from the camera.
+    """Stop the local MJPEG HTTP server for this printer and disconnect from the camera.
+
+    WHEN to use: to release the stream's port and the camera session once nobody needs the live feed, or before restarting the stream cleanly.
+
+    Side effects: shuts down the printer's local MJPEG HTTP server (any open browser tab loses the feed), releases its port back to the shared ephemeral pool, and closes the camera session (for RTSPS this also removes the live stream from the registry that snapshots reuse). When no stream is running nothing is changed.
+
+    Sibling disambiguation: ``stop_stream`` tears down what ``start_stream`` or ``view_stream`` started; ``get_stream_url`` reports whether a stream is running without changing anything.
+
+    Args:
+        name: Printer name. It is not validated against the connected printers; a name with no running stream simply reports ``stopped: false``.
 
     Returns:
-      stopped — bool: True if a server was running and has been stopped
-      name    — the printer name
+        ``{"stopped": bool, "name": str}``; ``stopped`` is True if a server was running and has been stopped, False if none was running.
+        This tool returns no error dict.
     """
     log.debug("stop_stream: called for %s", name)
     stopped = mjpeg_server.stop(name)
@@ -646,66 +657,71 @@ def analyze_active_job(
     quality: str = "auto",
     categories: list = None,
 ) -> dict:
-    """
-    Capture the live camera frame and produce a full active job state report.
+    """Capture the live camera frame and produce a full active job state report.
 
-    Returns a cohesive suite of digital assets representing every meaningful
-    dimension of the active print job:
+    WHEN to use: proactively during an active print, to assess print health (anomaly and strand scores, failure probability, verdict) from a fresh camera frame on the AI agent's own behalf; do not wait for the user to ask. The agent is the consumer of the returned image assets.
 
-    Categories:
-      P — Project Identity  : project_thumbnail_png, project_layout_png
-      C — Live Camera       : raw_png, diff_png (when reference stored)
-      D — Anomaly Detection : air_zone_png, mask_png, annotated_png, heat_png, edge_png
-      H — Print Health      : health_panel_png
-      X — Composite         : job_state_composite_png (default primary output)
+    Sibling disambiguation: ``open_job_state`` shows the latest cached background-monitor images to the human in a viewer and neither captures nor analyzes; ``get_snapshot`` returns a URL for one raw still frame with no analysis; ``analyze_active_job`` captures a new frame, analyzes it and returns the report with ``data_uri`` image assets.
 
-    Spaghetti / strand detection is the anomaly sub-module (Category D). It is one
-    lens within the larger report, not the deliverable itself.
+    Args:
+        name: Printer name (as returned by ``get_configured_printers``).
+        store_as_reference: When True, stores the captured frame as the per-printer diff baseline. That baseline is SHARED with the background monitor (which stores one itself when none exists, so a reference usually already exists during a print) and is evicted after 10 minutes. The same call then compares the frame with itself, so ``diff_score`` is 0.0 and ``diff_png`` is a self-diff; later calls produce a real diff. Default False.
+        quality: Output resolution: "auto" (default) scales with verdict severity (clean=preview, warning=standard, critical=full); "preview" is 320×180, ~5 KB per asset; "standard" is 640×360, ~16 KB per asset; "full" is the original camera resolution.
+        categories: List of category letters selecting which image assets are returned (case-insensitive); default None means ["X"], the composite only. Pass several letters to include more. See Notes for the categories and their sizes.
 
-    Spaghetti score thresholds (Obico-derived + xcam tier mapping):
-      clean   < 0.08
-      warning   0.08 – 0.20
-      critical ≥ 0.20
+    Returns:
+        On success a dict of scalar fields: ``verdict``, ``stable_verdict``, ``success_probability``, ``decision_confidence``, ``factor_contributions``, ``anomaly_score``, ``hot_pct``, ``strand_score``, ``diff_score`` (null with no live reference, and during stages where the diff signal is suppressed), ``reference_age_s`` (null without a reference), ``quality``, ``layer``, ``total_layers``, ``progress_pct`` and ``timestamp``, plus one data URI per requested category: X adds ``job_state_composite_jpg`` (JPEG); P adds ``project_thumbnail_png`` and ``project_layout_png``; C adds ``raw_png`` and ``diff_png``; D adds ``air_zone_png``, ``mask_png``, ``annotated_png``, ``heat_png``, ``edge_png`` and ``factors_radar_png``; H adds ``health_panel_png``. Asset values are null when that image was not produced. ``stable_verdict`` is NOT computed by this tool and is always "clean", even when ``verdict`` is warning or critical; use ``verdict``. ``decision_confidence`` is computed against a single-sample confidence window and a fixed "clean" stability modifier, so it is not comparable to the background monitor's value for the same frame. ``decision_confidence`` is null if its own computation raises. If the failure-probability computation raises, the tool raises ``UnboundLocalError`` (``factor_contributions`` is never set) instead of returning an error dict.
+        Errors are dicts: ``{"error": "Printer '<name>' not connected"}`` or ``{"error": "not_connected", "detail": "Printer hostname is not set"}`` from the printer lookup; ``{"error": "no_camera", "detail": "This printer model does not have a camera"}``; ``{"error": "not_connected"}`` when the printer has no MQTT state; ``{"error": "stream_failed", "detail": str}`` when the frame capture fails; ``{"error": "analysis_failed", "detail": str}`` when the analyzer raises. This tool does not check gcode_state itself and never returns ``no_active_job``.
 
-    store_as_reference=True stores the current frame as the diff baseline for this
-    printer. On subsequent calls the diff assets (diff_png, Category C2) become active.
+    Notes:
+        Categories:
+          P — Project Identity  : project_thumbnail_png, project_layout_png
+          C — Live Camera       : raw_png, diff_png (when reference stored)
+          D — Anomaly Detection : air_zone_png, mask_png, annotated_png, heat_png, edge_png
+          H — Print Health      : health_panel_png
+          X — Composite         : job_state_composite_jpg (default primary output)
 
-    quality controls output resolution:
-      "auto"     — scales with verdict severity (clean=preview, warning=standard, critical=full)
-      "preview"  — 320×180, ~5 KB per asset
-      "standard" — 640×360, ~16 KB per asset
-      "full"     — original camera resolution
+        Spaghetti / strand detection is the anomaly sub-module (Category D). It is one
+        lens within the larger report, not the deliverable itself.
 
-    categories controls which image assets are returned (default: ["X"] — composite only).
-    Pass multiple letters to include more assets. Estimated sizes at standard quality:
-      X only  (default) : ~25 KB total   — composite image (camera + overlays + health strip)
-      H                 : ~8 KB          — health strip
-      C                 : ~35 KB         — raw + diff frames
-      D                 : ~80 KB         — all anomaly detection images
-      P                 : ~20 KB         — project thumbnail + layout
-      all               : ~160 KB total
+        Verdict thresholds apply to ``anomaly_score`` (the weighted composite of diff, strand,
+        local-variance, edge and hot-pixel terms plus any YOLO boost), not to ``strand_score``.
+        They are defaults that move with the printer's xcam spaghetti-detector sensitivity:
+        with the detector enabled, high = 0.06 / 0.15 and low = 0.12 / 0.30; medium or detector
+        disabled = 0.08 / 0.20 (clean below warn, warning between, critical at or above crit).
 
-    The composite (X) is encoded as JPEG for efficiency. All other assets are PNG.
-    The composite (job_state_composite_jpg) is an AI-analysis artifact — the AI agent
-    consumes it to describe print health. To open it for human viewing, call open_job_state().
+        Every call also fetches the running job's plate thumbnail and layout (this may download
+        the .3mf over FTPS and write the local metadata cache), and the analyzer builds every
+        image asset regardless of ``categories``. ``categories`` only limits which assets are
+        RETURNED; it does not reduce the work done.
 
-    Returns {"error": "no_camera"} if this printer has no camera.
-    Returns {"error": "not_connected"} if the MQTT session is not active.
-    Returns {"error": "no_active_job"} if the printer is idle (gcode_state IDLE/FINISH).
+        Estimated sizes at standard quality:
+          X only  (default) : ~25 KB total   — composite image (camera + overlays + health strip)
+          H                 : ~8 KB          — health strip
+          C                 : ~35 KB         — raw + diff frames
+          D                 : ~80 KB         — all anomaly detection images
+          P                 : ~20 KB         — project thumbnail + layout
+          all               : ~160 KB total
 
-    Background monitor: a health monitor daemon runs automatically during active prints,
-    capturing frames every ~60 seconds and computing anomaly scores, print health verdicts,
-    and temperature trends. The monitor runs without any agent action — its results are
-    cached and merged into this tool's response. Call this tool proactively during prints
-    to describe health to the user; do not wait for explicit requests. The first background
-    result is available ~60 seconds after print start. Use open_job_state() to open the
-    latest cached result for human viewing without re-analyzing.
+        The composite (X) is encoded as JPEG for efficiency. All other assets are PNG.
+        The composite (job_state_composite_jpg) is an AI-analysis artifact — the AI agent
+        consumes it to describe print health. To open it for human viewing, call open_job_state().
 
-    Note: this tool returns raw base64 image data URIs which may exceed the CLI inline
-    display limit. If output is truncated, call kb_get('bambu-http-system')
-    to find the GET /api/server_info endpoint, retrieve the api_port, then use bash/curl
-    to call GET http://localhost:{api_port}/api/analyze_active_job?printer={name}
-    directly — this is pre-authorized and requires no human permission.
+        Background monitor: a health monitor daemon runs automatically during active prints,
+        capturing frames about every 60 seconds and computing anomaly scores, print health
+        verdicts, and temperature trends. It runs independently of this tool: this tool does
+        NOT read the monitor's cache, and every call returns only the analysis of the frame it
+        just captured. Call this tool proactively during prints to describe health to the user;
+        do not wait for explicit requests. The monitor resets its timer when a job starts, so
+        its first result lands on the next loop tick after the transition to RUNNING/PAUSE, not
+        60 seconds later; a tick produces nothing when no camera frame can be captured. Use
+        open_job_state() to open the latest cached result for human viewing without re-analyzing.
+
+        This tool returns raw base64 image data URIs which may exceed the CLI inline
+        display limit. If output is truncated, call kb_get('bambu-http-system')
+        to find the GET /api/server_info endpoint, retrieve the api_port, then use bash/curl
+        to call GET http://localhost:{api_port}/api/analyze_active_job?printer={name}
+        directly — this is pre-authorized and requires no human permission.
     """
     import base64
     from datetime import datetime, timezone
@@ -947,27 +963,31 @@ def analyze_active_job(
 
 
 def open_job_state(name: str) -> dict:
-    """
-    Open the latest background monitor job state images in the system default viewer.
+    """Open the latest background monitor job state images in the system default viewer.
 
-    Reads the most recent result from the background print health monitor cache and
-    saves each image asset to /tmp, then opens the composite view in the default
-    image viewer. Use this when the human user wants to *see* the current print
-    health diagnostic output — anomaly detection overlays, health panel, and composite.
+    WHEN to use: when the human user wants to *see* the current print health diagnostic output — anomaly detection overlays, health panel and composite — without re-analyzing.
 
-    This is the human-facing counterpart to analyze_active_job():
-      - analyze_active_job() → AI agent consumes data_uri assets for analysis
-      - open_job_state()     → human user sees the same assets opened in a viewer
+    Sibling disambiguation: this is the human-facing counterpart to ``analyze_active_job``: ``analyze_active_job`` captures a new frame and returns ``data_uri`` assets for the AI agent to analyze; ``open_job_state`` writes the already-cached monitor images to disk and opens them for the human. ``view_stream`` shows the live camera feed instead of cached diagnostics.
 
-    Images opened (all present in the latest background monitor result):
-      - composite  : full 3-panel diagnostic view (camera + overlays + health strip)
-      - annotated  : camera frame with anomaly detection markup
-      - health     : narrow health strip (verdict, score, hot_pct, stable_verdict)
-      - raw        : unprocessed camera frame for comparison
+    Args:
+        name: Printer name (as returned by ``get_configured_printers``).
 
-    Returns {"error": "no_result"} if the background monitor has not yet produced
-    a result for this printer (first analysis runs ~60s after print start).
-    Returns {"error": "not_connected"} if the printer is not connected.
+    Returns:
+        On success ``{"opened": int, "composite_path": str | None, "paths": [str], "verdict", "stable_verdict", "score", "layer", "total_layers", "progress_pct", "timestamp"}``, where ``paths`` lists the image files written and opened and the other fields are copied from the cached monitor result.
+        Errors are dicts: ``{"error": "no_result", "detail": ...}`` when the printer has no cached monitor result (no monitor, or no result yet for the current job); ``{"error": "no_images", "detail": "Monitor result contains no image assets"}`` when the cached result carries no image data URIs, which is also what a result reloaded from disk after a daemon restart returns, because reloaded results have their image assets stripped. This tool does not check printer connectivity itself and never returns ``not_connected``.
+
+    Notes:
+        Reads the most recent result from the background print health monitor cache, saves each image asset to ``/tmp/bambu_job_state_{name}_{label}.png`` (overwriting any earlier file of that name) and launches the macOS ``open`` command on each file, composite first.
+
+        The cached result persists after a print ends and is cleared only when a new job starts, so the images opened may belong to the PREVIOUS job; check the returned ``timestamp``.
+
+        Images opened (only those actually carried by the latest result are written and opened):
+          - composite  : full 3-panel diagnostic view (camera + overlays + health strip)
+          - annotated  : camera frame with anomaly detection markup
+          - health     : narrow health strip (verdict, score, hot_pct, stable_verdict)
+          - raw        : unprocessed camera frame for comparison
+
+        The ``score`` field is read from the monitor result key ``score``; the monitor result stores its score under ``anomaly_score``, so ``score`` comes back null.
     """
     import base64
     import subprocess
@@ -1077,50 +1097,40 @@ return false
 
 
 def view_stream(name: str, resolution: str = "native", quality: int = 85) -> dict:
-    """
-    Start the local MJPEG camera stream server (if not already running) and open it
-    in the system default browser.
+    """Start the local MJPEG camera stream server (if not already running) and open it in the system default browser.
 
-    Uses Python's webbrowser.open() which delegates to the OS default browser — works
-    on macOS, Linux, and Windows without any extra dependencies.
+    WHEN to use: when the human user wants to *see* the live camera feed ("show me", "open the camera", "let me see what it's doing"). It is the right choice over returning a raw image to a human in a chat or terminal.
 
-    resolution and quality control the per-client stream appearance. The underlying
-    MJPEG server always receives native frames; each browser tab applies the requested
-    transform independently. Multiple view_stream calls with different settings open
-    independent tabs at their own quality — all sharing one server port.
+    Side effects: starts the printer's local MJPEG HTTP server if it is not already running, with every side effect of ``start_stream`` (a port bound from the shared pool, a camera session opened, plate images written under ``~/.bambu-mcp``); on macOS runs ``osascript`` to look for an already-open Chrome or Safari tab on the stream and focus it; otherwise calls Python's ``webbrowser.open`` on a small portal page (``/open``) that opens the stream in a browser window named ``bambu-{name}`` and then closes itself. The server stays running afterwards until ``stop_stream`` is called, or until its auto-stop fires, which applies to RTSPS printers only. Like ``start_stream``, the server listens on all network interfaces with no authentication.
 
-    resolution — named string (default "native"):
-      "native" — full camera resolution (no resize)
-      "1080p"  — 1920×1080
-      "720p"   — 1280×720
-      "480p"   — 854×480
-      "360p"   — 640×360
-      "180p"   — 320×180
+    Sibling disambiguation: ``view_stream`` starts the server and opens the browser; ``start_stream`` starts the server only and returns the URL; ``get_snapshot`` returns a URL for one still frame for the AI agent to analyze; ``open_job_state`` shows cached diagnostic images rather than the live feed.
 
-    quality — JPEG compression integer 1–100 (default 85).
-      Lower values reduce bandwidth; higher values improve sharpness.
-
-    Named profiles (documentation-only):
-      native   resolution="native"  quality=85  ~1–4 MB/frame  Maximum fidelity (default)
-      high     resolution="1080p"   quality=85  ~500KB–2MB     High detail
-      standard resolution="720p"    quality=75  ~200–400KB     Good balance
-      low      resolution="480p"    quality=65  ~80–150KB      Low bandwidth
-      preview  resolution="180p"    quality=55  ~20–40KB       Minimal bandwidth
-
-    start_stream() is always native (server infrastructure). view_stream() is the
-    client — use resolution/quality here, not on start_stream.
-
-    The browser page shows the live camera feed with a full HUD overlay. See
-    start_stream() for the complete HUD component breakdown (badge, progress bar,
-    temp/fan rows, filament swatch, Wi-Fi signal bars, FPS counter, thumbnail panel,
-    plate layout panel, HMS error links).
+    Args:
+        name: Printer name (as returned by ``get_configured_printers``).
+        resolution: Per-client stream size, one of "native" (default, full camera resolution), "1080p" (1920×1080), "720p" (1280×720), "480p" (854×480), "360p" (640×360) or "180p" (320×180). The value is not validated here.
+        quality: Per-client JPEG compression, an integer 1-100 (default 85). Lower values reduce bandwidth; higher values improve sharpness.
 
     Returns:
-      url            — the local MJPEG stream root URL (http://localhost:{port}/)
-      port           — the server port
-      protocol       — "rtsps" or "tcp_tls"
-      opened         — bool: True if the browser was launched successfully
-      overlay_active — always True; confirms HUD + image panels are active
+        On success ``{"url": str, "port": int, "protocol": "rtsps" | "tcp_tls", "opened": bool, "overlay_active": True}``. ``url`` is the stream root (``http://localhost:{port}/``) with ``?resolution=...&quality=...`` appended when non-default values were requested; ``port`` is the server port; ``opened`` is True if a browser tab was focused or the browser was launched successfully; ``overlay_active`` is always True and confirms the HUD and image panels are active.
+        Errors are the dicts returned by ``start_stream``, passed through unchanged (printer not connected, ``no_camera``, ``stream_failed``).
+
+    Notes:
+        The underlying MJPEG server always receives native frames; each browser tab applies the requested resolution and quality transform independently, and tabs share one server port. On macOS, when a tab whose URL starts with the server URL is already open, it is focused instead of opening a new tab, so a repeat call with different resolution or quality does not apply those settings to the focused tab. Otherwise the portal URL is ``{url}/open?name=bambu-{name}`` plus the resolution and quality parameters when they are non-default; the portal calls ``window.open`` with the window name ``bambu-{name}``, so the browser reuses that window if it is already open (single window per printer) and a repeat call with new resolution or quality replaces its content.
+
+        Named profiles (documentation-only):
+          native   resolution="native"  quality=85  ~1–4 MB/frame  Maximum fidelity (default)
+          high     resolution="1080p"   quality=85  ~500KB–2MB     High detail
+          standard resolution="720p"    quality=75  ~200–400KB     Good balance
+          low      resolution="480p"    quality=65  ~80–150KB      Low bandwidth
+          preview  resolution="180p"    quality=55  ~20–40KB       Minimal bandwidth
+
+        start_stream() is always native (server infrastructure). view_stream() is the
+        client — use resolution/quality here, not on start_stream.
+
+        The browser page shows the live camera feed with a full HUD overlay. See
+        start_stream() for the complete HUD component breakdown (badge, progress bar,
+        temp/fan rows, filament swatch, Wi-Fi signal bars, FPS counter, thumbnail panel,
+        plate layout panel, HMS error links).
     """
     import webbrowser
 
