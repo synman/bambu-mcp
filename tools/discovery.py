@@ -92,7 +92,7 @@ def discover_printers(timeout_seconds: int = 15) -> dict:
             "note": (
                 "access_code is not discoverable via SSDP. "
                 "Retrieve it from the printer's LAN settings (Network > Access Code). "
-                "Then use add_printer(name, ip, serial, access_code) to configure."
+                "Then use add_printer(name, ip, serial, access_code, user_permission=True) to configure."
             ),
         }
     except Exception as e:

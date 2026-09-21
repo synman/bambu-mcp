@@ -195,7 +195,7 @@ def _startup() -> None:
 
         printer_names = get_configured_printer_names()
         if not printer_names:
-            log.info("No printers configured. Use add_printer() to add one.")
+            log.info("No printers configured. Use add_printer(..., user_permission=True) to add one.")
             return
 
         session_manager.start_all()

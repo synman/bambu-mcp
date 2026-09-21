@@ -103,9 +103,14 @@ Printer MQTT sessions restart automatically; streamable-http MCP clients reconne
 transparently to port 25099 (verified 2026-09-14 — no `mcp-reload` needed for CC
 sessions on the http binding; a stdio-bound or stuck client still needs `~/bin/mcp-reload`).
 
-Only restart while printers are idle unless the disruption is acceptable: an active
-print is not interrupted (the printer runs autonomously), but monitoring, camera
-streams, and telemetry capture drop until sessions re-establish.
+**A restart, reload, or code redeploy is safe during a print — it never touches the job.**
+The printer runs the job on its own firmware; the daemon only watches and commands it over
+MQTT, so stopping the daemon neither pauses, stops, nor restarts a print, and there is no
+need to wait for one to finish. The cost is a short observation gap while the sessions
+reconnect: health-monitor camera analysis, telemetry capture and any open MJPEG stream
+pause and must be reopened, and in-memory state resets, including a per-printer verbose
+log flag set through `/api/set_bpm_verbose` (re-set it after the restart). Nothing is sent
+to the printer by the restart itself.
 
 ### Temporary env change (e.g. enable debug logging)
 

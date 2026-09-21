@@ -30,7 +30,7 @@ def get_printer_credentials(name: str) -> dict:
         log.warning("get_printer_credentials: printer '%s' not fully configured (ip=%s serial=%s)", name, bool(ip), bool(serial))
         raise KeyError(
             f"Printer '{name}' not fully configured. "
-            f"Use add_printer('{name}', ip, serial, access_code) to set it up."
+            f"Use add_printer('{name}', ip, serial, access_code, user_permission=True) to set it up."
         )
     log.debug("get_printer_credentials: returning ip=%s serial=%s access_code=<redacted>", ip, serial)
     return {"ip": ip, "access_code": access_code, "serial": serial}
