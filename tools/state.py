@@ -378,11 +378,13 @@ def get_spool_info(name: str) -> dict:
         name: Configured printer name (see ``get_configured_printers``).
 
     Returns:
-        ``{"active_spool": dict | None, "spools": [dict]}``. The active spool is the one whose
-        ams_id and slot_id match the state's active_ams_id and active_tray_id; it is None when
-        none matches. The list has an entry for every AMS slot the printer reports, empty ones
-        included, plus the external holder entries, so its length is not the number of
-        physical spools; an entry with an empty ``type`` holds no filament. Per-spool keys:
+        ``{"active_spool": dict | None, "spools": [dict]}``. The active spool is the one in the
+        active AMS unit (ams_id equal to the state's active_ams_id) whose slot_id or ``id`` equals
+        the state's active_tray_id; the id is tried so a single-extruder printer's absolute tray
+        id reaches units after the first, and the external holders 254 and 255 are matched by
+        slot_id alone. It is None when nothing matches or no tray is active. The list has an
+        entry for every AMS slot the printer reports, empty ones included, plus the external
+        holder entries, so its length is not the number of physical spools; an entry with an empty ``type`` holds no filament. Per-spool keys:
         ``id`` (0-23 for AMS trays, 254/255 for external holders), ``slot_id`` (slot within
         the unit, or the holder id; -1 on a placeholder), ``ams_id`` (firmware unit id; -1 for
         external), name, type, sub_brands, color, tray_info_idx, k, bed_temp,
@@ -398,10 +400,17 @@ def get_spool_info(name: str) -> dict:
           128 = AMS HT unit (Bambu's internal ID for AMS HT). NOT the same as the
           0-based unit_id used by get_ams_units() / load_filament().
         - active_tray_id: -1 when no tray is active. On a single-extruder printer it is the
-          printer's raw tray_now value (255 mapped to -1). On a dual-extruder printer it is
-          the active extruder's tray id as parsed from its own report. 254 and 255 are the
+          printer's raw tray_now value (255 mapped to -1), an absolute tray id: AMS unit n slot
+          s is 4n+s. On a dual-extruder printer it is the low byte of the active extruder's
+          report, the slot inside the active unit: the debug log shows the H2D's AMS HT as
+          32768 (unit 128, slot 0), which reads as active_ams_id 128 with active_tray_id 0.
+          That is why a spool is chosen by unit first (see Returns). 254 and 255 are the
           external spool holders (254 = the only holder on a single-nozzle printer, the LEFT
           holder on a dual-nozzle one; 255 = the RIGHT holder).
+        - Verification limit: the log shows tray_now only as 0, 1 and 255, so no absolute id
+          above 3 (a second AMS unit, or an AMS HT as spool id 16) has been observed on a
+          single-extruder printer; that path follows bpm's code and the spool numbering and
+          is UNVERIFIED on hardware (loading filament to see one would be a printer write).
         - Each spool dict: type (str), remaining_percent (0–100, or -1 when the tray reports
           no 'remain' value; always -1 for a reported external holder, 0 on the placeholder
           for an absent one), nozzle_temp_min/max (°C), drying_temp (°C), drying_time (hours).
@@ -430,11 +439,23 @@ def get_spool_info(name: str) -> dict:
         log.warning("get_spool_info: printer %s not connected", name)
         return _no_printer(name)
     all_spools = [_enrich_spool(_serialize(s)) for s in (state.spools or [])]
-    active = None
-    for s in (state.spools or []):
-        if s.ams_id == state.active_ams_id and s.slot_id == state.active_tray_id:
-            active = _enrich_spool(_serialize(s))
-            break
+    tray = state.active_tray_id
+    # A spool is active when it sits in the active unit (ams_id == active_ams_id) and the tray
+    # names it either way bpm reports it: as the slot inside that unit (dual-extruder printers
+    # report slot & 0xFF, so the H2D AMS HT reads ams 128 tray 0) or as the absolute tray id
+    # (single-extruder printers report the raw tray_now, so unit n slot s reads 4n+s). Matching
+    # the id on its own, or before the unit, would pick AMS unit 0 slot 0 (id 0) for the H2D AMS
+    # HT. 254/255 (external holders) keep the slot rule alone. Tray -1 means no tray is active, so
+    # nothing is searched: the empty external placeholder bpm appends (slot_id -1, ams_id -1)
+    # would otherwise match a -1/-1 state and come back as the active spool.
+    by_id = tray not in (-1, 254, 255)
+    active = None if tray == -1 else next(
+        (s for s in (state.spools or [])
+         if s.ams_id == state.active_ams_id and (s.slot_id == tray or (by_id and s.id == tray))),
+        None,
+    )
+    if active is not None:
+        active = _enrich_spool(_serialize(active))
     log.debug("get_spool_info: returning result for %s", name)
     return {"active_spool": active, "spools": all_spools}
 

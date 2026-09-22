@@ -2,12 +2,20 @@
 camera/job_monitor.py — Background per-printer job health monitor.
 
 Responsibilities:
-  1. Detect job start: when gcode_state transitions into RUNNING/PAUSE from
-     IDLE/FINISH/FAILED (or on MCP startup when a job is already active), capture
-     the first available camera frame and store it as the diff reference.
-  2. Every 60 seconds while a job is active (RUNNING or PAUSE), run the full
-     analyze() pipeline and cache the resulting JobStateReport.
-  3. Expose get_latest_report(printer_name) so /job_state can serve the cache
+  1. Detect job start: when gcode_state transitions into RUNNING/PAUSE from any
+     state a job can start from (IDLE, FINISH, FAILED, SLICING, INIT, unset, or
+     PREPARE, the state a print normally passes through before it reaches RUNNING;
+     see _IDLE_STATES), or on MCP startup when a job is already active, reset the
+     per-job state (cached and persisted result, confidence window, health
+     history, timers, and the analyzer's diff reference frame) so the next loop
+     tick runs at once. A change between RUNNING and PAUSE inside a job is not a
+     job start. The first frame an analysis captures becomes the diff reference,
+     so it is taken once the job is printing, not during preheating or leveling.
+  2. Every 60 seconds while a job is active (RUNNING or PAUSE) and printing, run the
+     full analyze() pipeline and cache the resulting result. While the job is in a
+     preparation or maintenance stage (camera.job_analyzer.is_stage_gated) no camera
+     work is done and an image-less "stage_gated" result is cached instead.
+  3. Expose get_latest_result(printer_name) so /job_state can serve the cache
      instantly without triggering a live analysis on every browser poll.
 
 This module is completely independent of the MJPEG stream — it runs even when
@@ -71,23 +79,22 @@ PRECHECK_HOT_PCT_TRIGGER = 0.06  # ~Obico warning-grade; sourced from Obico thre
 
 # States considered "job active".
 _ACTIVE_STATES = {"RUNNING", "PAUSE"}
-# States considered "job idle" (transition from these triggers reference capture).
-_IDLE_STATES = {"IDLE", "FINISH", "FAILED"}
+# States a job starts from: a change from one of these (or from no state seen yet) into an active
+# state is a new job, and on_update resets the per-job state. PREPARE is here because a print goes
+# PREPARE -> RUNNING; PAUSE is not, so a resume inside a job never resets anything.
+_IDLE_STATES = {"IDLE", "FINISH", "FAILED", "SLICING", "INIT", "", "PREPARE"}
 
-# Stage codes that mean "printing normally" (full analysis runs only in this state).
-# All other codes = gated.  Sources: firmware stage table in get_job_info docstring.
+# Stage gating: full camera analysis runs only while the job is printing. The stage is
+# ActiveJobInfo.stage_id (the printer's stg_cur, kept on the job record, not on BambuState).
+# camera.job_analyzer.is_stage_gated says which stages hold analysis back (bed leveling,
+# preheating, filament change, calibration, pauses: every activity bpm's parseStage names) and
+# parseStage supplies the name, so there is no second stage table here.
+#
+# A stored result reports "stage" as 255 while printing and as the activity code while gated: the
+# HUD in camera/mjpeg_server.py shows STANDBY for any result whose stage is not 255, and
+# api_server.py's no-result fallback uses the same convention. "stage_gated" carries the flag.
 _STAGE_PRINTING = 255
-_STAGE_NAMES: dict[int, str] = {
-    255: "printing",
-    4:   "filament change",
-    6:   "M400 pause",
-    17:  "user pause",
-    8:   "heating nozzle",
-    1:   "auto-leveling",
-    2:   "heatbed preheat",
-    15:  "nozzle clean",
-    0:   "idle",
-}
+_STAGE_PRINTING_NAME = "printing"
 
 # Confidence accumulation: severity ordering for tie-breaking.
 _VERDICT_SEVERITY: dict[str, int] = {"clean": 0, "warning": 1, "critical": 2}
@@ -222,10 +229,6 @@ def _read_print_settings(printer_name: str, job_name: str) -> dict:
     }
 
 
-# States considered "job finished / idle".
-_IDLE_STATES = {"IDLE", "FINISH", "FAILED", "SLICING", "INIT", ""}
-
-
 class _PrinterMonitor:
     """Tracks one printer's job state and runs background analysis."""
 
@@ -236,12 +239,16 @@ class _PrinterMonitor:
         self._latest_report: Optional[object] = None   # JobStateReport
         self._latest_result: Optional[dict] = _load_result(name)  # pre-load from disk
         self._last_analyze_time: float = 0.0
+        self._last_gated_time: float = 0.0   # separate from _last_analyze_time: a gated result must not use up the analysis interval
         self._last_precheck_time: float = 0.0
         self._last_precheck_hot_pct: Optional[float] = None
         self._confidence_window: deque = deque(maxlen=5)
         self._health_history: deque = deque(maxlen=60)    # rolling health-history records
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+        # Bumped by the job-start reset, under self._lock. An analysis remembers the generation it
+        # started in and writes nothing once it has moved on (see _run_analyze).
+        self._job_generation: int = 0
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -285,18 +292,28 @@ class _PrinterMonitor:
             log.debug("job_monitor[%s]: gcode_state %s → %s", self.name, prev_state, new_state)
             self._last_gcode_state = new_state
 
-            # Job just became active — store a reference frame immediately.
+            # A new job started: drop everything the previous job left behind.
             if new_state in _ACTIVE_STATES and (prev_state is None or prev_state in _IDLE_STATES):
-                log.info("job_monitor[%s]: job started (%s) — scheduling initial reference capture", self.name, new_state)
+                from camera.job_analyzer import clear_reference
+                log.info("job_monitor[%s]: job started (%s) — resetting per-job state", self.name, new_state)
                 # Reset analyze timer so next loop tick triggers immediately.
                 self._last_analyze_time = 0.0
-                # Reset per-job accumulators.
-                self._confidence_window.clear()
-                self._fp_history.clear()
-                # Clear stale persisted result from previous job.
+                self._last_gated_time = 0.0
+                # One critical section: bump the generation, drop the per-job accumulators, the cached
+                # and persisted result of the previous job and its diff reference. An analysis of the
+                # previous job that is still capturing or analysing (_run_analyze) checks the
+                # generation under this same lock before every write, so it cannot land between these
+                # steps or after them. The diff reference outlives a job by up to its 10 minute TTL;
+                # without clearing it the new job's first analysis would diff against the previous
+                # job's last frame. The first frame the next analysis captures becomes the new job's
+                # reference.
                 with self._lock:
+                    self._job_generation += 1
+                    self._confidence_window.clear()
+                    self._health_history.clear()
                     self._latest_result = None
-                _clear_result(self.name)
+                    _clear_result(self.name)
+                    clear_reference(self.name)
 
         except Exception as e:
             log.debug("job_monitor[%s]: on_update error: %s", self.name, e)
@@ -316,6 +333,7 @@ class _PrinterMonitor:
                 log.info("job_monitor[%s]: job already active at startup (%s) — capturing initial reference", self.name, state.gcode_state)
                 self._last_gcode_state = state.gcode_state
                 self._last_analyze_time = 0.0  # run immediately on first tick
+                self._last_gated_time = 0.0
         except Exception as e:
             log.debug("job_monitor[%s]: startup state check error: %s", self.name, e)
 
@@ -332,6 +350,8 @@ class _PrinterMonitor:
 
     def _tick(self) -> None:
         from session_manager import session_manager
+        from bpm.bambutools import parseStage
+        from camera.job_analyzer import is_stage_gated
         state = session_manager.get_state(self.name)
         if state is None:
             return
@@ -341,15 +361,17 @@ class _PrinterMonitor:
             return  # nothing to do while idle
 
         now = time.monotonic()
-        stage = getattr(state, "stage", _STAGE_PRINTING)
-        stage_name = _STAGE_NAMES.get(stage, "setup")
+        job = session_manager.get_job(self.name)
+        stage = job.stage_id if job else _STAGE_PRINTING
 
         # --- Stage gating ---
-        if stage != _STAGE_PRINTING:
-            # Publish a gated result without running the camera pipeline.
-            if now - self._last_analyze_time >= ANALYZE_INTERVAL:
-                self._last_analyze_time = now
-                self._store_gated_result(stage, stage_name)
+        if is_stage_gated(stage):
+            # Publish a gated result without running the camera pipeline. Gating leaves
+            # _last_analyze_time alone, so the first analysis runs on the first tick after the
+            # stage ends instead of up to ANALYZE_INTERVAL later.
+            if now - self._last_gated_time >= ANALYZE_INTERVAL:
+                self._last_gated_time = now
+                self._store_gated_result(stage, parseStage(stage))
             return
 
         # --- Fast pre-check (10s) ---
@@ -403,7 +425,7 @@ class _PrinterMonitor:
         try:
             from session_manager import session_manager
             state = session_manager.get_state(self.name)
-            ctx = _build_printer_context(self.name, state) if state else {}
+            ctx = _build_context(self.name, state) if state else {}
         except Exception:
             ctx = {}
         dc = compute_decision_confidence(0, True, ctx)
@@ -426,12 +448,19 @@ class _PrinterMonitor:
 
     def _run_analyze(self, state) -> None:
         """Capture a frame and run the full analysis pipeline."""
-        from camera.job_analyzer import analyze as _analyze, store_reference, get_reference
+        from bpm.bambutools import parseStage
+        from camera.job_analyzer import analyze as _analyze, store_reference, get_reference, is_stage_gated
         from session_manager import session_manager
         import base64
         from datetime import datetime, timezone
 
         printer_name = self.name
+        # The job this analysis belongs to. The capture and the analysis below are slow, and the
+        # next job's start (on_update) can reset the per-job state while they run; every write
+        # further down re-checks the generation under self._lock and drops the result of a job that
+        # is no longer current.
+        with self._lock:
+            generation = self._job_generation
 
         # Capture frame directly — no dependency on an active MJPEG stream.
         jpeg: Optional[bytes] = None
@@ -445,12 +474,18 @@ class _PrinterMonitor:
             log.debug("job_monitor[%s]: no frame available, skipping tick", printer_name)
             return
 
-        # If no reference is stored yet for this printer, this IS the reference.
-        ref_jpeg, ref_age = get_reference(printer_name)
-        if ref_jpeg is None:
-            log.info("job_monitor[%s]: storing initial reference frame", printer_name)
-            store_reference(printer_name, jpeg)
+        # If no reference is stored yet for this printer, this IS the reference. Checked and stored
+        # under the lock the reset clears the reference under: a frame captured for the previous job
+        # must not become the new job's reference.
+        with self._lock:
+            if generation != self._job_generation:
+                log.info("job_monitor[%s]: a new job started during the capture — dropping this analysis", printer_name)
+                return
             ref_jpeg, ref_age = get_reference(printer_name)
+            if ref_jpeg is None:
+                log.info("job_monitor[%s]: storing initial reference frame", printer_name)
+                store_reference(printer_name, jpeg)
+                ref_jpeg, ref_age = get_reference(printer_name)
 
         # Build printer context (mirrors _serve_job_state / analyze_active_job).
         try:
@@ -494,13 +529,19 @@ class _PrinterMonitor:
 
         # Confidence accumulation — deque(maxlen=5), stable after 3+ samples.
         with self._lock:
+            if generation != self._job_generation:
+                log.info("job_monitor[%s]: a new job started during the analysis — dropping its result", printer_name)
+                return
             self._confidence_window.append(report.verdict)
             window_snapshot = list(self._confidence_window)
             precheck_hot_pct = self._last_precheck_hot_pct
 
-        sv = _stable_verdict(self._confidence_window)
-        stage = getattr(state, "stage", _STAGE_PRINTING)
-        stage_name = _STAGE_NAMES.get(stage, "setup")
+        sv = _stable_verdict(window_snapshot)
+        stage = printer_context["stage_id"]
+        if is_stage_gated(stage):
+            stage_name = parseStage(stage)
+        else:
+            stage, stage_name = _STAGE_PRINTING, _STAGE_PRINTING_NAME
 
         # Failure probability — Bayesian model, updated every analysis cycle.
         from camera.job_analyzer import compute_failure_probability, compute_decision_confidence
@@ -518,6 +559,9 @@ class _PrinterMonitor:
         dc = compute_decision_confidence(len(window_snapshot), False, printer_context)
 
         with self._lock:
+            if generation != self._job_generation:
+                log.info("job_monitor[%s]: a new job started during the analysis — dropping its result", printer_name)
+                return
             if fp is not None:
                 self._health_history.append({
                     "ts":            time.time(),
@@ -574,10 +618,15 @@ class _PrinterMonitor:
             "project_layout_png":      _uri(report.project_layout_png),
         }
 
+        # The check, the cached result and the persisted copy are one critical section: the reset
+        # deletes the persisted file under this lock, so a stale copy cannot be written after it.
         with self._lock:
+            if generation != self._job_generation:
+                log.info("job_monitor[%s]: a new job started during the analysis — dropping its result", printer_name)
+                return
             self._latest_report = report
             self._latest_result = result
-        _save_result(self.name, result)
+            _save_result(self.name, result)
 
         log.info("job_monitor[%s]: analysis complete — verdict=%s stable=%s score=%.3f layer=%s/%s",
                  printer_name, report.verdict, sv or "building",
@@ -689,7 +738,7 @@ def _build_context(printer_name: str, state) -> dict:
     printer_obj = session_manager.get_printer(printer_name)
     _model = getattr(getattr(printer_obj, "config", None), "printer_model", None)
     try:
-        from bambu_printer_manager import getPrinterSeriesByModel
+        from bpm.bambutools import getPrinterSeriesByModel
         _series = getPrinterSeriesByModel(_model).name if _model else "UNKNOWN"
     except Exception:
         _series = "UNKNOWN"
@@ -697,7 +746,7 @@ def _build_context(printer_name: str, state) -> dict:
     _speed_raw = getattr(printer_obj, "speed_level", 0) if printer_obj else 0
     _speed_name = getattr(_speed_raw, "name", str(_speed_raw)).upper()
     _caps = getattr(getattr(printer_obj, "config", None), "capabilities", None) if printer_obj else None
-    _flow_type = getattr(getattr(_active_nozzle, "flow_type", None), "name", "STANDARD") if _active_nozzle else "STANDARD"
+    _flow_type = getattr(getattr(_active_nozzle, "flow", None), "name", "STANDARD") if _active_nozzle else "STANDARD"
 
     # Active filament (mirrors tools/camera.py _build_status logic)
     active_filament = build_active_filament(state)

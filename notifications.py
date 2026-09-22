@@ -1,8 +1,8 @@
 """
 notifications.py — Per-printer state change alert store and push bridge.
 
-Detects high-visibility state transitions (gcode_state, stage, HMS errors,
-job health verdict) and queues structured alert dicts for consumption by
+Detects high-visibility state transitions (gcode_state, stage, active HMS
+faults, job health verdict) and queues structured alert dicts for consumption by
 the AI agent via get_pending_alerts() or MCP resource subscription.
 
 Push mechanism:
@@ -24,7 +24,7 @@ Alert schema:
     "printer":   str,   # printer name
     "timestamp": str,   # ISO 8601 UTC
     "severity":  str,   # "high", "medium", or "low"
-    "payload":   dict,  # type-specific fields (see behavioral_rules/alerts knowledge module)
+    "payload":   dict,  # type-specific fields (see kb_get('bambu-state-change-alerts'))
   }
 """
 
@@ -40,45 +40,61 @@ from typing import Any, Optional
 
 log = logging.getLogger(__name__)
 
-# ── Stage name map (all 22 known firmware stage codes) ────────────────────────
-STAGE_NAMES: dict[int, str] = {
-    0:   "idle",
-    1:   "auto-leveling",
-    2:   "heatbed preheating",
-    3:   "sweeping XY mech",
-    4:   "changing filament",
-    6:   "M400 pause",
-    7:   "paused: filament runout",
-    8:   "heating nozzle",
-    9:   "calibrating extrusion",
-    10:  "scanning bed surface",
-    11:  "inspecting first layer",
-    12:  "identifying build plate",
-    13:  "calibrating micro lidar",
-    14:  "homing toolhead",
-    15:  "cleaning nozzle",
-    16:  "checking extruder temp",
-    17:  "paused by user",
-    18:  "paused: front cover removed",
-    19:  "calibrating extrusion flow",
-    20:  "paused: nozzle temp malfunction",
-    21:  "paused: heat bed temp malfunction",
-    255: "printing normally",
-}
+# ── Stages ────────────────────────────────────────────────────────────────────
+# Stage codes and names are bpm's: the printer reports the raw code as stg_cur, bpm stores
+# it on the job record (ActiveJobInfo.stage_id) and names it with bambutools.parseStage.
+# There is deliberately no second table here: a local copy was numbered differently from
+# parseStage (codes 5-21 off by one) and covered only 22 of the ~60 codes bpm knows.
 
-# Stages that warrant a stage_change alert (excludes 255 = printing normally, 0 = idle)
-NOTABLE_STAGES: set[int] = set(STAGE_NAMES.keys()) - {0, 255}
+# Codes that are not a phase worth alerting on: -1/0 = no stage (idle / printing normally),
+# 100 = "Printing", 255 = "Completed". Entering any other stage is a stage_change.
+_QUIET_STAGES = frozenset({-1, 0, 100, 255})
 
 _IDLE_STATES   = {"IDLE", "FINISH", "FAILED", ""}
 _ACTIVE_STATES = {"RUNNING", "PAUSE"}
 
 MAX_ALERTS        = 50    # max queued alerts per printer
-STAGE_DEBOUNCE_S  = 30.0  # suppress stage_change re-fire for same stage within window
+STAGE_DEBOUNCE_S  = 30.0  # suppress a stage_change into a stage already alerted within window
+HMS_DEBOUNCE_S    = 30.0  # suppress a re-alert for an HMS code already alerted within window
 HEALTH_DEBOUNCE_S = 60.0  # suppress health verdict re-fire within window
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _job_stage_id(job: Any) -> Optional[int]:
+    """The current stage code from bpm's job record (ActiveJobInfo), or None if unknown."""
+    try:
+        return int(getattr(job, "stage_id", None))
+    except (TypeError, ValueError):
+        return None
+
+
+def _stage_name(stage_id: int) -> str:
+    """bpm's human name for a stage code; "unknown" where bpm has no name (codes -1 and 0)."""
+    from bpm.bambutools import parseStage
+    return parseStage(stage_id) or "unknown"
+
+
+def _from_telemetry(state: Any) -> bool:
+    """True once a print status frame has populated the state.
+
+    bpm's service_state setter notifies on EVERY connection change, and it builds a state from
+    the get_version reply, both before any status frame has arrived: what the detector is then
+    handed is the never-populated default (gcode_state "IDLE"), which by value is
+    indistinguishable from a real idle printer. Taking it as the baseline makes the first real
+    frame of a print already running a legal IDLE to RUNNING transition, a false ``job_started``.
+
+    The marker is wifi_signal_strength: bpm writes it only from a push_status frame's
+    ``wifi_signal`` (present in every H2D, A1 and P1S push_status frame in bpm's test fixtures),
+    it survives in the state across the frames that omit the key, and its default "" is not a
+    value the printer reports. bpm's ``recent_update`` is not usable here: it is set by the
+    get_version reply, ahead of the first status frame, so it is already True for that reply's
+    default state. If a firmware ever omits the key from its status frames, this gate never
+    opens and that printer raises no alerts.
+    """
+    return bool(getattr(state, "wifi_signal_strength", ""))
 
 
 class _PrinterAlertState:
@@ -88,8 +104,10 @@ class _PrinterAlertState:
         "last_gcode_state",
         "last_stage",
         "last_hms_codes",
+        "hms_alerted",
+        "hms_alert_times",
         "last_verdict",
-        "last_stage_time",
+        "stage_alert_times",
         "last_health_time",
         "alerts",
         "lock",
@@ -98,9 +116,11 @@ class _PrinterAlertState:
     def __init__(self) -> None:
         self.last_gcode_state: Optional[str] = None
         self.last_stage: Optional[int]       = None
-        self.last_hms_codes: frozenset[str]  = frozenset()
+        self.last_hms_codes: frozenset[str]  = frozenset()  # ACTIVE codes at the last update
+        self.hms_alerted: set[str]           = set()  # codes with a raised, not yet cleared alert
+        self.hms_alert_times: dict[str, float] = {}  # HMS code -> monotonic time last alerted
         self.last_verdict: Optional[str]     = None
-        self.last_stage_time: float          = 0.0
+        self.stage_alert_times: dict[int, float] = {}  # stage code -> monotonic time last alerted
         self.last_health_time: float         = 0.0
         self.alerts: deque[dict]             = deque(maxlen=MAX_ALERTS)
         self.lock: threading.Lock            = threading.Lock()
@@ -171,7 +191,8 @@ class NotificationManager:
 
     # ── State check helpers ───────────────────────────────────────────────────
 
-    def _check_gcode_state(self, ps: _PrinterAlertState, name: str, state: Any) -> None:
+    def _check_gcode_state(self, ps: _PrinterAlertState, name: str, state: Any,
+                           active_job: Any) -> None:
         new_gs = (getattr(state, "gcode_state", None) or "").upper()
         prev_gs = ps.last_gcode_state
         if prev_gs == new_gs:
@@ -228,55 +249,61 @@ class NotificationManager:
                 log.debug("notifications: job_project.forget failed: %s", exc)
 
         elif new_gs == "PAUSE" and prev_gs == "RUNNING":
-            sid = getattr(state, "stg_cur", None)
+            sid = _job_stage_id(active_job)
             self._emit(ps, name, "job_paused", "medium", {
                 **job,
                 "stage_id":   sid,
-                "stage_name": STAGE_NAMES.get(int(sid), "unknown") if sid is not None else "unknown",
+                "stage_name": _stage_name(sid) if sid is not None else "unknown",
             })
 
         elif new_gs == "RUNNING" and prev_gs == "PAUSE":
             self._emit(ps, name, "job_resumed", "low", job)
 
-    def _check_stage(self, ps: _PrinterAlertState, name: str, state: Any) -> None:
-        raw_stage = getattr(state, "stg_cur", None)
-        if raw_stage is None:
+    def _check_stage(self, ps: _PrinterAlertState, name: str, active_job: Any) -> None:
+        stage_id = _job_stage_id(active_job)
+        if stage_id is None:
             return
-        try:
-            stage_id = int(raw_stage)
-        except (TypeError, ValueError):
-            return
-
-        if stage_id not in NOTABLE_STAGES:
-            ps.last_stage = stage_id  # track even if not notable
-            return
-
-        if stage_id == ps.last_stage:
-            if time.monotonic() - ps.last_stage_time < STAGE_DEBOUNCE_S:
-                return  # same stage, within debounce window
 
         prev = ps.last_stage
-        ps.last_stage = stage_id
-        ps.last_stage_time = time.monotonic()
+        if stage_id == prev:
+            return  # same stage: not a transition, however long the stage lasts
+        ps.last_stage = stage_id  # tracked even when the transition is not alerted
 
-        if prev is None:
-            return  # first observation
+        if prev is None or stage_id in _QUIET_STAGES:
+            return  # first observation, or entering idle / normal printing
+
+        now = time.monotonic()
+        last_alert = ps.stage_alert_times.get(stage_id)
+        if last_alert is not None and now - last_alert < STAGE_DEBOUNCE_S:
+            return  # flapping back into a stage that was just alerted
+        ps.stage_alert_times[stage_id] = now
 
         self._emit(ps, name, "stage_change", "medium", {
             "stage_id":        stage_id,
-            "stage_name":      STAGE_NAMES.get(stage_id, f"stage_{stage_id}"),
+            "stage_name":      _stage_name(stage_id),
             "prev_stage_id":   prev,
-            "prev_stage_name": STAGE_NAMES.get(prev, f"stage_{prev}"),
+            "prev_stage_name": _stage_name(prev),
         })
 
     def _check_hms(self, ps: _PrinterAlertState, name: str, state: Any) -> None:
+        """Alert on ACTIVE HMS faults only.
+
+        bpm's hms_errors list carries no active/historical distinction (decodeHMS labels an
+        entry from its mask byte alone, so a stale code reads "Fatal"). The server's rule,
+        which get_hms_errors applies, is that a fault is active only as a device_error plus
+        the first device_hms; every other device_hms is relabelled "Historical". The telemetry
+        re-sends and drops those stale entries about once a second, so alerting on the raw list
+        queued a new/cleared pair per flap.
+        """
         try:
+            from tools.state import _apply_hms_historical
             raw = getattr(state, "hms_errors", None) or []
-            new_codes = frozenset(
-                str(e.get("code") or e.get("attr") or "")
-                for e in raw
-                if isinstance(e, dict) and (e.get("code") or e.get("attr"))
-            )
+            active = [
+                e for e in _apply_hms_historical(
+                    [e for e in raw if isinstance(e, dict) and (e.get("code") or e.get("attr"))])
+                if e.get("severity") != "Historical"
+            ]
+            new_codes = frozenset(str(e.get("code") or e.get("attr") or "") for e in active)
         except Exception:
             return
 
@@ -285,22 +312,27 @@ class NotificationManager:
             return
         ps.last_hms_codes = new_codes
 
-        added = new_codes - prev_codes
+        now = time.monotonic()
+        added = {
+            c for c in new_codes - prev_codes
+            if not (c in ps.hms_alert_times and now - ps.hms_alert_times[c] < HMS_DEBOUNCE_S)
+        }  # a code flapping back in within the window was just alerted
         if added:
-            errors_payload: list[dict] = []
-            try:
-                for e in (getattr(state, "hms_errors", None) or []):
-                    code = str(e.get("code") or e.get("attr") or "")
-                    if code in added:
-                        errors_payload.append({
-                            "code":        code,
-                            "description": e.get("description") or e.get("desc") or "",
-                        })
-            except Exception:
-                errors_payload = [{"code": c, "description": ""} for c in added]
+            errors_payload = [
+                {
+                    "code":        str(e.get("code") or e.get("attr") or ""),
+                    "description": e.get("msg") or "No description in the HMS catalogue",
+                }
+                for e in active
+                if str(e.get("code") or e.get("attr") or "") in added
+            ]
+            for code in added:
+                ps.hms_alert_times[code] = now
+            ps.hms_alerted |= added
             self._emit(ps, name, "hms_error_new", "high", {"errors": errors_payload})
 
-        if prev_codes and not new_codes:
+        if prev_codes and not new_codes and ps.hms_alerted:
+            ps.hms_alerted.clear()  # an alert was raised for this episode: close it
             self._emit(ps, name, "hms_error_cleared", "medium", {
                 "prev_error_count": len(prev_codes),
             })
@@ -337,7 +369,7 @@ class NotificationManager:
             payload = {
                 "from_verdict": prev,
                 "to_verdict":   verdict,
-                "score":        result.get("composite_score"),
+                "score":        result.get("anomaly_score"),
             }
             if rank_new > rank_prev:
                 self._emit(ps, name, "health_escalated", "high",   payload)
@@ -356,12 +388,14 @@ class NotificationManager:
         try:
             from session_manager import session_manager
             state = session_manager.get_state(name)
-            if state is None:
+            if state is None or not _from_telemetry(state):
                 return
+            # The stage lives on the job record, not on BambuState (which has no stg_cur).
+            active_job = session_manager.get_job(name)
             ps = self._get_state(name)
             with ps.lock:
-                self._check_gcode_state(ps, name, state)
-                self._check_stage(ps, name, state)
+                self._check_gcode_state(ps, name, state, active_job)
+                self._check_stage(ps, name, active_job)
                 self._check_hms(ps, name, state)
                 self._check_health(ps, name)
         except Exception as exc:

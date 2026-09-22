@@ -123,6 +123,7 @@ def get_reference(name: str) -> tuple[Optional[bytes], Optional[float]]:
 
 
 def clear_reference(name: str) -> None:
+    """Drop the printer's reference frame; the job monitor calls this when a new job starts."""
     _references.pop(name, None)
 
 
@@ -183,11 +184,6 @@ class JobStateReport:
 
     # Quality tier used for all assets
     quality: str = "preview"
-
-    # YOLO detections (additive layer)
-    yolo_detections: list = field(default_factory=list)
-    yolo_boost: float = 0.0
-    yolo_available: bool = False
 
     # P — Project Identity
     project_thumbnail_png: Optional[bytes] = None
@@ -302,14 +298,33 @@ def _apply_kernel(gray_img: Image.Image, kernel: ImageFilter.Kernel) -> np.ndarr
 
 
 # ---------------------------------------------------------------------------
+# Job stages (ActiveJobInfo.stage_id, the printer's stg_cur; bpm names them with parseStage)
+# ---------------------------------------------------------------------------
+# A stage is an activity the printer is performing instead of laying filament: bed leveling,
+# preheating, filament changes, calibration, checks and pauses. These are the codes bpm's
+# parseStage names. Codes that name no activity (-1 and 0 = no stage, 100 = "Printing",
+# 255 = "Completed") and codes bpm does not know all read as a normal print, so a code that
+# is new to bpm fails toward analysing the frame, never toward silence.
+_ACTIVITY_STAGES = frozenset(range(1, 59)) | frozenset(range(70, 78))
+
+
+def is_stage_gated(stage_id) -> bool:
+    """True when the job is in a named activity stage, where camera analysis is held back."""
+    try:
+        return int(stage_id) in _ACTIVITY_STAGES
+    except (TypeError, ValueError):
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Stages during which diff_score is suppressed (toolhead/environment in motion)
 # ---------------------------------------------------------------------------
 _DIFF_SUPPRESS_STAGES = frozenset({
     1,   # auto bed leveling
     4,   # changing filament (AMS purge)
     7,   # heating hotend
-    14,  # homing toolhead
-    15,  # cleaning nozzle
+    13,  # homing toolhead
+    14,  # cleaning nozzle tip
     19,  # calibrating extrusion flow
     22,  # filament unloading
     24,  # filament loading
@@ -1618,7 +1633,7 @@ def analyze(
                             ams_humidity (int, 1–5), hms_errors (list[dict]),
                             detectors (dict with spaghetti_detector sub-key),
                             layer, total_layers, progress_pct, remaining_minutes,
-                            job_name, gcode_state, stage (int), stage_id (int),
+                            job_name, gcode_state, stage_id (int, ActiveJobInfo.stage_id),
                             printer_series (str), has_chamber (bool),
                             is_chamber_door_open (bool), is_chamber_lid_open (bool),
                             is_chamber_light_on (bool), nozzle_diameter_mm (float),
@@ -1653,14 +1668,6 @@ def analyze(
     score, hot_pct, strand_score, edge_density, diff_score, thresh_warn, thresh_crit = _analyse_spaghetti(
         frame_rgb, ref_rgb, W, H, context=printer_context
     )
-
-    # YOLO additive layer (purely additive — never raises).
-    try:
-        from camera.yolo_detector import detect as _yolo_detect
-        yolo_detections, yolo_boost, yolo_available = _yolo_detect(frame_jpeg)
-        score = min(score + yolo_boost, 1.0)
-    except Exception:
-        yolo_detections, yolo_boost, yolo_available = [], 0.0, False
 
     # Resolve verdict using calibrated thresholds from context
     if score < thresh_warn:
@@ -1698,10 +1705,11 @@ def analyze(
         diff_png = _build_diff_png(frame_rgb, ref_rgb, W, H, tw, th, reference_age_s)
 
     # Compute health + confidence for the panel
-    # Stage-gated: gcode_state not RUNNING/PAUSE, OR stage != 255 (pre-print prep)
+    # Stage-gated: gcode_state not RUNNING/PAUSE, OR the job is in a named activity stage
+    # (bed leveling, preheating, filament change, calibration, a pause).
     _gcode_state = printer_context.get("gcode_state", "IDLE")
-    _stage       = printer_context.get("stage", 255)
-    _stage_gated = _gcode_state not in ("RUNNING", "PAUSE", "PAUSED") or _stage != 255
+    _stage_gated = (_gcode_state not in ("RUNNING", "PAUSE", "PAUSED")
+                    or is_stage_gated(printer_context.get("stage_id")))
 
     # Bayesian failure probability — same model used by background monitor.
     try:
@@ -1751,9 +1759,6 @@ def analyze(
         thresh_warn=thresh_warn,
         thresh_crit=thresh_crit,
         quality=resolved_quality,
-        yolo_detections=yolo_detections,
-        yolo_boost=yolo_boost,
-        yolo_available=yolo_available,
         project_thumbnail_png=project_thumbnail_png,
         project_layout_png=project_layout_png,
         raw_png=raw_png,

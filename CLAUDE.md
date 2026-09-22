@@ -24,10 +24,10 @@
 - No tool may open its own direct FTPS/MQTT/socket/HTTP connection (camera streaming excepted)
 - REST API server and MJPEG camera streams draw ports from a shared `PortPool` (default 49152-49251)
 - Port discovery: `get_server_info()` MCP tool or `GET /api/server_info` — never hardcode ports
-- Camera subsystem: RTSPS (H2D/X1) + TCP-TLS (A1/P1), MJPEG encoding, ONNX anomaly detection
+- Camera subsystem: RTSPS (H2D/X1) + TCP-TLS (A1/P1), MJPEG encoding, anomaly detection
 - Secrets: `~/.bambu-mcp/secrets.enc` (AES-256-GCM, separate from isaac vault)
 - Console script entry point: `bambu-mcp = "server:main"`
-- 25 runtime dependencies (Flask, mcp SDK, av, onnxruntime, numpy, PIL, zeroconf)
+- 24 runtime dependencies (Flask, mcp SDK, av, numpy, PIL, zeroconf)
 
 ### HTTP Route Reference
 

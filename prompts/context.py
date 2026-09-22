@@ -245,10 +245,12 @@ beyond the access_code already stored at add_printer() time.
 The MCP handles all streaming complexity internally. Two protocols are used:
 RTSPS (X1/H2D, port 322) and TCP+TLS binary (A1/P1, port 6000). You only use tools.
 
-- get_snapshot(name, resolution="native", quality=85, include_status=False) — Capture a single still frame. Returns:
+- get_snapshot(name, resolution="native", quality=85, include_status=False) — Returns {url}, a local API URL
+                               that captures a still frame when fetched, or {error: "not_connected" | "invalid_resolution"}.
+                               The tool captures nothing itself. Fetch the URL and save the response to a file
+                               (curl -s "$url" -o /tmp/snap.json; the JSON is large, never print it), then read:
                                data_uri   — complete data:image/jpeg;base64,... string
-                                            Embed directly: ![snapshot]({data_uri})
-                                            No decoding or saving needed.
+                               saved_path — a temp-file copy of the JPEG
                                width, height — frame dimensions in pixels
                                resolution — resolution string used
                                quality    — JPEG quality integer used
@@ -292,10 +294,12 @@ Session-level operations: MQTT connection management, firmware version, telemetr
 - trigger_printer_refresh / force_state_refresh — both REQUIRE user_permission=True
 - get_monitoring_history(name, raw=False) — telemetry summary (default) or full time-series (raw=True)
   Default returns {summary:{field:{min,max,avg,last,count},...}, gcode_state_durations} — lightweight.
-  Use raw=True only when you need the full 60-min series for all 8 fields.
+  Use raw=True only when you need the full 60-min series for all 12 telemetry fields.
 - get_monitoring_series(name, field) — full time-series for ONE field (e.g. "tool", "bed", "chamber")
   Preferred over raw=True when you only need one metric. May return gzip+base64 compressed response.
-  Fields: tool, tool_1 (H2D second nozzle), bed, chamber, part_fan, aux_fan, exhaust_fan, heatbreak_fan
+  Fields: tool, tool_1 (H2D second nozzle), tool_target, tool_1_target, bed, bed_target, chamber, chamber_target,
+  part_fan, aux_fan, exhaust_fan, heatbreak_fan, and the health fields success_pct, confidence, hot_pct,
+  strand_score, diff_score, remaining_min. Any other value is rejected with {error: "invalid_field"}.
 - set_print_options(name, auto_recovery?, sound?) — REQUIRE user_permission=True
 - rename_printer(name, new_name) — change printer's firmware display name; REQUIRE user_permission=True
 

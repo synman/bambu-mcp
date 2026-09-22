@@ -91,6 +91,20 @@ def _safe_upload_path(name: str) -> Path | None:
 
 DEFAULT_PRINTER = os.environ.get("BAMBU_API_PRINTER", "")
 
+# Job-health fields /api/monitoring_series serves from the job monitor's history rather than from the
+# telemetry collector. The single definition: tools/url_factory.py imports it to validate the `field`
+# argument of get_monitoring_series, so tool and route cannot disagree about what the route serves.
+_HEALTH_FIELDS = ("success_pct", "confidence", "hot_pct", "strand_score", "diff_score", "remaining_min")
+
+# Inclusive bounds of the JPEG quality /api/snapshot accepts (Pillow's meaningful range). Also imported by
+# tools/url_factory.py so get_snapshot rejects the same values the route does.
+_SNAPSHOT_QUALITY_MIN = 1
+_SNAPSHOT_QUALITY_MAX = 100
+# The only spelling of a quality the route reads as an integer: ASCII digits. int() alone also takes "5_0",
+# non-ASCII digits, a sign and surrounding whitespace, none of which the stream server
+# (camera/mjpeg_server.py _parse_stream_params) accepts; the route answers all of them 400 like the stream does.
+_SNAPSHOT_QUALITY_RE = re.compile(r"[0-9]{1,6}")
+
 
 # ── OpenAPI helpers (lifted from bambu-printer-app/api/openapi_local.py) ──────
 
@@ -1471,6 +1485,10 @@ def _build_app():
         """⚠️ Trigger refresh of .3mf file listing from SD card.
 
         ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+
+        Answers 502 ``{"status": "error", "reason": "SD card listing failed"}`` when the live
+        FTPS listing failed, so a failed refresh is never reported as success. An empty card
+        is a success.
         """
         log.debug("refresh_sdcard_3mf_files: called")
         p, _ = _get_printer(_rargs())
@@ -1478,7 +1496,9 @@ def _build_app():
             return _err("no printer")
         try:
             log.debug("refresh_sdcard_3mf_files: calling get_sdcard_3mf_files()")
-            p.get_sdcard_3mf_files()
+            if p.get_sdcard_3mf_files() is None:
+                log.warning("refresh_sdcard_3mf_files: SD card listing failed")
+                return _err("SD card listing failed", code=HTTPStatus.BAD_GATEWAY)
             log.debug("refresh_sdcard_3mf_files: → ok")
             return _ok()
         except Exception as e:
@@ -1491,7 +1511,10 @@ def _build_app():
 
         ?cached=true returns the in-memory cached copy without a live FTPS fetch.
         Use when stale data is acceptable and low latency matters.
-        Default (cached=false) performs a live FTPS fetch for up-to-date results.
+        Default (cached=false) performs a live FTPS fetch for up-to-date results, and answers
+        502 ``{"status": "error", "reason": "SD card listing failed"}`` when that fetch failed
+        (an empty card is a 200 with an empty tree). ``cached=true`` never fails: an empty
+        cache is a JSON null.
         """
         log.debug("get_sdcard_3mf_files: called")
         args = _rargs()
@@ -1506,6 +1529,9 @@ def _build_app():
             else:
                 log.debug("get_sdcard_3mf_files: calling printer.get_sdcard_3mf_files()")
                 result = p.get_sdcard_3mf_files()
+                if result is None:
+                    log.warning("get_sdcard_3mf_files: SD card listing failed")
+                    return _err("SD card listing failed", code=HTTPStatus.BAD_GATEWAY)
             log.debug("get_sdcard_3mf_files: → ok")
             return jsonify(result)
         except Exception as e:
@@ -1517,6 +1543,10 @@ def _build_app():
         """⚠️ Trigger full SD card contents refresh.
 
         ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+
+        Answers 502 ``{"status": "error", "reason": "SD card listing failed"}`` when the live
+        FTPS listing failed, so a failed refresh is never reported as success. An empty card
+        is a success.
         """
         log.debug("refresh_sdcard_contents: called")
         p, _ = _get_printer(_rargs())
@@ -1524,7 +1554,9 @@ def _build_app():
             return _err("no printer")
         try:
             log.debug("refresh_sdcard_contents: calling get_sdcard_contents()")
-            p.get_sdcard_contents()
+            if p.get_sdcard_contents() is None:
+                log.warning("refresh_sdcard_contents: SD card listing failed")
+                return _err("SD card listing failed", code=HTTPStatus.BAD_GATEWAY)
             log.debug("refresh_sdcard_contents: → ok")
             return _ok()
         except Exception as e:
@@ -1537,7 +1569,10 @@ def _build_app():
 
         ?cached=true returns the in-memory cached copy without a live FTPS fetch.
         Use when stale data is acceptable and low latency matters.
-        Default (cached=false) performs a live FTPS fetch for up-to-date results.
+        Default (cached=false) performs a live FTPS fetch for up-to-date results, and answers
+        502 ``{"status": "error", "reason": "SD card listing failed"}`` when that fetch failed
+        (an empty card is a 200 with an empty tree). ``cached=true`` never fails: an empty
+        cache is a JSON null.
         """
         log.debug("get_sdcard_contents: called")
         args = _rargs()
@@ -1552,6 +1587,9 @@ def _build_app():
             else:
                 log.debug("get_sdcard_contents: calling printer.get_sdcard_contents()")
                 result = p.get_sdcard_contents()
+                if result is None:
+                    log.warning("get_sdcard_contents: SD card listing failed")
+                    return _err("SD card listing failed", code=HTTPStatus.BAD_GATEWAY)
             log.debug("get_sdcard_contents: → ok")
             return jsonify(result)
         except Exception as e:
@@ -1573,7 +1611,7 @@ def _build_app():
             from bpm.bambuproject import get_3mf_entry_by_name as _bpm_search
             tree = p.get_sdcard_3mf_files()
             if tree is None:
-                return _err("failed to retrieve SD card contents")
+                return _err("SD card listing failed", code=HTTPStatus.BAD_GATEWAY)
             result = _bpm_search(tree, target_name)
             log.debug("find_3mf_by_name: → %s", "found" if result else "not found")
             return jsonify({"entry": result} if result else {"error": f"Not found: {target_name}"})
@@ -1596,7 +1634,7 @@ def _build_app():
             from bpm.bambuproject import get_3mf_entry_by_id as _bpm_search
             tree = p.get_sdcard_3mf_files()
             if tree is None:
-                return _err("failed to retrieve SD card contents")
+                return _err("SD card listing failed", code=HTTPStatus.BAD_GATEWAY)
             result = _bpm_search(tree, target_id)
             log.debug("find_3mf_by_id: → %s", "found" if result else "not found")
             return jsonify({"entry": result} if result else {"error": f"Not found: {target_id}"})
@@ -2529,7 +2567,10 @@ def _build_app():
         Query parameters:
           printer        — printer name (required)
           resolution     — "native" | "1080p" | "720p" | "480p" | "360p" | "180p" (default "native")
-          quality        — JPEG quality integer 1–100 (default 85)
+          quality        — JPEG quality integer 1–100 (default 85), written as plain ASCII digits (at most 6:
+                           "85" or "085"); any other value (out of range, or not plain digits: "5_0", "+85",
+                           " 85", "٨٥", "85.5") is answered 400 {"error": "invalid_quality", "detail": ...}
+                           and no frame is captured
           include_status — "true" to include live print telemetry in the response
 
         Named profiles (agent guidance):
@@ -2548,7 +2589,18 @@ def _build_app():
             if p is None:
                 return jsonify({"error": "not_connected"}), 400
             resolution     = _rargs().get("resolution", "native")
-            quality        = int(_rargs().get("quality", "85"))
+            try:
+                quality = int(_rargs().get("quality", "85"))
+            except (TypeError, ValueError):
+                quality = None
+            if quality is not None and not _SNAPSHOT_QUALITY_RE.fullmatch(str(_rargs().get("quality", "85"))):
+                quality = None
+            if quality is None or not _SNAPSHOT_QUALITY_MIN <= quality <= _SNAPSHOT_QUALITY_MAX:
+                return jsonify({
+                    "error": "invalid_quality",
+                    "detail": (f"quality must be an integer from {_SNAPSHOT_QUALITY_MIN} to "
+                               f"{_SNAPSHOT_QUALITY_MAX} (got {_rargs().get('quality')!r})"),
+                }), 400
             include_status = _rargs().get("include_status", "false").lower() == "true"
             cam = importlib.import_module("tools.camera")
             result = cam.get_snapshot(printer_name, resolution=resolution, quality=quality, include_status=include_status)
@@ -2849,9 +2901,6 @@ def _build_app():
             field = _rargs().get("field")
             if not field:
                 return jsonify({"error": "field parameter required"}), HTTPStatus.BAD_REQUEST
-            _HEALTH_FIELDS = frozenset({
-                "success_pct", "confidence", "hot_pct", "strand_score", "diff_score", "remaining_min",
-            })
             from data_collector import data_collector
             if field in _HEALTH_FIELDS:
                 from camera import job_monitor as _jm

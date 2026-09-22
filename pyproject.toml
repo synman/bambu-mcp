@@ -17,7 +17,6 @@ dependencies = [
     "av>=14.0",
     "pillow",
     "numpy",
-    "onnxruntime>=1.17.0",
     "bambu-printer-manager @ git+https://github.com/synman/bambu-printer-manager.git@devel",
     "flask>=3.0",
     "flask-cors>=4.0",

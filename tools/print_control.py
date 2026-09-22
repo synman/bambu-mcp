@@ -71,15 +71,16 @@ def resume_print(name: str, user_permission: bool = False) -> str:
     """
     Resume a paused print job on the named printer.
 
-    WHEN to use: continue a print that was paused by the user (stg_cur=17), by an M400 GCode
-    pause (stg_cur=6), or by a non-AMS sensor pause (cover removed, temp malfunction) after the
-    underlying condition is fixed. Has no effect if the printer is not paused.
+    WHEN to use: continue a print that was paused by the user (stg_cur=16, "Paused by user"), by an
+    M400 GCode pause (stg_cur=5, "M400 pause"), or by a non-AMS sensor pause (cover removed, temp
+    malfunction) after the underlying condition is fixed. Has no effect if the printer is not paused.
+    The stage names and codes are bpm's; ``get_job_info`` lists them under ``stage_id``.
 
     WRITE GUARD: sends a resume command over MQTT that restarts the paused job, so the toolhead
     starts moving again. With ``user_permission`` unset the tool changes nothing and returns the
     refusal string naming that consequence.
 
-    Sibling disambiguation: for AMS-triggered pauses (filament runout stg_cur=7, or an active AMS
+    Sibling disambiguation: for AMS-triggered pauses (filament runout stg_cur=6, or an active AMS
     HMS error) use ``send_ams_control_command`` with cmd 'RESUME' instead; it unblocks the AMS
     feed and resumes the print in one operation. ``pause_print`` is the opposite action.
 
