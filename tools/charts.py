@@ -6,8 +6,12 @@ and opens it in the default browser.
 """
 from __future__ import annotations
 
+import errno
+import hashlib
 import io
 import logging
+import os
+import re
 import time
 import webbrowser
 from datetime import datetime
@@ -16,10 +20,13 @@ from typing import Optional
 
 import matplotlib
 matplotlib.use("Agg")  # must be set before any other matplotlib imports
+import matplotlib.colors as mcolors
 import matplotlib.dates as mdates
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
+
+from tools.url_factory import _q
 
 log = logging.getLogger(__name__)
 
@@ -53,6 +60,40 @@ _STATE_COLORS = {
 }
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+# Directory open_charts writes the static dashboard into: /tmp/bambu-charts-<name>.html.
+_CHARTS_DIR = Path("/tmp")
+
+# Longest file name, in UTF-8 bytes, open_charts will ask the filesystem for (the usual limit is 255).
+_MAX_LEAF_BYTES = 200
+
+# Characters that cannot sit inside ONE file name: the path separators, control characters, and "%" itself
+# (encoded so two distinct printer names give two distinct file NAMES; the filesystem may still fold two
+# such names onto one file, e.g. APFS ignores case and Unicode normalisation).
+_UNSAFE_FILENAME_CHARS = re.compile(r"[/\\%\x00-\x1f\x7f]")
+
+
+def _chart_file_path(name: str) -> Path | None:
+    """The static dashboard file for a printer name, or None when it would not stay inside _CHARTS_DIR.
+
+    Only the characters in _UNSAFE_FILENAME_CHARS are percent-encoded; spaces, non-ASCII and everything
+    else are kept, so an ordinary name gives the same file name as it always did. A name whose file name
+    would exceed _MAX_LEAF_BYTES UTF-8 bytes is cut to fit and given "-<first 12 hex of the SHA-256 of the
+    exact name>" before ".html", so two long names sharing a head still get different file names. The path
+    is then resolved and must be a direct child of the resolved directory: a symlink planted at the target
+    resolves elsewhere and is refused instead of followed.
+    """
+    stem = "bambu-charts-" + _UNSAFE_FILENAME_CHARS.sub(lambda m: f"%{ord(m.group()):02X}", name)
+    if len((stem + ".html").encode()) > _MAX_LEAF_BYTES:
+        digest = hashlib.sha256(name.encode()).hexdigest()[:12]
+        room = _MAX_LEAF_BYTES - len(f"-{digest}.html")
+        stem = stem.encode()[:room].decode(errors="ignore") + "-" + digest
+    out = _CHARTS_DIR / (stem + ".html")
+    try:
+        return out if out.resolve().parent == _CHARTS_DIR.resolve() else None
+    except (OSError, RuntimeError):  # unresolvable target (e.g. a symlink loop)
+        return None
+
 
 def _style(ax, title: str = "") -> None:
     """Apply dark theme to an axes object."""
@@ -237,7 +278,7 @@ def _row_health(health_history: list) -> str:
         ax_sig.legend(fontsize=6, facecolor=_PANEL, labelcolor=_TEXT, edgecolor=_BORDER)
         _apply_time_axis(ax_sig)
     else:
-        _no_data(ax_sig, "No health data yet\n(starts after first print cycle)")
+        _no_data(ax_sig, "No health data yet\n(starts once the print is past its preparation stages)")
 
     # Health timeline
     _style(ax_tl, "Print Health Timeline")
@@ -265,7 +306,7 @@ def _row_health(health_history: list) -> str:
                      edgecolor=_BORDER, loc="lower left")
         _apply_time_axis(ax_tl)
     else:
-        _no_data(ax_tl, "No health data yet\n(starts after first print cycle)")
+        _no_data(ax_tl, "No health data yet\n(starts once the print is past its preparation stages)")
 
     return _svg(fig)
 
@@ -407,17 +448,26 @@ def _row_calibration() -> str:
     return _svg(fig)
 
 
+def _spool_rgb(color) -> tuple:
+    """Bar colour for a get_spool_info ``color``: a CSS3 name or "#RRGGBBAA"; grey when unparseable."""
+    try:
+        return mcolors.to_rgb(color)
+    except (ValueError, TypeError):
+        return (0.27, 0.27, 0.27)
+
+
 def _row_ams(printer_name: str) -> str:
     fig, ax = plt.subplots(1, 1, figsize=(16, 2.6), facecolor=_BG)
     _style(ax, "AMS Filament Remaining")
 
     spools = []
     try:
-        from tools.filament import get_spool_info
+        from tools.state import get_spool_info
         info = get_spool_info(printer_name)
-        spools = info.get("spools") or []
+        # An entry with an empty type is an empty slot or holder, not a spool.
+        spools = [s for s in (info.get("spools") or []) if s.get("type")]
     except Exception as e:
-        log.debug("open_charts: AMS spool fetch failed: %s", e)
+        log.warning("open_charts: AMS spool fetch failed: %s", e, exc_info=True)
 
     if not spools:
         _no_data(ax, "No AMS spool data")
@@ -425,14 +475,10 @@ def _row_ams(printer_name: str) -> str:
         return _svg(fig)
 
     labels  = [s.get("display_name") or f"Slot {i}" for i, s in enumerate(spools)]
-    values  = [s.get("remaining_percent") or 0 for s in spools]
-    colors  = []
-    for s in spools:
-        hx = (s.get("color") or "#444444").lstrip("#")
-        try:
-            colors.append((int(hx[0:2], 16) / 255, int(hx[2:4], 16) / 255, int(hx[4:6], 16) / 255))
-        except Exception:
-            colors.append((0.27, 0.27, 0.27))
+    # remaining_percent is -1 when the tray reports no 'remain' value (always for an external holder).
+    remains = [s.get("remaining_percent") for s in spools]
+    values  = [r if isinstance(r, (int, float)) and r >= 0 else 0 for r in remains]
+    colors  = [_spool_rgb(s.get("color")) for s in spools]
 
     ypos = list(range(len(labels)))
     bars = ax.barh(ypos, values, color=colors, edgecolor=_BORDER, linewidth=0.4, height=0.6)
@@ -440,9 +486,10 @@ def _row_ams(printer_name: str) -> str:
     ax.set_yticks(ypos)
     ax.set_yticklabels(labels, fontsize=7)
     ax.set_xlabel("Remaining %", fontsize=7)
-    for bar, val in zip(bars, values):
+    for bar, remain in zip(bars, remains):
+        known = isinstance(remain, (int, float)) and remain >= 0
         ax.text(bar.get_width() + 1.5, bar.get_y() + bar.get_height() / 2,
-                f"{val:.0f}%", va="center", ha="left", fontsize=6.5, color=_TEXT)
+                f"{remain:.0f}%" if known else "n/a", va="center", ha="left", fontsize=6.5, color=_TEXT)
 
     return _svg(fig)
 
@@ -454,8 +501,8 @@ def open_charts(name: str) -> dict:
 
     WHEN to use: the human user wants to see the printer's rolling telemetry (temperatures,
     fans, print health, failure drivers) as charts in a browser tab. The dashboard also
-    carries a fixed H2D camera-calibration drawing and an AMS filament panel that currently
-    shows only a placeholder (see Notes).
+    carries a fixed H2D camera-calibration drawing and an AMS filament panel with the loaded
+    spools' remaining percentage (see Notes).
 
     Sibling disambiguation: ``render_charts_html`` returns the same dashboard HTML as a
     string and opens nothing; ``render_charts_panels`` returns only the SVG panels.
@@ -469,19 +516,36 @@ def open_charts(name: str) -> dict:
 
     Returns:
         ``{"output_path": str, "opened": bool}`` on success. ``output_path`` is the static
-        HTML file ``/tmp/bambu-charts-{name}.html``, written on every call. ``opened`` is True
+        HTML file ``/tmp/bambu-charts-{name}.html``, written on every call (created readable by its owner
+        only, an existing file replaced); in the file name "/", "\\", "%" and control characters of the
+        printer name are percent-encoded (so the file always sits directly inside /tmp and two different
+        names give two different file names) and every other character, spaces and non-ASCII included,
+        is kept as is. Different file names are not a guarantee of different files: a filesystem that
+        ignores case or Unicode normalisation (APFS does both) maps names that differ only in case or
+        normalisation form onto one file. A name that would make the file name longer than 200 bytes
+        (UTF-8) is cut to fit and gets ``-<12 hex characters of the name's SHA-256>`` before ``.html``, so
+        long names that share a head still get different file names. ``opened`` is True
         when an existing browser tab was focused or the browser was launched successfully,
         False when the browser launch reported failure. Returns ``{"error": "not_connected"}``
         when no telemetry collector exists for the printer: collectors are created only for
         printers configured when the server started, so a printer added with ``add_printer``
         at runtime returns this until the server restarts. A paused or disconnected printer
         that has a collector renders its last-collected data instead of an error.
+        ``{"error": "unsafe_output_path", "detail": ...}`` (nothing written, no browser opened) when
+        the file path resolves outside /tmp or is a symbolic link, which happens only if something else
+        planted a symlink at that path (the file is opened without following a symlink, so one planted
+        between the check and the write is refused too).
+        ``{"error": "write_failed", "detail": str}`` (no browser opened) when the file cannot be written
+        for any other reason (a directory at that path, no permission, a full disk).
 
     Notes:
         Side effects: writes the HTML file above and focuses or opens a browser tab.
         The opened URL is ``http://localhost:{api_port}/api/charts?printer={name}`` (the
         page then auto-refreshes live data every 30 s) when the API server port is known,
-        otherwise the static ``file://`` URL of the written file (no live refresh).
+        otherwise the static ``file://`` URL of the written file (no live refresh). The name
+        is percent-encoded in either URL, so a printer name containing a space, "&", "#" or
+        "+" reaches the server intact; names made only of letters, digits and "-", "_", ".",
+        "~" appear unchanged.
         An existing tab is reused only on macOS, and only when Google Chrome or Safari
         already has a tab whose URL starts with the target URL (found with a 3-second
         osascript query). On any other platform, or when no such tab exists, a new tab is
@@ -498,10 +562,11 @@ def open_charts(name: str) -> dict:
           5. Camera calibration corner status — a FIXED reference drawing of the H2D camera
              calibration constants with a hardcoded calibration caption; not per-printer, not
              telemetry, and identical for every printer including non-H2D models
-          6. AMS filament remaining bars — currently always the "No AMS spool data"
-             placeholder: the panel imports ``get_spool_info`` from ``tools.filament``, which
-             does not define it, and the resulting ImportError is caught and logged at debug
-             level only
+          6. AMS filament remaining bars — one bar per loaded spool from ``get_spool_info``
+             (slots and holders that hold no filament are skipped), coloured with the spool
+             colour and labelled with its remaining percentage, or "n/a" when the tray
+             reports none; shows a "No AMS spool data" placeholder when no spool is loaded or
+             the spool lookup fails (logged as a warning)
 
         Nozzle panel: when the second extruder (tool_1) has reported a nonzero temperature in
         the retained window, the panel overlays two lines on one axes, "Right Nozzle" (T0) and
@@ -511,17 +576,21 @@ def open_charts(name: str) -> dict:
 
         History and resets: temperature, fan and event series cover the last 60 minutes and
         are held in memory only, so they start empty at server start. The health and anomaly
-        panels hold the most recent 60 analysis records (roughly an hour) and are not reset
-        between jobs. The print-state pie shows time spent in each gcode_state for the current
+        panels hold the most recent 60 analysis records (roughly an hour) and are cleared when
+        the monitor sees a new job start (a change into RUNNING or PAUSE from an idle state).
+        The print-state pie shows time spent in each gcode_state for the current
         job, including idle time, and resets only when a new job name is seen.
 
-        Health timeline and anomaly data come from the background print monitor. Records
-        begin on the monitor's next tick (ticks run about every 10 s) after the printer enters
-        RUNNING or PAUSE, not 60 s later, and then about every 60 s. Nothing is recorded while
-        the printer is idle, when no camera frame can be captured, or when the
-        failure-probability model returns no value.
+        Health timeline and anomaly data come from the background print monitor, which skips
+        camera analysis while the job is in a preparation or maintenance stage (bed leveling,
+        preheating, filament change, calibration, a pause). Records begin on the monitor's
+        first tick (ticks run about every 10 s) after the printer is RUNNING or PAUSE and out
+        of those stages, not 60 s later, and then about every 60 s. Nothing is recorded while
+        the printer is idle, while the job is in one of those stages, when no camera frame can
+        be captured, or when the failure-probability model returns no value.
 
-        Failure driver radar: with no analysis result yet (no ``factor_contributions``), the
+        Failure driver radar: with no analysis result yet, or while the monitor's latest
+        result is a stage-gated placeholder (neither carries ``factor_contributions``), the
         radar renders a placeholder with every factor at 0.5, a uniform polygon that looks
         like measured data but is not. Only a radar drawn from a real ``factor_contributions``
         result reflects measured risk.
@@ -532,8 +601,21 @@ def open_charts(name: str) -> dict:
     html = render_charts_html(name)
     if html.startswith("<html><body style"):
         return {"error": "not_connected"}
-    out = Path(f"/tmp/bambu-charts-{name}.html")
-    out.write_text(html, encoding="utf-8")
+    out = _chart_file_path(name)
+    if out is None:
+        return {"error": "unsafe_output_path",
+                "detail": f"the dashboard file for printer {name!r} would resolve outside {_CHARTS_DIR} "
+                          f"(a symlink at the target path?); nothing was written"}
+    try:
+        fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(html)
+    except OSError as e:
+        if e.errno == errno.ELOOP or out.is_symlink():   # O_NOFOLLOW refused a symlink planted after the check
+            return {"error": "unsafe_output_path",
+                    "detail": f"the dashboard file for printer {name!r} is a symbolic link; nothing was written"}
+        log.warning("open_charts: cannot write %s: %s", out, e)
+        return {"error": "write_failed", "detail": str(e)}
 
     # Prefer the HTTP URL so the browser auto-refreshes live data every 30s;
     # fall back to the static file:// URL if the API server is not running.
@@ -544,7 +626,7 @@ def open_charts(name: str) -> dict:
     except Exception:
         api_port = 0
 
-    url = f"http://localhost:{api_port}/api/charts?printer={name}" if api_port else f"file://{out}"
+    url = f"http://localhost:{api_port}/api/charts?printer={_q(name)}" if api_port else out.as_uri()
 
     # Reuse an existing browser tab rather than opening a new one each time.
     try:
@@ -631,7 +713,8 @@ def render_charts_html(name: str) -> str:
     HTTP route serves) without writing a file or opening a browser.
 
     Sibling disambiguation: ``open_charts`` renders the same page, writes it to
-    ``/tmp/bambu-charts-{name}.html`` and opens it in a browser; ``render_charts_panels``
+    ``/tmp/bambu-charts-{name}.html`` (name made file-safe, see ``open_charts`` Returns) and opens it in a
+    browser; ``render_charts_panels``
     returns only the SVG panels as JSON for AJAX refresh instead of the full page.
 
     Args:
@@ -639,10 +722,9 @@ def render_charts_html(name: str) -> str:
 
     Returns:
         A ``str`` containing a complete HTML document (six inline-SVG chart sections plus a
-        30 s auto-refresh script). The AMS Filament section currently holds only a "No AMS
-        spool data" placeholder (its data fetch imports ``get_spool_info`` from the wrong
-        module); its heading is still emitted, and the calibration section is a fixed H2D
-        reference drawing (see ``open_charts`` Notes). The document is VERY LARGE (six inline
+        30 s auto-refresh script). The AMS Filament section draws the loaded spools, or a "No
+        AMS spool data" placeholder when none is loaded; the calibration section is a fixed
+        H2D reference drawing (see ``open_charts`` Notes). The document is VERY LARGE (six inline
         SVGs from 16-inch-wide figures carrying up to an hour of plotted points; several
         hundred KB is typical, estimated rather than measured), so it suits the
         ``/api/charts`` HTTP route or a human-facing consumer; an agent should call
@@ -707,8 +789,8 @@ def render_charts_panels(name: str) -> dict:
         ``{"panels": [svg, ...], "ts": "YYYY-MM-DD HH:MM:SS"}`` on success. ``panels`` holds
         six inline SVG strings in dashboard order: temperatures, fans, anomaly and health,
         failure analysis, camera calibration (a fixed H2D reference drawing), AMS filament.
-        ``panels[5]`` currently always contains the "No AMS spool data" placeholder SVG
-        (its data fetch imports ``get_spool_info`` from the wrong module). The payload is
+        ``panels[5]`` draws the loaded spools, or the "No AMS spool data" placeholder SVG when
+        none is loaded. The payload is
         VERY LARGE (six inline SVG strings; several hundred KB is typical, estimated rather
         than measured). It exists for the dashboard page's own AJAX refresh via
         ``/api/charts_panels``; an agent should use ``open_charts`` or

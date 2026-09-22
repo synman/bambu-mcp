@@ -45,7 +45,8 @@ def get_configured_printers() -> dict:
         ``service_state``. A printer that is merely unreachable still has a session object (left in
         QUIT state, because the library swallows the connect failure) and so still reads True here.
         Only a printer torn down by ``disconnect_printer`` / ``remove_printer``, or one whose
-        credentials or session construction failed outright, has no session.
+        credentials, session construction or session start (``start_session`` raising) failed
+        outright, has no session: a failed start leaves nothing registered.
     """
     log.debug("get_configured_printers: called")
     names = auth.get_configured_printer_names()
@@ -79,11 +80,10 @@ def add_printer(
     WRITE GUARD: saves ip, serial and access_code under ``name`` and starts an MQTT session for
     it. If ``name`` is already configured this OVERWRITES its stored ip, serial and access_code
     with no existence check (the previous access_code is not recoverable), and the new session
-    replaces the existing one in the registry WITHOUT stopping it: the old MQTT client is
-    orphaned with its threads and update callback still running, and both clients use the same
-    default MQTT client id, so they can disconnect each other from the broker. With
-    ``user_permission`` unset the tool changes nothing (no credential is saved, no session is
-    started) and returns the refusal string naming that consequence.
+    replaces the existing one: the old MQTT session is stopped first, so it is a restart with no
+    orphaned client, but telemetry and control are briefly interrupted (an active print is not
+    cancelled). With ``user_permission`` unset the tool changes nothing (no credential is saved,
+    no session is started) and returns the refusal string naming that consequence.
 
     Sibling disambiguation: ``add_printer`` writes all three credentials and starts a session.
     ``update_printer_credentials`` changes only the fields you pass for an already-configured
@@ -107,7 +107,8 @@ def add_printer(
         A ``str`` in every case, never a dict. Success: ``"Printer '<name>' added and session
         started."``. Errors: ``"Error saving credentials for '<name>': <detail>"`` when the
         credential store write fails; ``"Credentials saved for '<name>' but session failed to
-        start: <detail>"`` when the credentials were saved but the session could not start.
+        start: <detail>"`` when the credentials were saved but the session could not start (no
+        session is left registered for the name, so a printer that had one has none now).
         Refused (``user_permission`` False): ``"Error: user_permission must be True to perform this
         action. <consequence>"``.
 
@@ -126,7 +127,8 @@ def add_printer(
         log.debug("add_printer: permission denied for %s", name)
         return _permission_denied(
             "This would save the given ip, serial and access code under this printer name, "
-            "overwriting any credentials already stored for that name, and start an MQTT session for it."
+            "overwriting any credentials already stored for that name, and start an MQTT session for it "
+            "(restarting the existing session if the name already has one)."
         )
     try:
         auth.save_printer_credentials(name=name, ip=ip, access_code=access_code, serial=serial)
@@ -153,7 +155,9 @@ def remove_printer(name: str, user_permission: bool = False) -> str:
     WRITE GUARD: stops the printer's MQTT session and permanently deletes its stored ip, serial
     and access_code and its entry in the configured printer list; re-adding it later needs all
     three values again. The physical printer is not affected. With ``user_permission`` unset the
-    tool changes nothing and returns the refusal string naming that consequence.
+    tool changes nothing and returns the refusal string naming that consequence (checked before
+    anything else, so it is returned even for a name that is not configured). A name that is not
+    configured is also refused with nothing stopped or deleted.
 
     Sibling disambiguation: ``remove_printer`` deletes the configuration for good and stops only
     the MQTT session. ``disconnect_printer`` stops the camera stream and MQTT session but KEEPS
@@ -166,10 +170,10 @@ def remove_printer(name: str, user_permission: bool = False) -> str:
 
     Returns:
         A ``str`` in every case, never a dict. Success: ``"Printer '<name>' removed and credentials
-        deleted."`` (the tool does not check that ``name`` was configured, so an unknown name also
-        returns this success string). Error: ``"Session stopped for '<name>' but error deleting
-        credentials: <detail>"``. Refused (``user_permission`` False): ``"Error: user_permission
-        must be True to perform this action. <consequence>"``.
+        deleted."``. Errors: ``"Error: Printer '<name>' is not configured."`` when ``name`` has no
+        configuration (nothing is stopped or deleted); ``"Session stopped for '<name>' but error
+        deleting credentials: <detail>"``. Refused (``user_permission`` False): ``"Error:
+        user_permission must be True to perform this action. <consequence>"``.
 
     Notes:
         Only the MQTT session is stopped. A running MJPEG camera stream is left running (it
@@ -184,6 +188,9 @@ def remove_printer(name: str, user_permission: bool = False) -> str:
             "This would stop the printer's MQTT session and permanently delete its stored ip, "
             "serial and access code from this server."
         )
+    if name not in auth.get_configured_printer_names():
+        log.warning("remove_printer: printer not configured: %s", name)
+        return f"Error: Printer '{name}' is not configured."
     session_manager.stop_printer(name)
     try:
         auth.delete_printer_credentials(name)
@@ -234,7 +241,8 @@ def update_printer_credentials(
         stored credentials (not configured); ``"Error updating credentials for '<name>': <detail>"``
         when the credential store write fails; ``"Credentials updated for '<name>' but session
         restart failed: <detail>"`` when the credentials were saved but launching the session
-        raised (credential lookup or session construction failure; an unreachable ip does not).
+        raised (credential lookup, session construction or session start failure; an unreachable
+        ip does not); no session is left registered then.
         Refused (``user_permission`` False): ``"Error: user_permission must be True to perform this
         action. <consequence>"``.
 
@@ -290,7 +298,8 @@ def disconnect_printer(name: str, user_permission: bool = False) -> str:
     session, in that order, mirroring server._shutdown(). Live telemetry and every tool that
     needs a session stop working for this printer until ``start_printer`` reconnects it. An
     active print is not cancelled. With ``user_permission`` unset the tool changes nothing and
-    returns the refusal string naming that consequence.
+    returns the refusal string naming that consequence. A name that is not configured is refused
+    and nothing is stopped.
 
     Sibling disambiguation: ``disconnect_printer`` tears the session down and keeps the credentials;
     ``start_printer`` reverses it. ``remove_printer`` also deletes the credentials.
@@ -305,9 +314,10 @@ def disconnect_printer(name: str, user_permission: bool = False) -> str:
     Returns:
         A ``str`` in every case, never a dict. Success: ``"Printer '<name>' disconnected.
         Configuration retained; use start_printer('<name>') to reconnect."`` (returned even when
-        the printer had no session or stream, and even if stopping the stream raised, which is
-        only logged). Refused (``user_permission`` False): ``"Error: user_permission must be True
-        to perform this action. <consequence>"``.
+        the configured printer had no session or stream, and even if stopping the stream raised,
+        which is only logged). Errors: ``"Error: Printer '<name>' is not configured."`` when ``name``
+        has no configuration. Refused (``user_permission`` False): ``"Error: user_permission must
+        be True to perform this action. <consequence>"``.
 
     Notes:
         ``start_printer`` restores the MQTT session but NOT the camera stream this tool stopped;
@@ -324,6 +334,9 @@ def disconnect_printer(name: str, user_permission: bool = False) -> str:
             "This would stop the printer's camera stream and MQTT session; credentials are kept "
             "but no telemetry flows until start_printer is called."
         )
+    if name not in auth.get_configured_printer_names():
+        log.warning("disconnect_printer: printer not configured: %s", name)
+        return f"Error: Printer '{name}' is not configured."
     try:
         from camera.mjpeg_server import mjpeg_server
         stream_stopped = mjpeg_server.stop(name)
@@ -364,8 +377,9 @@ def start_printer(name: str, user_permission: bool = False) -> str:
         A ``str`` in every case, never a dict. Success: ``"Printer '<name>' session started."`` or
         ``"Printer '<name>' session restarted."`` (when a session already existed). Errors:
         ``"Error: Printer '<name>' is not configured."`` when ``name`` has no configuration;
-        ``"Error starting session for '<name>': <detail>"`` for credential or session-construction
-        failures only. Refused (``user_permission`` False): ``"Error: user_permission must be True
+        ``"Error starting session for '<name>': <detail>"`` for credential, session-construction
+        or session-start failures (the library raising from ``start_session``), never for an
+        unreachable host; a failed start leaves no session registered. Refused (``user_permission`` False): ``"Error: user_permission must be True
         to perform this action. <consequence>"``.
 
     Notes:
@@ -387,10 +401,10 @@ def start_printer(name: str, user_permission: bool = False) -> str:
     try:
         restarted = False
         if session_manager.get_printer(name) is not None:
-            # A session object already exists. SessionManager.start_printer()
-            # would overwrite it without quit(), orphaning the old MQTT client
-            # thread with its update callback still wired — stop it first so
-            # "restart" is a real restart.
+            # A session object already exists: stop it here so the result string
+            # can say "restarted". SessionManager.start_printer() would also stop
+            # it, but stop_printer() pops the entry, so the old client is quit
+            # exactly once either way.
             session_manager.stop_printer(name)
             restarted = True
         session_manager.start_printer(name)

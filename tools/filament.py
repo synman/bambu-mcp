@@ -9,6 +9,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import time
 from enum import Enum
 
 log = logging.getLogger(__name__)
@@ -434,8 +435,8 @@ def start_ams_dryer(
     nothing and returns the refusal string naming that consequence.
 
     Sibling disambiguation: ``start_ams_dryer`` turns the dryer on and waits up to 10
-    seconds to see it start; ``stop_ams_dryer`` turns it off. ``get_ams_units`` reads the
-    resulting heater_state and dry_sub_status.
+    seconds for the unit to report DRYING; ``stop_ams_dryer`` turns it off.
+    ``get_ams_units`` reads the resulting heater_state and dry_sub_status.
 
     Args:
         name: Configured printer name (see ``get_configured_printers``).
@@ -458,14 +459,20 @@ def start_ams_dryer(
         ``"Error: AMS unit <unit_id> not found on '<name>'."``, ``"Error: AMS dryer command
         sent to unit <unit_id> (ams_id=<ams_id>) on '<name>' but heater_state did not reach
         DRYING within 10s (final state: <STATE or unknown>). Check get_ams_units for current
-        state."`` (the command WAS sent in that case), or ``"Error starting AMS dryer on
-        '<name>': <exception>"`` when the command fails.
+        state."`` (the command WAS sent in that case; it is returned after the full 10s, or
+        sooner when heater_state reads ERROR or falls back to OFF after showing another
+        state since the command), or ``"Error starting AMS dryer on '<name>': <exception>"``
+        when the command fails. One more outcome that is not an error: ``"AMS dryer command
+        sent to unit <unit_id> (ams_id=<ams_id>) on '<name>', but the unit was already DRYING
+        before the command and heater_state never changed, so it cannot show whether the
+        command was accepted ..."``, returned after the full 10s. Drying is in progress; whether
+        it follows the new temperature and duration has to be read from ``get_ams_units``.
 
     Notes:
         The tool performs no model check: the command is published for any resolved unit.
         bpm's data dictionary lists the drying states as AMS 2 Pro and AMS HT only. On another
-        model (e.g. AMS Lite) the call is not silent: it returns the "did not reach DRYING
-        within 10s" error below unless heater_state reaches DRYING.
+        model (e.g. AMS Lite) the call is not silent: it waits the full 10 seconds and returns
+        the "did not reach DRYING within 10s" error unless heater_state reaches DRYING.
 
         filament_type is derived from the first spool in the target AMS unit that reports a
         type (spool.type, e.g. "ABS", "PLA") and falls back to "" if there is none. bpm
@@ -475,10 +482,21 @@ def start_ams_dryer(
         Heater state transition: after the command is sent, heater_state may briefly read
         CHECKING (a transitional state). Active drying is confirmed by heater_state=DRYING with
         dry_sub_status=HEATING. This tool polls once per second (first reading one second
-        after the publish), up to 10 seconds, waiting for DRYING before returning; it stops
-        polling early, and returns the "did not reach DRYING" error, if heater_state reads OFF
-        or ERROR. OFF is also the pre-command state, so an early error does not prove the
-        printer rejected the command; confirm with get_ams_units.
+        after the publish), up to 10 seconds, waiting for DRYING before returning. heater_state
+        is only rewritten when a telemetry frame carrying the AMS info word arrives, so
+        until then it still holds whatever it held before the command (OFF, COOLING, DRYING,
+        ERROR, anything). The tool records that value just before publishing and ignores every
+        read equal to it; the first read that differs shows a post-command frame has landed,
+        and every read after that counts. DRYING then means success. The tool stops polling
+        early, and returns the "did not reach DRYING" error, when a post-command read is ERROR,
+        or is OFF after another post-command state (CHECKING, COOLING and so on). That is what
+        the code assumes a rejected command looks like; no such sequence has been observed on
+        hardware, so treat it as unmeasured. A first post-command read of OFF (a unit that was
+        COOLING, say) is waited out, not treated as a rejection. If the unit was already DRYING
+        and never reports anything else, the reads cannot show whether the command was
+        accepted, and the tool says so instead of claiming a start. A command the printer
+        accepts but whose first frame arrives later than 10 seconds still ends in the timeout
+        error with the command in effect; confirm with get_ams_units.
 
         Sticky preferences: before presenting parameters to the user, look up stored values:
           from user_prefs import get_pref
@@ -494,8 +512,6 @@ def start_ams_dryer(
           set_pref(f"{name}:ams{unit_id}:rotate_tray",    rotate_tray)
     """
     log.debug("start_ams_dryer: called for name=%s unit_id=%s target_temp=%s duration_hours=%s user_permission=%s", name, unit_id, target_temp, duration_hours, user_permission)
-    import time
-
     if not user_permission:
         log.debug("start_ams_dryer: permission denied for %s", name)
         return _permission_denied(
@@ -516,6 +532,12 @@ def start_ams_dryer(
             if getattr(spool, "ams_id", -1) == ams_id and getattr(spool, "type", ""):
                 filament_type = spool.type
                 break
+    # The value heater_state holds at this instant, before the command is published. bpm rewrites
+    # it only when a telemetry frame carrying the AMS info word arrives, so until then every read
+    # returns THIS value whatever it was (OFF, COOLING, DRYING, ERROR); a read equal to it is not
+    # evidence about the command. An int copy: bpm mutates the unit object in place.
+    unit_before = next((u for u in (state.ams_units or []) if u.ams_id == ams_id), None) if state else None
+    heater_before = int(unit_before.heater_state) if unit_before is not None else None
     try:
         log.debug("start_ams_dryer: calling printer.turn_on_ams_dryer for %s", name)
         printer.turn_on_ams_dryer(
@@ -527,10 +549,18 @@ def start_ams_dryer(
         )
         log.debug("start_ams_dryer: command sent to %s", name)
         # Poll up to 10s for heater_state=DRYING (2); CHECKING (1) is a transient state.
+        # Reads equal to the pre-command value (heater_before) are stale until a read differs:
+        # the first differing read proves a post-command frame landed, and every read from then
+        # on is post-command. Assumed, never observed on hardware: a rejected command shows as
+        # ERROR (5), or as OFF (0) after another post-command state. The first post-command read
+        # being OFF (a unit that was COOLING, say) is not a fall-back and is waited out.
+        _OFF = 0
         _DRYING = 2
         _ERROR = 5
         deadline = time.time() + 10
         unit = None
+        frame_seen = False
+        left_off = False
         while time.time() < deadline:
             time.sleep(1)
             state = session_manager.get_state(name)
@@ -538,14 +568,29 @@ def start_ams_dryer(
                 unit = next((u for u in state.ams_units if u.ams_id == ams_id), None)
                 if unit:
                     hs = int(unit.heater_state)
+                    if not frame_seen:
+                        if hs == heater_before:
+                            continue
+                        frame_seen = True
                     if hs == _DRYING:
                         return (
                             f"AMS dryer started on unit {unit_id} (ams_id={ams_id}): "
                             f"{target_temp}°C for {duration_hours}h on '{name}'. "
                             f"heater_state={unit.heater_state.name}"
                         )
-                    if hs == _ERROR or hs == 0:  # ERROR or back to OFF = rejected
+                    if hs == _ERROR:
                         break
+                    if hs != _OFF:
+                        left_off = True
+                    elif left_off:
+                        break
+        if unit is not None and not frame_seen and heater_before == _DRYING:
+            return (
+                f"AMS dryer command sent to unit {unit_id} (ams_id={ams_id}) on '{name}', but the "
+                f"unit was already DRYING before the command and heater_state never changed, so "
+                f"it cannot show whether the command was accepted (drying is in progress either "
+                f"way). Check get_ams_units for the current temperature and remaining time."
+            )
         return (
             f"Error: AMS dryer command sent to unit {unit_id} (ams_id={ams_id}) on '{name}' "
             f"but heater_state did not reach DRYING within 10s "

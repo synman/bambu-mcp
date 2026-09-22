@@ -19,10 +19,12 @@ from __future__ import annotations
 import collections
 import json
 import logging
+import re
 import threading
 import time
 import urllib.parse
 from dataclasses import dataclass
+from html import escape as _escape_html
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable, Iterator
 
@@ -270,6 +272,9 @@ function tCls(t,tgt){
   var d=Math.abs(t-tgt);
   return d<=5?'ok':d<=40?'hot':'val';
 }
+function escAttr(v){
+  return String(v==null?'':v).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
 function fmtM(m){
   if(!m||m<=0) return '\u2014';
   return m<60?m+'m':Math.floor(m/60)+'h '+(m%60)+'m';
@@ -306,7 +311,7 @@ function update(d){
 
   var sn=d.stage_name||'';
   var sRow=document.getElementById('stage-row');
-  if(sn&&sn!=='Printing normally'){
+  if(sn&&sn!=='Printing'&&sn!=='Completed'){
     document.getElementById('stage').textContent=sn;
     sRow.classList.remove('hidden');
   } else { sRow.classList.add('hidden'); }
@@ -330,8 +335,9 @@ function update(d){
   nEl.innerHTML='';
   (d.nozzles||[]).slice().sort(function(a,b){return b.id-a.id;}).forEach(function(n){
     var lbl=(d.nozzles.length>1)?((n.id===0?'Right':'Left')+' Nozzle'):'Nozzle';
-    var cls=tCls(n.temp,n.target);
-    nEl.innerHTML+='<div class="row"><span class="lbl">'+lbl+'</span><span class="'+cls+htg(n.temp,n.target)+'">'+fmtT(n.temp,n.target)+'</span></div>';
+    var nt=Number(n.temp)||0,ng=Number(n.target)||0;
+    var cls=tCls(nt,ng);
+    nEl.innerHTML+='<div class="row"><span class="lbl">'+lbl+'</span><span class="'+cls+htg(nt,ng)+'">'+fmtT(nt,ng)+'</span></div>';
   });
 
   // E4 — active filament swatch
@@ -339,11 +345,14 @@ function update(d){
   if(d.active_filament&&active){
     var f=d.active_filament;
     var fc=f.color||'#888';
-    if(fc&&!fc.startsWith('#')&&/^[0-9a-fA-F]{6}$/.test(fc)) fc='#'+fc;
+    if(fc&&!fc.startsWith('#')&&/^([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(fc)) fc='#'+fc;
+    // The colour goes into a style attribute: only # plus 6 or 8 hex digits gets through, anything else is the grey default.
+    if(!/^#([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(fc)) fc='#888';
     var fh='<span style="display:inline-block;width:10px;height:10px;background:'+fc+
            ';border-radius:2px;vertical-align:middle;margin-right:4px;border:1px solid rgba(255,255,255,.2)"></span>';
-    fh+='<span class="val">'+(f.type||'\u2014')+'</span>';
-    if(f.remaining_pct>0) fh+=' <span class="dim">'+f.remaining_pct+'%</span>';
+    fh+='<span class="val">'+escAttr(f.type||'\u2014')+'</span>';
+    var fpct=Number(f.remaining_pct)||0;
+    if(fpct>0) fh+=' <span class="dim">'+fpct+'%</span>';
     fRow.innerHTML=fh;fRow.style.display='block';
   } else fRow.style.display='none';
 
@@ -371,7 +380,7 @@ function update(d){
 
   // E2 — heatbreak fan added to fan list
   var fanSec=document.getElementById('sec-fans');
-  var fanData=[['Part',d.part_cooling_pct],['Aux',d.aux_pct],['Exhaust',d.exhaust_pct],['Heatbreak',d.heatbreak_pct]].filter(function(f){return f[1]>0;});
+  var fanData=[['Part',Number(d.part_cooling_pct)||0],['Aux',Number(d.aux_pct)||0],['Exhaust',Number(d.exhaust_pct)||0],['Heatbreak',Number(d.heatbreak_pct)||0]].filter(function(f){return f[1]>0;});
   if(fanData.length>0){
     var fEl=document.getElementById('fans');
     fEl.innerHTML='';
@@ -381,7 +390,7 @@ function update(d){
 
   // E7 — AMS humidity (shown only when elevated)
   var hmEl=document.getElementById('humidity-row');
-  var hIdx=d.ams_humidity_index||0;
+  var hIdx=Number(d.ams_humidity_index)||0;
   if(hIdx>0&&hIdx<=2){
     var hc=hIdx===1?'#ff5050':'#ffcc40';
     hmEl.innerHTML='<span style="color:'+hc+'">&#x1F4A7; Humid '+hIdx+'/5</span>';
@@ -408,9 +417,9 @@ function update(d){
   if(d.hms_errors&&d.hms_errors.length>0){
     var html='';
     d.hms_errors.forEach(function(e){
-      var lbl='\u26a0 '+(e.code||'error');
-      if(e.url) html+='<a class="error-link warn" href="'+e.url+'" title="'+(e.description||'')+'" onclick="window.open(this.href,\\'hms_popup\\',\\'width=600,height=400,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes\\');return false;">'+lbl+'</a><br>';
-      else html+='<span class="warn" title="'+(e.description||'')+'">'+lbl+'</span><br>';
+      var lbl='\u26a0 '+escAttr(e.code||'error');
+      if(e.url) html+='<a class="error-link warn" href="'+escAttr(e.url)+'" title="'+escAttr(e.msg)+'" onclick="window.open(this.href,\\'hms_popup\\',\\'width=600,height=400,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes\\');return false;">'+lbl+'</a><br>';
+      else html+='<span class="warn" title="'+escAttr(e.msg)+'">'+lbl+'</span><br>';
     });
     eEl.innerHTML=html;
     eEl.classList.remove('hidden');
@@ -590,10 +599,11 @@ function hpUpdateFromResult(d){
   if(statusEl){
     var gs=d.gcode_state||'';
     var stateColor=gs==='RUNNING'?'#40d0c0':gs==='PAUSE'?'#f0c040':gs==='FAILED'?'#ff5050':'#888';
-    var stateStr='<span style="color:'+stateColor+'">'+gs+'</span>';
-    var layerStr=(d.layer&&d.total_layers)?(' &nbsp;Layer: '+d.layer+'/'+d.total_layers):'';
-    var humIdx=d.ams_humidity;var humStr='';
-    if(humIdx!==null&&humIdx!==undefined&&humIdx>0){
+    var stateStr='<span style="color:'+stateColor+'">'+escAttr(gs)+'</span>';
+    var lyr=Number(d.layer),lyrTotal=Number(d.total_layers);
+    var layerStr=(lyr&&lyrTotal)?(' &nbsp;Layer: '+lyr+'/'+lyrTotal):'';
+    var humIdx=Number(d.ams_humidity);var humStr='';
+    if(humIdx>0){
       var humPct=Math.round((6-humIdx)/5*100);
       var humLabel=humIdx<=2?'WET':humIdx<=3?'Damp':'Dry';
       humStr=' &nbsp;AMS: '+humPct+'% ('+humLabel+')';
@@ -735,6 +745,55 @@ var _lastFrameMs=0;var _streamConnect=null;
 """
 
 
+_QUALITY_RE = re.compile(r"[0-9]{1,6}")   # ASCII digits only: int() also takes "5_0" and non-ASCII digits
+_QUALITY_MIN, _QUALITY_MAX = 1, 100
+
+
+class _BadStreamParam(ValueError):
+    """A resolution or quality query value the stream server does not accept."""
+
+    def __init__(self, error: str, detail: str):
+        super().__init__(detail)
+        self.error = error
+        self.detail = detail
+
+
+def _parse_stream_params(path: str) -> tuple[str, int]:
+    """Return the (resolution, quality) a request path asks for; ("native", 85) when it names none.
+
+    The resolution must be a key of tools.camera._RESOLUTION_MAP, the set view_stream accepts and the
+    frame transform honours, and the quality an integer from 1 to 100. Anything else raises
+    _BadStreamParam; the rejected value is left out of the message.
+    """
+    from tools.camera import _RESOLUTION_MAP  # here, not at the top: tools.camera imports this module
+    resolution, quality = "native", 85
+    if "?" in path:
+        params = urllib.parse.parse_qs(path.split("?", 1)[1])
+        resolution = params.get("resolution", ["native"])[0]
+        raw_quality = params.get("quality", ["85"])[0]
+        if resolution not in _RESOLUTION_MAP:
+            raise _BadStreamParam("invalid_resolution",
+                                  f"resolution must be one of: {', '.join(_RESOLUTION_MAP)}")
+        if not _QUALITY_RE.fullmatch(raw_quality) or not _QUALITY_MIN <= int(raw_quality) <= _QUALITY_MAX:
+            raise _BadStreamParam("invalid_quality",
+                                  f"quality must be an integer from {_QUALITY_MIN} to {_QUALITY_MAX}")
+        quality = int(raw_quality)
+    return resolution, quality
+
+
+def _js_str(value: str) -> str:
+    """``value`` as a single-quoted JavaScript string literal that is also safe inside <script>."""
+    out = []
+    for ch in value:
+        if ch in "\\'":
+            out.append("\\" + ch)
+        elif ch == "<" or ch < " " or ch in "\u2028\u2029":
+            out.append(f"\\u{ord(ch):04x}")
+        else:
+            out.append(ch)
+    return "'" + "".join(out) + "'"
+
+
 class _MJPEGHTTPServer(ThreadingHTTPServer):
     """HTTPServer subclass that holds a frame factory and optional status/image callbacks.
 
@@ -793,21 +852,36 @@ class _StreamHandler(BaseHTTPRequestHandler):
         else:
             self._serve_stream()
 
+    def _stream_params_or_400(self) -> tuple[str, int] | None:
+        """The request's (resolution, quality), or None after answering 400 with the JSON error body."""
+        try:
+            return _parse_stream_params(self.path)
+        except _BadStreamParam as e:
+            log.debug("%s: rejected %s: %s", self.path.split("?", 1)[0], e.error, e.detail)
+            body = json.dumps({"error": e.error, "detail": e.detail}).encode()
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return None
+
     def _serve_html(self):
         log.debug("_serve_html: serving HTML to %s", self.client_address)
-        title = f"Bambu Cam — {self.server.printer_name}" if self.server.printer_name else "Bambu Cam"
-        # Inject per-client quality params into the stream fetch URL so each browser
-        # tab gets the resolution/quality it requested via ?resolution=X&quality=Y.
+        title = f"Bambu Cam — {_escape_html(self.server.printer_name)}" if self.server.printer_name else "Bambu Cam"
+        # Intended: inject per-client quality params into the stream fetch URL so each browser
+        # tab gets the resolution/quality it requested via ?resolution=X&quality=Y. NOT in effect
+        # today: the page's call is fetch('/stream',{signal:...}), which the needle below never
+        # matches, so the replace changes nothing and the page always fetches plain /stream.
+        params = self._stream_params_or_400()
+        if params is None:
+            return
+        resolution, quality = params
         stream_url = "/stream"
-        if "?" in self.path:
-            qs = self.path.split("?", 1)[1]
-            params = urllib.parse.parse_qs(qs)
-            resolution = params.get("resolution", ["native"])[0]
-            quality = int(params.get("quality", ["85"])[0])
-            if not (resolution == "native" and quality == 85):
-                stream_url = f"/stream?resolution={resolution}&quality={quality}"
+        if not (resolution == "native" and quality == 85):
+            stream_url = "/stream?" + urllib.parse.urlencode({"resolution": resolution, "quality": quality})
         body = _HTML_PAGE.replace("<title>Bambu Cam</title>", f"<title>{title}</title>", 1)
-        body = body.replace("fetch('/stream')", f"fetch('{stream_url}')").encode()
+        body = body.replace("fetch('/stream')", f"fetch({_js_str(stream_url)})").encode()
         log.debug("_serve_html: %d bytes", len(body))
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -993,25 +1067,27 @@ class _StreamHandler(BaseHTTPRequestHandler):
         Called by view_stream() via webbrowser.open('/open?name=bambu-{printer}').
         The page calls window.open('/', target) — browsers reuse an existing window
         with that name on subsequent calls, achieving single-tab-per-printer behavior.
-        Resolution/quality params are forwarded to the stream page.
+        Resolution/quality params are forwarded to the stream page; a resolution that is not in
+        tools.camera._RESOLUTION_MAP or a quality that is not an integer from 1 to 100 is answered
+        with a 400 JSON error body instead.
         """
         log.debug("_serve_open: serving portal to %s", self.client_address)
         # Forward resolution/quality so the opened tab requests the right quality.
+        params = self._stream_params_or_400()
+        if params is None:
+            return
+        resolution, quality = params
         stream_path = "/"
-        if "?" in self.path:
-            qs = self.path.split("?", 1)[1]
-            params = urllib.parse.parse_qs(qs)
-            resolution = params.get("resolution", ["native"])[0]
-            quality = int(params.get("quality", ["85"])[0])
-            if not (resolution == "native" and quality == 85):
-                stream_path = f"/?resolution={resolution}&quality={quality}"
+        if not (resolution == "native" and quality == 85):
+            stream_path = "/?" + urllib.parse.urlencode({"resolution": resolution, "quality": quality})
+        stream_js = _js_str(stream_path)
         html = (
             "<!doctype html><html><head><title>Opening Bambu Cam\u2026</title></head>"
             "<body><script>"
             "var n=new URLSearchParams(location.search).get('name')||'bambu-cam';"
-            f"var w=window.open(location.origin+'{stream_path}',n);"
+            f"var w=window.open(location.origin+{stream_js},n);"
             "if(w){w.focus();setTimeout(function(){window.close();},150);}"
-            f"else{{location.replace('{stream_path}');}}"
+            f"else{{location.replace({stream_js});}}"
             "</script><p>Opening stream\u2026</p></body></html>"
         ).encode()
         self.send_response(200)
@@ -1024,15 +1100,12 @@ class _StreamHandler(BaseHTTPRequestHandler):
     def _serve_stream(self):
         ua = self.headers.get("User-Agent", "unknown")
         log.debug("_serve_stream: starting for client %s", self.client_address)
+        # Per-client quality params from the request URL; a bad one is a 400 before any stream header.
+        params = self._stream_params_or_400()
+        if params is None:
+            return
+        resolution, quality = params
         log.info("stream_connect: client=%s ua=%s", self.client_address[0], ua)
-        # Parse per-client quality params from the request URL.
-        resolution = "native"
-        quality = 85
-        if "?" in self.path:
-            qs = self.path.split("?", 1)[1]
-            params = urllib.parse.parse_qs(qs)
-            resolution = params.get("resolution", ["native"])[0]
-            quality = int(params.get("quality", ["85"])[0])
         transform = self.server.frame_transform_fn
         apply_transform = transform is not None and not (resolution == "native" and quality == 85)
         log.debug("_serve_stream: resolution=%s quality=%d apply_transform=%s", resolution, quality, apply_transform)

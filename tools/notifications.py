@@ -15,14 +15,14 @@ def get_pending_alerts(name: str, clear: bool = True) -> list[dict]:
     """Return the queued state-change alerts for the named printer.
 
     WHEN to use: poll for high-visibility transitions (job started, finished, failed, paused or
-    resumed, new or cleared HMS errors, job health shifts) since the last call. This works
-    whether or not the MCP client supports resource subscriptions, and is the recommended
-    polling path for all clients.
+    resumed, active HMS faults appearing or clearing, job health shifts) since the last call.
+    This works whether or not the MCP client supports resource subscriptions, and is the
+    recommended polling path for all clients.
 
     Sibling disambiguation: ``get_pending_alerts`` returns the queue of transitions that
     happened since you last read it, and by default empties that queue. ``get_hms_errors``
-    returns the HMS errors that are active right now, and ``get_job_info`` returns the
-    current job's state. Neither of those is a history of changes.
+    returns the HMS entries as they stand right now, each labelled active or Historical, and
+    ``get_job_info`` returns the current job's state. Neither of those is a history of changes.
 
     Args:
         name: Printer name (required).
@@ -60,13 +60,16 @@ def get_pending_alerts(name: str, clear: bool = True) -> list[dict]:
           job_started:       {} (empty)
           job_finished:      {} (empty)
           job_failed:        {} (empty)
-          job_paused:        stage_id (currently always null), stage_name (currently always
-                             "unknown")
+          job_paused:        stage_id (int, the printer's stage code when it paused; null if
+                             the stage is not known), stage_name (the stage's name, e.g.
+                             "Paused by user"; "unknown" when there is no stage)
           job_resumed:       {} (empty)
-          stage_change:      stage_id, stage_name, prev_stage_id, prev_stage_name (not
-                             currently emitted, see below)
-          hms_error_new:     errors=[{code, description}, ...] (description is currently
-                             always "")
+          stage_change:      stage_id, stage_name, prev_stage_id, prev_stage_name
+          hms_error_new:     errors=[{code, description}, ...] (active faults only; description
+                             is the decoded HMS message text for that code; "Unknown HMS
+                             Error" for a code the HMS catalogue does not list, and "No
+                             description in the HMS catalogue" for a code it lists with empty
+                             text)
           hms_error_cleared: prev_error_count
           health_escalated:  from_verdict, to_verdict, score
           health_recovered:  from_verdict, to_verdict, score
@@ -74,17 +77,34 @@ def get_pending_alerts(name: str, clear: bool = True) -> list[dict]:
         job_finished elapsed_min and layer_num), but those fields are never populated: do
         not index them.
 
-        hms_error_cleared is emitted only when every active HMS code has cleared; a partial
-        clear is silent. hms_error_new lists only newly appeared codes. Health alerts exist
-        only while the camera job monitor is producing verdicts, are limited to one per 60 s,
-        and are never emitted for the first verdict seen or for a "standby" verdict.
+        stage_change is emitted when the printer enters a new stage other than "no stage" (codes
+        -1 and 0), "Printing" (100) and "Completed" (255): pre-print calibration, filament
+        operations and pause stages. Stage codes and names come from the printer library (bpm),
+        the same ones ``get_job_info`` reports. A stage that simply continues does not alert
+        again, and re-entering a stage that alerted less than 30 s ago is suppressed. The
+        first stage seen for a printer after server start produces no alert.
 
-        Known code defects: ``stage_change`` is never emitted, and ``job_paused`` has no
-        stage, because the detector reads a ``stg_cur`` attribute that BambuState does not
-        have. The job fields above are missing because SessionManager has no
+        HMS alerts are for ACTIVE faults only. A fault is active by the same rule get_hms_errors
+        applies: a device_error (print_error != 0) plus the first device_hms entry. Every other
+        device_hms entry is Historical, and a Historical entry never produces hms_error_new or
+        hms_error_cleared, however often the telemetry re-sends or drops it. (bpm's raw HMS list
+        carries no such label, so a stale code can read severity "Fatal" there and still be
+        Historical here.) hms_error_new lists only newly active
+        codes, and a code that alerted less than 30 s ago is not alerted again when it flaps
+        back in. hms_error_cleared is emitted only after an hms_error_new was raised, and only
+        when every active HMS code has cleared; a partial clear is silent, and so is a clear
+        that follows only suppressed re-appearances.
+
+        Health alerts exist only while the camera job monitor is producing verdicts, are
+        limited to one per 60 s, and are never emitted for the first verdict seen or for a
+        "standby" verdict. from_verdict and to_verdict are the monitor's stable verdicts (the
+        most common of its last five analyses), and score is the ``anomaly_score`` of its latest
+        analysis: the weighted composite that ``verdict`` is thresholded on, the same figure
+        ``open_job_state`` returns as ``score``. So the score can sit on the other side of a
+        threshold from to_verdict.
+
+        Known code defect: the job fields above are missing because SessionManager has no
         ``get_job_info()`` or ``get_progress()`` (the resulting errors are swallowed).
-        ``description`` is empty because the code reads ``description``/``desc`` while HMS
-        entries carry ``msg``.
 
         Call kb_get('bambu-state-change-alerts') for further documentation on each alert
         type, recommended actions, and severity guidance.

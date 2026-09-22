@@ -87,11 +87,16 @@ def get_nozzle_info(name: str) -> dict:
           'BRASS', 'TUNGSTEN_CARBIDE', 'E3D', 'UNKNOWN').
         - flow_type: NozzleFlowType enum name (e.g. 'STANDARD', 'HIGH_FLOW', 'TPU_HIGH_FLOW',
           'UNKNOWN'). Single-extruder printers always report 'STANDARD' (fixed by bpm).
-        - active_tray_id: absolute tray id currently selected for that extruder, as reported
-          by the printer: ams_unit_index * 4 + slot for a 4-slot AMS (so it can exceed 3),
-          128 + slot for AMS HT; 254 = the external spool holder of a single-nozzle printer
-          or the LEFT holder of a dual-nozzle printer; 255 = the RIGHT holder; -1 = no tray
-          active.
+        - active_tray_id: the tray currently selected for that extruder, and what it counts
+          differs by printer. Single-extruder printer: the printer's raw tray_now value, an
+          absolute tray id (AMS unit n slot s reads 4n+s, so it can exceed 3). Dual-extruder
+          printer: the slot INSIDE the unit assigned to that extruder (the low byte of the
+          extruder's report: the AMS HT's slot 0 reads 0, not 128), which is not an absolute
+          id. That unit is the one bpm has assigned to the extruder; for the active extruder it
+          is the printer state's active_ams_id, and this tool does not return it. Either way
+          254 = the external spool holder (the only one on a single-nozzle printer, the LEFT
+          holder on a dual-nozzle one), 255 = the RIGHT holder (dual-nozzle only), and -1 = no
+          tray active.
         - tray_state: TrayState enum name: 'LOADED', 'UNLOADED', 'LOADING', 'UNLOADING'. It
           is DERIVED by bpm, not a measurement of filament in the hotend. Single-extruder:
           LOADING/UNLOADING come from the job stage, LOADED means an AMS tray is selected,

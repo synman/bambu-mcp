@@ -99,11 +99,13 @@ def list_sdcard_files(name: str, path: str = "/", cached: bool = False) -> dict:
             in-memory cached copy immediately without contacting the printer, for when stale
             data is acceptable and low latency matters. The cache is populated by the most
             recent live listing (this tool with ``cached=False``, or ``refresh_sdcard``). If
-            the cache has never been populated the call returns the
-            ``Failed to retrieve SD card contents`` error; that error is reachable only this
-            way. On a live listing a failed FTPS directory listing comes back as an EMPTY
-            ``children`` list, indistinguishable from an empty card, so an empty result does
-            not prove the card is empty.
+            the cache has never been populated, or the last listing was reported as failed
+            (the library then clears it), the call returns the
+            ``Failed to retrieve SD card contents`` error. A live listing returns the same
+            error when the listing failed (a timeout, a dropped connection, or any folder that
+            could not be listed): a failed listing is never returned as an empty tree. An
+            EMPTY ``children`` list therefore means the card, or that folder, really is
+            empty; a folder the printer refuses to list also reads as empty.
 
     Returns:
         ``{"path": <path>, "contents": <node>}`` on success, where a node is
@@ -180,14 +182,14 @@ def get_file_info(name: str, file_path: str) -> dict:
         ``id`` (full SD card path), ``name``, ``size`` and ``timestamp``; a directory entry
         also carries ``children``. Errors are ``{"error": str}``:
         ``"Printer '<name>' not connected"``, ``"Failed to retrieve SD card contents"``
-        (not seen on a live listing, see Notes), ``"File not found: <file_path>"``, or
-        ``"Error getting file info: <exception>"``.
+        (the library reported the listing as failed, see Notes), ``"File not found:
+        <file_path>"``, or ``"Error getting file info: <exception>"``.
 
     Notes:
         Every call retrieves the full SD card listing live over FTPS (which also repopulates
-        the printer library's cached tree) and then searches it. A failed FTPS directory
-        listing comes back as an empty ``children`` list, not as the ``Failed to retrieve``
-        error, so it surfaces as ``File not found``.
+        the printer library's cached tree) and then searches it. A listing that failed (a
+        timeout, a dropped connection, or a folder that could not be listed) gives the
+        ``Failed to retrieve`` error, so ``File not found`` means the file is not on the card.
     """
     log.debug("get_file_info: called for name=%s file_path=%s", name, file_path)
     printer = session_manager.get_printer(name)
@@ -355,8 +357,9 @@ def get_project_info(name: str, file_path: str, plate_num: int = 1, include_imag
         cache HIT still performs a live FTPS listing of the whole SD card to validate the cache
         (the printer must be reachable) and repopulates the printer library's cached trees;
         only the .3mf download is skipped. On a miss the .3mf is downloaded over FTPS and the
-        cache is written. The same applies to every tool that reads project info, so
-        ``open_plate_viewer`` performs one such call per plate plus one.
+        cache is written. The same applies to every tool that reads project info.
+        ``get_all_project_info`` and ``open_plate_viewer`` pay for that listing once per call,
+        because the plates after the first are served from the cached listing.
 
         Three ``metadata`` keys say which external spool holder each filament prints from
         (bpm 1.0.4 and later; a daemon running an older bpm omits them). All are lists indexed
@@ -373,16 +376,18 @@ def get_project_info(name: str, file_path: str, plate_num: int = 1, include_imag
         same derivation, so a caller passes no holder.
 
         Multi-level call hierarchy:
-          Level 1: ``get_project_info(name, file, 1)`` returns ``{plates: [1..N], ...}`` (index).
-          Level 2: ``get_project_info(name, file, N)`` returns per-plate metadata and
-          bbox_objects.
+          Level 1: ``get_project_info(name, file, 1)`` returns ``{plates: [...], ...}`` (index):
+          the file's real plate numbers, which may be sparse, such as [1,5,6,12].
+          Level 2: ``get_project_info(name, file, N)`` for one of those numbers returns
+          per-plate metadata and bbox_objects.
           Level 3: ``get_plate_thumbnail(name, file, N)`` returns just the isometric image;
           ``get_plate_topview(name, file, N)`` returns just the top-down image.
 
         Key fields in the returned dict:
-        - ``plates``: list of all plate numbers in the file (e.g. [1,2,...,14]). Iterate over
-          it and call ``get_project_info`` once per plate to retrieve all plates (or use
-          ``get_all_project_info``).
+        - ``plates``: list of all plate numbers in the file. They are not necessarily
+          contiguous or 1-based (e.g. [1,5,6,12] or [10]). Iterate over that list, never
+          over ``range(1, len(plates) + 1)``, and call ``get_project_info`` once per listed
+          plate to retrieve all plates (or use ``get_all_project_info``).
         - ``metadata.filament``: list of ``{"id": int (1-based), "type": str, "color": str}``
           for the plate's filaments, the colour being a hex string such as "#RRGGBB". These ids index the ``ams_mapping`` array
           that ``print_file`` and ``preview_ams_mapping`` use.
@@ -693,10 +698,10 @@ def upload_file(
     Returns:
         ``{"success": True, "remote_path": <remote_path>, "contents": <refreshed SD card
         tree>}`` on success; ``contents`` is the printer library's SD card listing taken after
-        the upload, and shows an empty ``children`` list rather than null if that listing
-        silently failed. Errors are ``{"error": str}``: the ``_permission_denied`` refusal when
-        ``user_permission`` is False, ``"Printer '<name>' not connected"``, or
-        ``"Error uploading file: <exception>"``.
+        the upload. It is null when that listing failed; the upload itself succeeded either
+        way, so the tool still returns success. Errors are ``{"error": str}``: the
+        ``_permission_denied`` refusal when ``user_permission`` is False,
+        ``"Printer '<name>' not connected"``, or ``"Error uploading file: <exception>"``.
 
     Notes:
         If ``local_path`` ends in ``.3mf``, the project metadata is parsed and cached after the
@@ -814,7 +819,8 @@ def delete_file(
     Returns:
         ``{"success": True, "remote_path": <remote_path>, "contents": <SD card tree>}`` on
         success; ``contents`` is the printer library's cached SD card tree with the deleted
-        entry removed (null if the cache was never populated). Errors are ``{"error": str}``:
+        entry removed (null if the cache is empty: never populated, or cleared by a listing the
+        library reported as failed). Errors are ``{"error": str}``:
         the ``_permission_denied`` refusal when ``user_permission`` is False,
         ``"Printer '<name>' not connected"``, or ``"Error deleting file: <exception>"``.
     """
@@ -868,10 +874,10 @@ def create_folder(
     Returns:
         ``{"success": True, "path": <path>, "contents": <refreshed SD card tree>}`` on
         success; ``contents`` is the printer library's SD card listing taken after the
-        creation, and shows an empty ``children`` list rather than null if that listing
-        silently failed. Errors are ``{"error": str}``: the ``_permission_denied`` refusal
-        when ``user_permission`` is False, ``"Printer '<name>' not connected"``, or
-        ``"Error creating folder: <exception>"``.
+        creation. It is null when that listing failed; the folder itself was created either
+        way, so the tool still returns success. Errors are ``{"error": str}``:
+        the ``_permission_denied`` refusal when ``user_permission`` is False,
+        ``"Printer '<name>' not connected"``, or ``"Error creating folder: <exception>"``.
     """
     log.debug("create_folder: called for name=%s path=%s user_permission=%s", name, path, user_permission)
     if not user_permission:
@@ -1509,9 +1515,9 @@ def open_plate_viewer(name: str, file_path: str, target_plate: int = None) -> di
     WHEN to use: the human should see the plates, for example to visually confirm which plate
     to print before calling ``print_file``, or to jump to the plate a finished job printed.
 
-    Sibling disambiguation: ``open_plate_viewer`` shows plates 1 to N of the file, N being the
-    length of plate 1's ``plates`` list (isometric, top-down and, when objects are known, a
-    layout image per plate) in a browser page;
+    Sibling disambiguation: ``open_plate_viewer`` shows every plate the file really contains
+    (isometric, top-down and, when objects are known, a layout image per plate) in a browser
+    page, headed with each plate's own number even when the numbers are sparse;
     ``open_plate_layout`` shows one plate as a single annotated top-down PNG. The
     ``get_plate_thumbnail`` and ``get_plate_topview`` tools return raw image data for the AI
     agent rather than opening anything for the human.
@@ -1522,23 +1528,25 @@ def open_plate_viewer(name: str, file_path: str, target_plate: int = None) -> di
         target_plate: Optional plate number to scroll straight to on open. If set, the browser
             opens with the URL fragment ``#plate-{target_plate}``. Useful after a job
             completes: pass the plate number from ``get_job_info`` to jump to the printed plate.
+            The anchors are the file's real plate numbers, so a number the file does not
+            contain scrolls nowhere.
 
     Returns:
         ``{"success": True, "path": <path of the HTML file written under /tmp>, "plates":
-        <plate count>}`` on success. Errors are ``{"error": str}``: ``"Printer '<name>' not
-        connected"``, ``"Could not retrieve project info for '<file_path>'"``, or
+        <number of plates shown>}`` on success. Errors are ``{"error": str}``:
+        ``"Printer '<name>' not connected"``, ``"Could not retrieve project info for '<file_path>'"``, or
         ``"Error building plate viewer: <exception>"``.
 
     Notes:
         Fetches project info for the plates via the local cache (the .3mf may be downloaded
         over FTPS and the cache written on a miss), embeds the base64 images directly in the
         HTML, writes it to ``/tmp/plate_viewer_<name>.html`` (overwriting any earlier viewer
-        for that printer), and opens it in the default browser. The plate count N comes from
-        the length of the ``plates`` list of plate 1's project info, and the tool then fetches
-        plate numbers 1 through N. Files whose plate numbers are non-contiguous (for example
-        [1,5,6,12]) are shown incorrectly: a missing number renders another available plate's
-        images under the wrong heading, and plates numbered above N never appear.
-        Nothing is skipped. Use ``get_all_project_info`` for the accurate plate set.
+        for that printer), and opens it in the default browser. The plate set is the one
+        ``get_all_project_info`` returns: plate numbers are not assumed to be contiguous or to
+        start at 1, so a file with plates [1,5,6,12] shows exactly those four, each under its
+        own number. Only plates that genuinely exist are fetched, and the library's ceiling of
+        30 applies: a plate numbered above 30 is not shown. The .3mf is downloaded at most
+        once, and the listing of the SD card is refreshed once for the whole batch.
     """
     log.debug("open_plate_viewer: called for name=%s file_path=%s", name, file_path)
     printer = session_manager.get_printer(name)
@@ -1546,39 +1554,23 @@ def open_plate_viewer(name: str, file_path: str, target_plate: int = None) -> di
         log.warning("open_plate_viewer: printer not connected: %s", name)
         return _no_printer(name)
     try:
-        import dataclasses
-        import json
         import webbrowser
-        from enum import Enum
-        from bpm.bambuproject import get_project_info as _get_project_info
-
-        def _to_dict(o):
-            if isinstance(o, Enum):
-                return o.name
-            if dataclasses.is_dataclass(o) and not isinstance(o, type):
-                return {f.name: _to_dict(getattr(o, f.name)) for f in dataclasses.fields(o)}
-            if isinstance(o, dict):
-                return {k: _to_dict(v) for k, v in o.items()}
-            if isinstance(o, (list, tuple)):
-                return [_to_dict(v) for v in o]
-            return o
+        from bpm.bambuproject import get_all_project_info as _get_all_project_info
 
         model_key = getattr(getattr(printer, "config", None), "printer_model", None)
 
-        # Fetch plate 1 first to discover total plate count
-        first = _get_project_info(file_path, printer, plate_num=1)
-        if first is None:
+        # The same plate-set lookup the get_all_project_info tool uses: only the plates the
+        # .3mf really contains, sparse numbers included, each carrying its own plate_num.
+        infos = _get_all_project_info(file_path, printer)
+        if not infos:
             log.debug("open_plate_viewer: → error: no project info for %s", file_path)
             return {"error": f"Could not retrieve project info for '{file_path}'"}
-        first_dict = json.loads(json.dumps(_to_dict(first), default=str))
-        total_plates = len(first_dict.get("plates", [first_dict.get("plate_num", 1)]))
+        total_plates = len(infos)
 
         plates_html = ""
-        for p in range(1, total_plates + 1):
-            info = _get_project_info(file_path, printer, plate_num=p)
-            if info is None:
-                continue
-            d = json.loads(json.dumps(_to_dict(info), default=str))
+        for info in infos:
+            p = info.plate_num
+            d = _serialize_project_info(info, include_images=True)
             meta = d.get("metadata", {})
             topimg = meta.get("topimg", "")
             thumbnail = meta.get("thumbnail", "")
@@ -1868,9 +1860,10 @@ def rename_sdcard_file(
     Notes:
         This is an FTPS rename operation, not a copy: the file is moved or renamed in place and
         no data is re-uploaded. Each call then performs a FULL live FTPS listing of the card
-        and repopulates the printer library's cached trees; a failure in that listing surfaces
-        as a rename error even though the rename succeeded. Cached plate metadata keyed to the
-        old path is not renamed.
+        and repopulates the printer library's cached trees; a listing that raises surfaces as a
+        rename error even though the rename succeeded, while a listing the library reports as
+        failed is not surfaced, because the rename it followed did succeed. Cached plate
+        metadata keyed to the old path is not renamed.
     """
     log.debug("rename_sdcard_file: called for name=%s src=%s dest=%s user_permission=%s", name, src_path, dest_path, user_permission)
     if not user_permission:
@@ -1970,20 +1963,27 @@ def refresh_sdcard(name: str, mode: str = "full") -> dict:
         mode: ``'full'`` (default) and ``'3mf'`` both perform ONE full live FTPS listing of the
             whole SD card and repopulate BOTH cached trees (the .3mf tree is derived by
             filtering the full one). The mode only selects whether the tool calls
-            ``printer.get_sdcard_contents()`` or ``printer.get_sdcard_3mf_files()``, and the
-            tool discards the return value; there is no cost or scope difference. Case-insensitive.
+            ``printer.get_sdcard_contents()`` or ``printer.get_sdcard_3mf_files()`` and checks
+            that call's return value; there is no cost or scope difference. Case-insensitive.
 
     Returns:
         ``{"success": True, "mode": <'full' or '3mf'>, "printer": <name>}`` on success. Errors
         are ``{"error": str}``: ``"Printer '<name>' not connected"``,
-        ``"Unknown mode '<mode>'. Must be 'full' or '3mf'."``, or
-        ``"Error refreshing SD card on '<name>': <exception>"``.
+        ``"Unknown mode '<mode>'. Must be 'full' or '3mf'."``,
+        ``"Failed to retrieve SD card contents"`` (the printer library reported the listing as
+        failed, which it does by returning None and clearing both cached trees, so the cache
+        is empty, not merely stale), or ``"Error refreshing SD card on '<name>': <exception>"``.
 
     Notes:
         The refresh is synchronous: the updated data is available immediately. It triggers an
         explicit re-read of the SD card contents over FTPS and repopulates the printer library's
-        cache; it changes nothing on the printer. The tool reports success once the call returns
-        without raising; it does not inspect whether the listing itself came back empty.
+        cache; it changes nothing on the printer. Success means the library returned a
+        listing tree, and an empty card is a success with no ``children``. A listing that
+        failed (a timeout, a dropped connection, a folder that could not be listed) is the
+        ``Failed to retrieve SD card contents`` error, never a success. A folder the printer
+        refuses to list is treated as empty. If the call raises instead (for example the FTPS
+        connection cannot be opened), the error names the exception and the previous cached
+        trees are left in place.
     """
     log.debug("refresh_sdcard: called for name=%s mode=%s", name, mode)
     printer = session_manager.get_printer(name)
@@ -1996,12 +1996,14 @@ def refresh_sdcard(name: str, mode: str = "full") -> dict:
     try:
         if mode_lower == "3mf":
             log.debug("refresh_sdcard: calling printer.get_sdcard_3mf_files() for %s", name)
-            printer.get_sdcard_3mf_files()
-            log.debug("refresh_sdcard: 3mf refresh complete for %s", name)
+            tree = printer.get_sdcard_3mf_files()
         else:
             log.debug("refresh_sdcard: calling printer.get_sdcard_contents() for %s", name)
-            printer.get_sdcard_contents()
-            log.debug("refresh_sdcard: full refresh complete for %s", name)
+            tree = printer.get_sdcard_contents()
+        if tree is None:
+            log.debug("refresh_sdcard: → error: listing failed for %s", name)
+            return {"error": "Failed to retrieve SD card contents"}
+        log.debug("refresh_sdcard: %s refresh complete for %s", mode_lower, name)
         return {"success": True, "mode": mode_lower, "printer": name}
     except Exception as e:
         log.error("refresh_sdcard: error for %s: %s", name, e, exc_info=True)

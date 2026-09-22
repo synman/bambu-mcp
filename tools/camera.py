@@ -32,6 +32,7 @@ from session_manager import session_manager
 from camera.mjpeg_server import mjpeg_server
 from camera.protocol import get_protocol, get_rtsps_url
 from camera.status_helpers import build_active_filament
+from tools.url_factory import _q
 
 # ---------------------------------------------------------------------------
 # Active RTSPS stream registry — allows _capture_jpeg to reuse a live stream
@@ -665,13 +666,13 @@ def analyze_active_job(
 
     Args:
         name: Printer name (as returned by ``get_configured_printers``).
-        store_as_reference: When True, stores the captured frame as the per-printer diff baseline. That baseline is SHARED with the background monitor (which stores one itself when none exists, so a reference usually already exists during a print) and is evicted after 10 minutes. The same call then compares the frame with itself, so ``diff_score`` is 0.0 and ``diff_png`` is a self-diff; later calls produce a real diff. Default False.
+        store_as_reference: When True, stores the captured frame as the per-printer diff baseline. That baseline is SHARED with the background monitor (which stores one itself when none exists, so a reference usually already exists during a print), is evicted after 10 minutes, and is dropped when a new job starts (a change into RUNNING or PAUSE from IDLE, FINISH, FAILED, SLICING, INIT or PREPARE), so a job never diffs against the previous job's frame. The same call then compares the frame with itself, so ``diff_score`` is 0.0 and ``diff_png`` is a self-diff; later calls produce a real diff. Default False.
         quality: Output resolution: "auto" (default) scales with verdict severity (clean=preview, warning=standard, critical=full); "preview" is 320×180, ~5 KB per asset; "standard" is 640×360, ~16 KB per asset; "full" is the original camera resolution.
         categories: List of category letters selecting which image assets are returned (case-insensitive); default None means ["X"], the composite only. Pass several letters to include more. See Notes for the categories and their sizes.
 
     Returns:
-        On success a dict of scalar fields: ``verdict``, ``stable_verdict``, ``success_probability``, ``decision_confidence``, ``factor_contributions``, ``anomaly_score``, ``hot_pct``, ``strand_score``, ``diff_score`` (null with no live reference, and during stages where the diff signal is suppressed), ``reference_age_s`` (null without a reference), ``quality``, ``layer``, ``total_layers``, ``progress_pct`` and ``timestamp``, plus one data URI per requested category: X adds ``job_state_composite_jpg`` (JPEG); P adds ``project_thumbnail_png`` and ``project_layout_png``; C adds ``raw_png`` and ``diff_png``; D adds ``air_zone_png``, ``mask_png``, ``annotated_png``, ``heat_png``, ``edge_png`` and ``factors_radar_png``; H adds ``health_panel_png``. Asset values are null when that image was not produced. ``stable_verdict`` is NOT computed by this tool and is always "clean", even when ``verdict`` is warning or critical; use ``verdict``. ``decision_confidence`` is computed against a single-sample confidence window and a fixed "clean" stability modifier, so it is not comparable to the background monitor's value for the same frame. ``decision_confidence`` is null if its own computation raises. If the failure-probability computation raises, the tool raises ``UnboundLocalError`` (``factor_contributions`` is never set) instead of returning an error dict.
-        Errors are dicts: ``{"error": "Printer '<name>' not connected"}`` or ``{"error": "not_connected", "detail": "Printer hostname is not set"}`` from the printer lookup; ``{"error": "no_camera", "detail": "This printer model does not have a camera"}``; ``{"error": "not_connected"}`` when the printer has no MQTT state; ``{"error": "stream_failed", "detail": str}`` when the frame capture fails; ``{"error": "analysis_failed", "detail": str}`` when the analyzer raises. This tool does not check gcode_state itself and never returns ``no_active_job``.
+        On success a dict of scalar fields: ``verdict``, ``stable_verdict``, ``success_probability``, ``decision_confidence``, ``factor_contributions``, ``anomaly_score``, ``hot_pct``, ``strand_score``, ``diff_score`` (null with no live reference, and during stages where the diff signal is suppressed), ``reference_age_s`` (null without a reference), ``quality``, ``layer``, ``total_layers``, ``progress_pct`` and ``timestamp``, plus one data URI per requested category: X adds ``job_state_composite_jpg`` (JPEG); P adds ``project_thumbnail_png`` and ``project_layout_png``; C adds ``raw_png`` and ``diff_png``; D adds ``air_zone_png``, ``mask_png``, ``annotated_png``, ``heat_png``, ``edge_png`` and ``factors_radar_png``; H adds ``health_panel_png``. Asset values are null when that image was not produced. ``stable_verdict`` is NOT computed by this tool and is always "clean", even when ``verdict`` is warning or critical; use ``verdict``. ``decision_confidence`` is computed against a single-sample confidence window and a fixed "clean" stability modifier, so it is not comparable to the background monitor's value for the same frame. ``decision_confidence`` is null if its own computation raises, and it loses its 0.25 camera-data weight while the job is in a preparation or maintenance stage (bed leveling, preheating, filament change, calibration, a pause: any stage ``get_job_info`` names in ``stage_id``), although the frame is still analyzed. ``success_probability`` and ``factor_contributions`` are always set on success.
+        Errors are dicts: ``{"error": "Printer '<name>' not connected"}`` or ``{"error": "not_connected", "detail": "Printer hostname is not set"}`` from the printer lookup; ``{"error": "no_camera", "detail": "This printer model does not have a camera"}``; ``{"error": "not_connected"}`` when the printer has no MQTT state; ``{"error": "stream_failed", "detail": str}`` when the frame capture fails; ``{"error": "analysis_failed", "detail": str}`` when the analyzer raises, or when the failure-probability computation raises (``detail`` then begins "failure probability computation failed"). This tool does not check gcode_state itself and never returns ``no_active_job``.
 
     Notes:
         Categories:
@@ -685,7 +686,7 @@ def analyze_active_job(
         lens within the larger report, not the deliverable itself.
 
         Verdict thresholds apply to ``anomaly_score`` (the weighted composite of diff, strand,
-        local-variance, edge and hot-pixel terms plus any YOLO boost), not to ``strand_score``.
+        local-variance, edge and hot-pixel terms), not to ``strand_score``.
         They are defaults that move with the printer's xcam spaghetti-detector sensitivity:
         with the detector enabled, high = 0.06 / 0.15 and low = 0.12 / 0.30; medium or detector
         disabled = 0.08 / 0.20 (clean below warn, warning between, critical at or above crit).
@@ -712,10 +713,19 @@ def analyze_active_job(
         verdicts, and temperature trends. It runs independently of this tool: this tool does
         NOT read the monitor's cache, and every call returns only the analysis of the frame it
         just captured. Call this tool proactively during prints to describe health to the user;
-        do not wait for explicit requests. The monitor resets its timer when a job starts, so
-        its first result lands on the next loop tick after the transition to RUNNING/PAUSE, not
-        60 seconds later; a tick produces nothing when no camera frame can be captured. Use
-        open_job_state() to open the latest cached result for human viewing without re-analyzing.
+        do not wait for explicit requests. The monitor skips camera analysis while the job is in
+        a preparation or maintenance stage (bed leveling, preheating, filament change,
+        calibration, a pause: any stage ``get_job_info`` names in ``stage_id``), because no
+        filament has been deposited yet, and stores an image-less "stage_gated" result instead.
+        It resets its timers, cached result, health history and diff reference frame when a job
+        starts (a change into RUNNING or PAUSE from IDLE, FINISH, FAILED, SLICING, INIT or PREPARE;
+        a pause and resume inside a job resets nothing), so its first result lands on the next loop
+        tick (about 10 seconds) after that transition, and that result is the
+        stage-gated placeholder while the printer is still preparing; the first analysis, with
+        images and a health record, lands on the first tick after the stage ends, not 60 seconds
+        later, and then about every 60 seconds. A tick produces no analysis when no camera frame
+        can be captured. Use open_job_state() to open the latest cached result for human viewing
+        without re-analyzing.
 
         This tool returns raw base64 image data URIs which may exceed the CLI inline
         display limit. If output is truncated, call kb_get('bambu-http-system')
@@ -804,7 +814,7 @@ def analyze_active_job(
     _printer_obj = session_manager.get_printer(name)
     _model = getattr(getattr(_printer_obj, "config", None), "printer_model", None)
     try:
-        from bambu_printer_manager import getPrinterSeriesByModel
+        from bpm.bambutools import getPrinterSeriesByModel
         _series = getPrinterSeriesByModel(_model).name if _model else "UNKNOWN"
     except Exception:
         _series = "UNKNOWN"
@@ -837,7 +847,7 @@ def analyze_active_job(
         "stage_id":              getattr(_job_obj, "stage_id", 255) if _job_obj else 255,
         "printer_series":        _series,
         "nozzle_diameter_mm":    getattr(_active_nozzle, "diameter_mm", 0.4) if _active_nozzle else 0.4,
-        "nozzle_flow_type":      getattr(getattr(_active_nozzle, "flow_type", None), "name", "STANDARD") if _active_nozzle else "STANDARD",
+        "nozzle_flow_type":      getattr(getattr(_active_nozzle, "flow", None), "name", "STANDARD") if _active_nozzle else "STANDARD",
         "speed_level":           _speed_name,
         "is_chamber_light_on":   getattr(_printer_obj, "light_state", False) if _printer_obj else False,
         "is_chamber_door_open":  getattr(climate, "is_chamber_door_open", False) if climate else False,
@@ -881,28 +891,23 @@ def analyze_active_job(
         return {"error": "analysis_failed", "detail": str(e)}
 
     # Compute Bayesian success_probability (correct path — same model as background monitor).
-    _success_prob: float | None = None
-    _decision_conf: float | None = None
+    from camera.job_analyzer import compute_failure_probability, compute_decision_confidence
     try:
-        from camera.job_analyzer import compute_failure_probability, compute_decision_confidence
         _fp, _factors = compute_failure_probability(
             report.score, report.thresh_warn, report.thresh_crit,
             printer_context, stable_verdict=report.stable_verdict or "clean",
         )
-        _success_prob = round(1.0 - _fp, 4)
+        _success_prob: float = round(1.0 - _fp, 4)
+    except Exception as e:
+        log.error("analyze_active_job: failure probability failed for %s: %s", name, e, exc_info=True)
+        return {"error": "analysis_failed", "detail": f"failure probability computation failed: {e}"}
+    _decision_conf: float | None = None
+    try:
         _decision_conf = compute_decision_confidence(
             len(report.confidence_window), report.stage_gated, printer_context
         )
     except Exception as e:
-        log.debug("analyze_active_job: success_probability error for %s: %s", name, e)
-
-    # Pull stable fields from background monitor cache when available.
-    _monitor_result: dict = {}
-    try:
-        from camera import job_monitor
-        _monitor_result = job_monitor.get_latest_result(name) or {}
-    except Exception:
-        pass
+        log.debug("analyze_active_job: decision_confidence error for %s: %s", name, e)
 
     def _png_uri(data: bytes | None) -> str | None:
         if not data:
@@ -928,7 +933,7 @@ def analyze_active_job(
         "stable_verdict":        report.stable_verdict,
         "success_probability":   _success_prob,
         "decision_confidence":   _decision_conf,
-        "factor_contributions":  _factors if _factors is not None else None,
+        "factor_contributions":  _factors,
         "anomaly_score":          round(report.score, 4),
         "hot_pct":               round(report.hot_pct, 4),
         "strand_score":          round(report.strand_score, 4),
@@ -973,8 +978,8 @@ def open_job_state(name: str) -> dict:
         name: Printer name (as returned by ``get_configured_printers``).
 
     Returns:
-        On success ``{"opened": int, "composite_path": str | None, "paths": [str], "verdict", "stable_verdict", "score", "layer", "total_layers", "progress_pct", "timestamp"}``, where ``paths`` lists the image files written and opened and the other fields are copied from the cached monitor result.
-        Errors are dicts: ``{"error": "no_result", "detail": ...}`` when the printer has no cached monitor result (no monitor, or no result yet for the current job); ``{"error": "no_images", "detail": "Monitor result contains no image assets"}`` when the cached result carries no image data URIs, which is also what a result reloaded from disk after a daemon restart returns, because reloaded results have their image assets stripped. This tool does not check printer connectivity itself and never returns ``not_connected``.
+        On success ``{"opened": int, "composite_path": str | None, "paths": [str], "verdict", "stable_verdict", "score", "layer", "total_layers", "progress_pct", "timestamp"}``, where ``paths`` lists the image files written and opened and the other fields are copied from the cached monitor result; ``score`` is that result's ``anomaly_score``.
+        Errors are dicts: ``{"error": "no_result", "detail": ...}`` when the printer has no cached monitor result (no monitor, or no result yet for the current job); ``{"error": "no_images", "detail": "Monitor result contains no image assets"}`` when the cached result carries no image data URIs, which is also what a stage-gated result returns (the monitor stores an image-less placeholder while the job is in a preparation or maintenance stage such as bed leveling or preheating) and what a result reloaded from disk after a daemon restart returns, because reloaded results have their image assets stripped. This tool does not check printer connectivity itself and never returns ``not_connected``.
 
     Notes:
         Reads the most recent result from the background print health monitor cache, saves each image asset to ``/tmp/bambu_job_state_{name}_{label}.png`` (overwriting any earlier file of that name) and launches the macOS ``open`` command on each file, composite first.
@@ -987,7 +992,7 @@ def open_job_state(name: str) -> dict:
           - health     : narrow health strip (verdict, score, hot_pct, stable_verdict)
           - raw        : unprocessed camera frame for comparison
 
-        The ``score`` field is read from the monitor result key ``score``; the monitor result stores its score under ``anomaly_score``, so ``score`` comes back null.
+        The ``score`` field is the monitor result's ``anomaly_score``, the weighted composite that ``verdict`` is thresholded on, the same figure ``analyze_active_job`` returns as ``anomaly_score``.
     """
     import base64
     import subprocess
@@ -998,7 +1003,7 @@ def open_job_state(name: str) -> dict:
 
     result = job_monitor.get_latest_result(name)
     if result is None:
-        return {"error": "no_result", "detail": "Background monitor has not yet produced a result — wait ~60s after print start"}
+        return {"error": "no_result", "detail": "Background monitor has not yet produced a result for this job — it runs a tick about every 10s while the job is RUNNING or PAUSE, so retry shortly"}
 
     image_fields = [
         ("job_state_composite_png", "composite"),
@@ -1034,7 +1039,7 @@ def open_job_state(name: str) -> dict:
         "paths": opened_paths,
         "verdict": result.get("verdict"),
         "stable_verdict": result.get("stable_verdict"),
-        "score": result.get("score"),
+        "score": result.get("anomaly_score"),
         "layer": result.get("layer"),
         "total_layers": result.get("total_layers"),
         "progress_pct": result.get("progress_pct"),
@@ -1107,15 +1112,16 @@ def view_stream(name: str, resolution: str = "native", quality: int = 85) -> dic
 
     Args:
         name: Printer name (as returned by ``get_configured_printers``).
-        resolution: Per-client stream size, one of "native" (default, full camera resolution), "1080p" (1920×1080), "720p" (1280×720), "480p" (854×480), "360p" (640×360) or "180p" (320×180). The value is not validated here.
+        resolution: Per-client stream size, one of "native" (default, full camera resolution), "1080p" (1920×1080), "720p" (1280×720), "480p" (854×480), "360p" (640×360) or "180p" (320×180). Any other value is rejected (see Returns) before a server is started.
         quality: Per-client JPEG compression, an integer 1-100 (default 85). Lower values reduce bandwidth; higher values improve sharpness.
 
     Returns:
         On success ``{"url": str, "port": int, "protocol": "rtsps" | "tcp_tls", "opened": bool, "overlay_active": True}``. ``url`` is the stream root (``http://localhost:{port}/``) with ``?resolution=...&quality=...`` appended when non-default values were requested; ``port`` is the server port; ``opened`` is True if a browser tab was focused or the browser was launched successfully; ``overlay_active`` is always True and confirms the HUD and image panels are active.
-        Errors are the dicts returned by ``start_stream``, passed through unchanged (printer not connected, ``no_camera``, ``stream_failed``).
+        ``{"error": "invalid_resolution", "detail": ...}`` when ``resolution`` is not one of the listed values; this is checked first, so it is returned even for a printer that is not connected, and nothing is started or opened.
+        Other errors are the dicts returned by ``start_stream``, passed through unchanged (printer not connected, ``no_camera``, ``stream_failed``).
 
     Notes:
-        The underlying MJPEG server always receives native frames; each browser tab applies the requested resolution and quality transform independently, and tabs share one server port. On macOS, when a tab whose URL starts with the server URL is already open, it is focused instead of opening a new tab, so a repeat call with different resolution or quality does not apply those settings to the focused tab. Otherwise the portal URL is ``{url}/open?name=bambu-{name}`` plus the resolution and quality parameters when they are non-default; the portal calls ``window.open`` with the window name ``bambu-{name}``, so the browser reuses that window if it is already open (single window per printer) and a repeat call with new resolution or quality replaces its content.
+        The underlying MJPEG server always receives native frames; each browser tab applies the requested resolution and quality transform independently, and tabs share one server port. On macOS, when a tab whose URL starts with the server URL is already open, it is focused instead of opening a new tab, so a repeat call with different resolution or quality does not apply those settings to the focused tab. Otherwise the portal URL is ``{url}/open?name=bambu-{name}`` plus the resolution and quality parameters when they are non-default (the name and every parameter value are percent-encoded, so a printer name containing a space, "&", "#" or "+" reaches the portal intact and names made only of letters, digits and "-", "_", ".", "~" appear unchanged); the portal calls ``window.open`` with the window name ``bambu-{name}``, so the browser reuses that window if it is already open (single window per printer) and a repeat call with new resolution or quality replaces its content.
 
         Named profiles (documentation-only):
           native   resolution="native"  quality=85  ~1–4 MB/frame  Maximum fidelity (default)
@@ -1134,22 +1140,25 @@ def view_stream(name: str, resolution: str = "native", quality: int = 85) -> dic
     """
     import webbrowser
 
-    log.debug("view_stream: called for %s resolution=%s quality=%d", name, resolution, quality)
+    log.debug("view_stream: called for %s resolution=%s quality=%s", name, resolution, quality)
+    if resolution not in _RESOLUTION_MAP:
+        return {"error": "invalid_resolution",
+                "detail": f"resolution must be one of: {', '.join(_RESOLUTION_MAP)} (got {resolution!r})"}
     result = start_stream(name)
     if "error" in result:
         return result
     url = result["url"]
     # Construct per-client parameterized URL; omit params when using defaults.
     use_default = (resolution == "native" and quality == 85)
-    client_url = url if use_default else f"{url.rstrip('/')}/?resolution={resolution}&quality={quality}"
+    client_url = url if use_default else f"{url.rstrip('/')}/?resolution={_q(resolution)}&quality={_q(quality)}"
     focused = _focus_existing_tab(url.rstrip("/"))
     if focused:
         log.debug("view_stream: focused existing tab for %s", name)
         opened = True
     else:
-        open_path = f"/open?name=bambu-{name}"
+        open_path = f"/open?name={_q(f'bambu-{name}')}"
         if not use_default:
-            open_path += f"&resolution={resolution}&quality={quality}"
+            open_path += f"&resolution={_q(resolution)}&quality={_q(quality)}"
         open_url = url.rstrip("/") + open_path
         opened = webbrowser.open(open_url)
         log.debug("view_stream: browser open result=%s for url=%s", opened, open_url)

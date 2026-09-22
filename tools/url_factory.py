@@ -17,8 +17,30 @@ Original tool implementations remain in their source modules and serve the HTTP 
 from __future__ import annotations
 
 import logging
+from urllib.parse import quote
+
+# The one definition of the health fields and of the accepted snapshot quality range lives in api_server,
+# next to the routes that serve them; importing it (not copying it) keeps tool and route in agreement.
+from api_server import _HEALTH_FIELDS, _SNAPSHOT_QUALITY_MAX, _SNAPSHOT_QUALITY_MIN
 
 log = logging.getLogger(__name__)
+
+
+def _q(value) -> str:
+    """Percent-encode one query value; unreserved characters (A-Z a-z 0-9 - _ . ~) pass through unchanged."""
+    return quote(str(value), safe="")
+
+
+def _valid_resolutions() -> tuple:
+    """Resolutions the camera resizer honours (the keys of tools.camera._RESOLUTION_MAP)."""
+    from tools.camera import _RESOLUTION_MAP
+    return tuple(_RESOLUTION_MAP)
+
+
+def _valid_fields() -> tuple:
+    """Fields /api/monitoring_series serves: the collector's telemetry collections plus the health fields."""
+    from data_collector import PrinterDataCollector
+    return tuple(PrinterDataCollector.COLLECTION_NAMES) + _HEALTH_FIELDS
 
 
 def _api_base() -> str:
@@ -50,9 +72,11 @@ def get_snapshot(name: str, resolution: str = "native", quality: int = 85, inclu
         name: Printer name (see ``get_configured_printers``).
         resolution: Output image dimensions, resized before JPEG encoding. One of "native" (original camera
             resolution, varies by model, may be 1920x1080 or larger; default), "1080p" (1920x1080),
-            "720p" (1280x720), "480p" (854x480), "360p" (640x360), "180p" (320x180).
-        quality: JPEG compression, 1-100 (higher = less compression, larger file). Default 85. Typical useful
-            range: 55-95.
+            "720p" (1280x720), "480p" (854x480), "360p" (640x360), "180p" (320x180). Any other value is
+            rejected with ``invalid_resolution`` (see Returns).
+        quality: JPEG compression, an integer from 1 to 100 (higher = less compression, larger file). Default 85.
+            Typical useful range: 55-95. Any other value (out of range, not an integer, a bool) is rejected with
+            ``invalid_quality`` (see Returns).
         include_status: When True, the HTTP response also carries a "status" key with live print telemetry.
             Default False.
 
@@ -60,8 +84,11 @@ def get_snapshot(name: str, resolution: str = "native", quality: int = 85, inclu
         ``{"url": "http://localhost:{port}/api/snapshot?printer=...&resolution=...&quality=...&include_status=..."}``
         on success. ``{"error": "not_connected"}`` if no session is registered under that printer name (never
         added, or removed by ``disconnect_printer`` / ``remove_printer``); a paused MQTT session still yields a
-        URL, because the frame comes from the camera, not MQTT. This tool captures no frame itself; see Notes
-        for what the URL returns.
+        URL, because the frame comes from the camera, not MQTT. ``{"error": "invalid_resolution", "detail":
+        ...}`` (no URL) if ``resolution`` is not one of the listed values; the detail names the valid set.
+        ``{"error": "invalid_quality", "detail": ...}`` (no URL) if ``quality`` is not an integer from 1 to 100;
+        the detail states the range (checked after ``resolution``, so a call with both wrong reports
+        ``invalid_resolution``). This tool captures no frame itself; see Notes for what the URL returns.
 
     Notes:
         This tool returns a URL instead of embedding the frame because native-resolution snapshots during
@@ -85,26 +112,40 @@ def get_snapshot(name: str, resolution: str = "native", quality: int = 85, inclu
         {"error": "not_connected"} (optionally with "detail": "Printer hostname is not set"),
         {"error": "no_camera", "detail": ...} (printer model has no camera) or
         {"error": "stream_failed", "detail": ...} (any failure while capturing, resizing or encoding), and 500
-        with {"status": "error", "message": ...} on an unexpected exception.
+        with {"status": "error", "message": ...} on an unexpected exception. It also answers 400 with
+        {"error": "invalid_quality", "detail": ...} for a quality that is not an integer from 1 to 100 (the
+        same check as this tool), before any frame is captured.
 
         Each fetch opens a new camera connection (RTSPS: 15 s timeout) unless an RTSPS stream started by
         ``start_stream`` / ``view_stream`` is already running, in which case its latest frame is reused (RTSPS
         models only). saved_path is not unique: it is bambu_snap_{name}_{resolution}_{quality}.jpg in the temp
         directory and the next call with the same parameters overwrites it. resolution="native" with
         quality=85 returns the camera's original bytes with no re-encode, so quality is not applied. Any
-        resolution string outside the listed values is treated as native (no resize) while the response echoes
-        the string you passed.
+        resolution string outside the listed values would be treated by the HTTP endpoint as native (no resize) while
+        echoing the string it was given, which is why this tool rejects such a value instead of building a URL.
 
-        The URL is built from the printer name and parameter values as given, without URL-escaping. The port is
-        the currently bound API server port, falling back to 49152 if it cannot be read.
+        The printer name and every parameter value are percent-encoded in the URL, so a name containing a
+        space, "&", "+", "#" or a non-ASCII character reaches the endpoint intact; names made only of letters,
+        digits and "-", "_", ".", "~" appear unchanged. The port is the currently bound API server port, falling
+        back to 49152 if it cannot be read.
     """
-    log.debug("get_snapshot (url_factory): name=%s resolution=%s quality=%d", name, resolution, quality)
+    log.debug("get_snapshot (url_factory): name=%s resolution=%s quality=%r", name, resolution, quality)
     from session_manager import session_manager
     if session_manager.get_printer(name) is None:
         return {"error": "not_connected"}
+    valid = _valid_resolutions()
+    if resolution not in valid:
+        return {"error": "invalid_resolution",
+                "detail": f"resolution must be one of: {', '.join(valid)} (got {resolution!r})"}
+    if (isinstance(quality, bool) or not isinstance(quality, int)
+            or not _SNAPSHOT_QUALITY_MIN <= quality <= _SNAPSHOT_QUALITY_MAX):
+        return {"error": "invalid_quality",
+                "detail": (f"quality must be an integer from {_SNAPSHOT_QUALITY_MIN} to "
+                           f"{_SNAPSHOT_QUALITY_MAX} (got {quality!r})")}
     base = _api_base()
     include_str = "true" if include_status else "false"
-    url = f"{base}/snapshot?printer={name}&resolution={resolution}&quality={quality}&include_status={include_str}"
+    url = (f"{base}/snapshot?printer={_q(name)}&resolution={_q(resolution)}&quality={_q(quality)}"
+           f"&include_status={include_str}")
     log.debug("get_snapshot (url_factory): url=%s", url)
     return {"url": url}
 
@@ -154,15 +195,17 @@ def get_monitoring_data(name: str) -> dict:
         If the full document is too large to handle, use get_monitoring_series(name, field) to fetch individual
         fields instead.
 
-        The URL is built from the printer name as given, without URL-escaping. The port is the currently bound
-        API server port, falling back to 49152 if it cannot be read.
+        The printer name is percent-encoded in the URL, so a name containing a space, "&", "+", "#" or a
+        non-ASCII character reaches the endpoint intact; names made only of letters, digits and "-", "_", ".",
+        "~" appear unchanged. The port is the currently bound API server port, falling back to 49152 if it
+        cannot be read.
     """
     log.debug("get_monitoring_data (url_factory): name=%s", name)
     from session_manager import session_manager
     if session_manager.get_printer(name) is None:
         return {"error": "not_connected"}
     base = _api_base()
-    url = f"{base}/monitoring_data?printer={name}"
+    url = f"{base}/monitoring_data?printer={_q(name)}"
     log.debug("get_monitoring_data (url_factory): url=%s", url)
     return {"url": url}
 
@@ -220,8 +263,10 @@ def get_monitoring_history(name: str, raw: bool = False) -> dict:
         accumulating; a FAILED entry can be residue from an earlier run and can keep growing. Read the current
         gcode_state rather than inferring failure from these durations.
 
-        The URL is built from the printer name as given, without URL-escaping. The port is the currently bound
-        API server port, falling back to 49152 if it cannot be read.
+        The printer name is percent-encoded in the URL, so a name containing a space, "&", "+", "#" or a
+        non-ASCII character reaches the endpoint intact; names made only of letters, digits and "-", "_", ".",
+        "~" appear unchanged. The port is the currently bound API server port, falling back to 49152 if it
+        cannot be read.
     """
     log.debug("get_monitoring_history (url_factory): name=%s raw=%s", name, raw)
     from session_manager import session_manager
@@ -229,7 +274,7 @@ def get_monitoring_history(name: str, raw: bool = False) -> dict:
         return {"error": "not_connected"}
     base = _api_base()
     raw_str = "true" if raw else "false"
-    url = f"{base}/monitoring_history?printer={name}&raw={raw_str}"
+    url = f"{base}/monitoring_history?printer={_q(name)}&raw={raw_str}"
     log.debug("get_monitoring_history (url_factory): url=%s", url)
     return {"url": url}
 
@@ -251,18 +296,19 @@ def get_monitoring_series(name: str, field: str) -> dict:
     Args:
         name: Printer name (see ``get_configured_printers``).
         field: Telemetry field to fetch. Must be one of: tool, tool_1, bed, chamber, part_fan, aux_fan,
-            exhaust_fan, heatbreak_fan. The HTTP endpoint also accepts the target series (tool_target,
-            tool_1_target, bed_target, chamber_target) and the job health fields (success_pct, confidence,
-            hot_pct, strand_score, diff_score, remaining_min). The tool does not validate ``field``; an
-            unknown value is rejected by the HTTP endpoint.
+            exhaust_fan, heatbreak_fan, the target series (tool_target, tool_1_target, bed_target,
+            chamber_target), or the job health fields (success_pct, confidence, hot_pct, strand_score,
+            diff_score, remaining_min). Matching is exact and case-sensitive; any other value is rejected
+            with ``invalid_field`` (see Returns).
 
     Returns:
         ``{"url": "http://localhost:{port}/api/monitoring_series?printer=...&field=..."}`` on success.
         ``{"error": "not_connected"}`` if no session is registered under that printer name (never added, or
-        removed by ``disconnect_printer`` / ``remove_printer``). A paused or dropped MQTT session still returns
-        a URL, but the data stops updating and the URL serves frozen points with no error; check
-        ``get_printer_connection_status`` when freshness matters. This tool fetches no data itself; see Notes
-        for what the URL returns.
+        removed by ``disconnect_printer`` / ``remove_printer``). ``{"error": "invalid_field", "detail": ...}``
+        (no URL) if ``field`` is not one of the listed values; the detail names the valid set. A paused or
+        dropped MQTT session still returns a URL, but the data stops updating and the URL serves frozen points
+        with no error; check ``get_printer_connection_status`` when freshness matters. This tool fetches no
+        data itself; see Notes for what the URL returns.
 
     Notes:
         The URL returns plain JSON {"field": field, "series": {"name": field, "data": [{"t", "v"}, ...]}}. One
@@ -272,17 +318,23 @@ def get_monitoring_series(name: str, field: str) -> dict:
         monitor's history, capped at the 60 most recent analysis records and empty when no print has been
         analyzed; the 60-minute window does not apply to them. A telemetry reading the collector could not
         obtain is stored as 0.0, not omitted. The HTTP endpoint answers 400 with {"error": "not_connected"} if
-        no session is registered for the printer, {"error": "field parameter required"} if field is empty, and
-        {"error": "Unknown field: '<field>'"} for a field that is not a telemetry or health field.
+        no session is registered for the printer (this tool has already validated ``field``, so the endpoint's
+        own field errors are not expected from a URL this tool built).
 
-        The URL is built from the printer name and field as given, without URL-escaping. The port is the
-        currently bound API server port, falling back to 49152 if it cannot be read.
+        The printer name and field are percent-encoded in the URL, so a name containing a space, "&", "+", "#"
+        or a non-ASCII character reaches the endpoint intact; names made only of letters, digits and "-", "_",
+        ".", "~" appear unchanged. The port is the currently bound API server port, falling back to 49152 if it
+        cannot be read.
     """
     log.debug("get_monitoring_series (url_factory): name=%s field=%s", name, field)
     from session_manager import session_manager
     if session_manager.get_printer(name) is None:
         return {"error": "not_connected"}
+    valid = _valid_fields()
+    if field not in valid:
+        return {"error": "invalid_field",
+                "detail": f"field must be one of: {', '.join(valid)} (got {field!r})"}
     base = _api_base()
-    url = f"{base}/monitoring_series?printer={name}&field={field}"
+    url = f"{base}/monitoring_series?printer={_q(name)}&field={_q(field)}"
     log.debug("get_monitoring_series (url_factory): url=%s", url)
     return {"url": url}
