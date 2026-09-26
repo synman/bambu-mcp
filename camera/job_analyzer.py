@@ -304,8 +304,10 @@ def _apply_kernel(gray_img: Image.Image, kernel: ImageFilter.Kernel) -> np.ndarr
 # preheating, filament changes, calibration, checks and pauses. These are the codes bpm's
 # parseStage names. Codes that name no activity (-1 and 0 = no stage, 100 = "Printing",
 # 255 = "Completed") and codes bpm does not know all read as a normal print, so a code that
-# is new to bpm fails toward analysing the frame, never toward silence.
-_ACTIVITY_STAGES = frozenset(range(1, 59)) | frozenset(range(70, 78))
+# is new to bpm fails toward analysing the frame, never toward silence. 245-247 are the
+# enhanced-fan markers the operator's H2D start and end gcode claim for about 5 s each
+# (full speed, half speed, off); they fall outside printing, so they are gated too.
+_ACTIVITY_STAGES = frozenset(range(1, 59)) | frozenset(range(70, 78)) | frozenset(range(245, 248))
 
 
 def is_stage_gated(stage_id) -> bool:
