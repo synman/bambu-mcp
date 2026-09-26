@@ -119,7 +119,8 @@ def _await_dryer_start(get_unit, heater_before, timeout: float = 10.0, fail_coun
     while time.time() < deadline:
         time.sleep(1)
         current = get_unit()
-        if current is None:
+        # a session rebuilt mid-poll can hold the unit before its dryer is built again
+        if current is None or current.dryer is None:
             continue
         unit = current
         if fail_count_before is not None and unit.dryer.fail_count > fail_count_before:
@@ -727,8 +728,9 @@ def stop_ams_dryer(
         '<name>'."``. Errors are ``"Error: ..."`` strings, never a dict: the
         ``_permission_denied`` refusal when ``user_permission`` is False,
         ``"Error: Printer '<name>' not connected."``, ``"Error: AMS unit <unit_id> not found
-        on '<name>'."``, or ``"Error stopping AMS dryer on '<name>': <exception>"`` when the
-        command fails.
+        on '<name>'."``, ``"Error: <reason>. Nothing was sent to '<name>'."`` when bpm refuses
+        the unit (it has no dryer), or ``"Error stopping AMS dryer on '<name>': <exception>"``
+        when the command fails.
     """
     log.debug("stop_ams_dryer: called for name=%s unit_id=%s user_permission=%s", name, unit_id, user_permission)
     if not user_permission:
@@ -749,6 +751,10 @@ def stop_ams_dryer(
         printer.turn_off_ams_dryer(ams_id=ams_id)
         log.debug("stop_ams_dryer: command sent to %s", name)
         return f"AMS dryer stopped on unit {unit_id} (ams_id={ams_id}) on '{name}'."
+    except ValueError as e:
+        # bpm refuses a unit without a dryer before it publishes
+        log.debug("stop_ams_dryer: refused for %s: %s", name, e)
+        return f"Error: {e}. Nothing was sent to '{name}'."
     except Exception as e:
         log.error("stop_ams_dryer: error for %s: %s", name, e, exc_info=True)
         return f"Error stopping AMS dryer on '{name}': {e}"
