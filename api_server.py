@@ -2128,9 +2128,9 @@ def _build_app():
         AMS HT starts at 128. target_temp defaults to 55°C; duration_hours defaults to 4.
         Only an AMS 2 Pro (45–65°C) or AMS HT (45–85°C) is sent the command, for 1–999 hours
         (no 24 h cap); anything else is refused with 400 before anything is published, as is a
-        start while the AMS reports a reason it cannot dry (bpm ``dry_refusal_message``, e.g.
+        start while the AMS reports a reason it cannot dry (bpm ``dryer.refusal_message``, e.g.
         filament left in the AMS outlet). A start the printer's reply refuses answers 409 with
-        the decoded reason (bpm ``dry_fail_message``/``dry_fail_code``).
+        the decoded reason (bpm ``dryer.fail_message``/``dryer.fail_code``).
         Success needs the unit to report DRYING within 10 s; a unit that was already DRYING and
         never reports anything else answers success with ``confirmed: false``.
         """
@@ -2151,10 +2151,10 @@ def _build_app():
             refusal = _dryer_request_error(unit_before, target_temp, duration_hours)
             if refusal:
                 return _err(refusal, HTTPStatus.BAD_REQUEST)
-            # heater_state still holds the pre-command value until the next AMS info frame, so
+            # dryer.state still holds the pre-command value until the next AMS info frame, so
             # snapshot it before publishing and let the shared poll ignore reads equal to it.
-            heater_before = int(unit_before.heater_state)
-            fail_count_before = int(getattr(unit_before, "dry_fail_count", 0))
+            heater_before = int(unit_before.dryer.state)
+            fail_count_before = unit_before.dryer.fail_count
             p.turn_on_ams_dryer(target_temp=target_temp, duration=duration_hours, ams_id=ams_id)
             log.debug("turn_on_ams_dryer: command sent, polling for confirmation")
 
@@ -2173,7 +2173,7 @@ def _build_app():
                 return _ok(ams_id=ams_id, heater_state="DRYING", target_temp=target_temp, duration_hours=duration_hours)
             if outcome == "unconfirmed":
                 return _ok(ams_id=ams_id, heater_state="DRYING", target_temp=target_temp, duration_hours=duration_hours, confirmed=False)
-            final_state = unit.heater_state.name if unit else "unknown"
+            final_state = unit.dryer.state.name if unit else "unknown"
             log.warning("turn_on_ams_dryer: heater_state did not reach DRYING within 10s (final: %s)", final_state)
             return _err(f"dryer command sent but heater_state did not reach DRYING within 10s (final: {final_state})")
         except Exception as e:

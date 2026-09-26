@@ -469,7 +469,8 @@ def get_ams_status(name: str) -> dict:
     Sibling disambiguation: ``get_ams_status`` and ``get_ams_units`` return the identical
     ``{ams_status, ams_count, units}`` payload from the same printer state; they differ only
     in name, and ``get_ams_units`` carries the field reference for the units list. A unit
-    reports slot presence (``tray_exists`` booleans), not per-slot filament: use
+    reports slot presence (``tray_exists``, one boolean per slot: four, or one on an AMS HT)
+    and its dryer (``dryer``, null on a unit that cannot dry), not per-slot filament: use
     ``get_spool_info`` for filament type, color, and remaining percentage.
 
     Args:

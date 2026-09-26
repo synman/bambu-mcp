@@ -68,19 +68,20 @@ _HEATER_ERROR = 5
 def _dryer_request_error(unit, target_temp: int, duration_hours: int) -> str:
     """Why this dryer start must not be sent, or "" when it may be.
 
-    Shared by the ``start_ams_dryer`` tool and the ``/api/turn_on_ams_dryer`` route."""
-    model = int(getattr(unit, "model", 0))
-    limits = _DRYER_TEMP_LIMITS.get(model)
-    if limits is None:
-        model_name = getattr(getattr(unit, "model", None), "name", str(model))
-        return f"AMS unit ams_id={unit.ams_id} ({model_name}) has no dryer."
-    low, high = limits
+    Shared by the ``start_ams_dryer`` tool and the ``/api/turn_on_ams_dryer`` route. bpm builds
+    ``unit.dryer`` only for a unit that can dry; while it is None, a model of UNKNOWN means the
+    unit has not reported yet and any other model means it has no dryer."""
+    if unit.dryer is None:
+        if int(unit.model) == 0:
+            return f"AMS unit ams_id={unit.ams_id} has not reported yet."
+        return f"AMS unit ams_id={unit.ams_id} ({unit.model.name}) has no dryer."
+    low, high = _DRYER_TEMP_LIMITS[int(unit.model)]
     if not low <= target_temp <= high:
         return f"target_temp {target_temp} is outside {low}-{high}°C for this AMS model."
     if not 1 <= duration_hours <= _DRYER_MAX_HOURS:
         return f"duration_hours {duration_hours} is outside 1-{_DRYER_MAX_HOURS}."
     # bpm's text for the AMS's own dry_sf_reason; empty when the printer says a dry can start
-    printer_refusal = getattr(unit, "dry_refusal_message", "")
+    printer_refusal = unit.dryer.refusal_message
     if printer_refusal:
         return "The printer reports it cannot start drying now: " + printer_refusal.replace("\n", " ")
     return ""
@@ -88,8 +89,8 @@ def _dryer_request_error(unit, target_temp: int, duration_hours: int) -> str:
 
 def _dryer_refused_reply(unit) -> str:
     """The printer's reason for refusing a drying command, as bpm decoded its reply."""
-    message = getattr(unit, "dry_fail_message", "") or "The printer refused the drying command."
-    code = getattr(unit, "dry_fail_code", "")
+    message = unit.dryer.fail_message or "The printer refused the drying command."
+    code = unit.dryer.fail_code
     return f"{message} ({code})" if code else message
 
 
@@ -99,10 +100,10 @@ def _await_dryer_start(get_unit, heater_before, timeout: float = 10.0, fail_coun
     Returns ``(outcome, unit)`` where outcome is ``"drying"`` (confirmed), ``"unconfirmed"``
     (the unit was already DRYING and never reported anything else, so the reads cannot show
     whether the command was accepted), ``"refused"`` (the printer's reply refused it: bpm's
-    ``dry_fail_count`` rose past ``fail_count_before``) or ``"failed"``. ``get_unit`` returns
+    ``dryer.fail_count`` rose past ``fail_count_before``) or ``"failed"``. ``get_unit`` returns
     the unit or None.
 
-    heater_state is only rewritten when a telemetry frame carrying the AMS info word arrives,
+    ``dryer.state`` is only rewritten when a telemetry frame carrying the AMS info word arrives,
     so until then it still holds whatever it held before the command. Reads equal to
     ``heater_before`` (snapshotted before publishing) are therefore ignored until one differs;
     from then on every read counts. DRYING is success; ERROR, or OFF after another
@@ -121,9 +122,9 @@ def _await_dryer_start(get_unit, heater_before, timeout: float = 10.0, fail_coun
         if current is None:
             continue
         unit = current
-        if fail_count_before is not None and int(getattr(unit, "dry_fail_count", 0)) > fail_count_before:
+        if fail_count_before is not None and unit.dryer.fail_count > fail_count_before:
             return "refused", unit
-        hs = int(unit.heater_state)
+        hs = int(unit.dryer.state)
         if not frame_seen:
             if hs == heater_before:
                 continue
@@ -180,13 +181,12 @@ def get_ams_units(name: str) -> dict:
         ``{"ams_count": int, "ams_status": str, "units": [dict]}``. ``ams_count`` is the
         number of connected AMS units, ``ams_status`` is the global AMS status text, and
         ``units`` is an empty list when the printer reports none. Each unit dict includes
-        temperature, humidity, heater state, drying status, and per-slot filament presence, as
-        the fields ams_id, chip_id, model, temp_actual, temp_target, humidity_index,
-        humidity_raw, ams_info, heater_state, dry_fan1_status, dry_fan2_status,
-        dry_sub_status, dry_time (minutes left), dry_refusals, dry_refusal_message,
-        dry_setting_temp, dry_setting_hours, dry_setting_filament, dry_fail_code,
-        dry_fail_message, dry_fail_count, tray_exists (list of four booleans; see Notes) and
-        assigned_to_extruder; enum fields appear as their names. Error shape:
+        temperature, humidity, dryer state, and per-slot filament presence, as the fields
+        ams_id, chip_id, model, temp_actual, humidity_index, humidity_raw, ams_info, dryer (an
+        object, or null; see Notes), tray_exists (see Notes) and assigned_to_extruder; enum
+        fields appear as their names. ``dryer`` holds state, sub_status, fan1_status,
+        fan2_status, remaining_minutes, temp_target, duration_target_hours, filament_target,
+        refusals, refusal_message, fail_code, fail_message and fail_count. Error shape:
         ``{"error": "Printer '<name>' not connected"}``.
 
     Notes:
@@ -196,11 +196,11 @@ def get_ams_units(name: str) -> dict:
           serial string; the two are not synonyms. The 0-based positional unit_id used by
           load_filament() and other write tools refers to the position of the unit in the
           ams_units list, not to either value.
-        - tray_exists is always emitted as four booleans. A standard AMS unit has four slots
-          (0–3) and all four are meaningful. bpm's data dictionary describes an AMS HT as a
-          single-slot unit (one bit checked), so treat only tray_exists[0] as meaningful
-          there; the parser still fills indices 1–3 and bpm's documentation does not define
-          them.
+        - tray_exists has one boolean per slot: four on a standard AMS unit (slots 0–3), one
+          on an AMS HT, which has a single slot.
+        - dryer is null on a unit that cannot dry. With model UNKNOWN that means the unit has
+          not reported yet; with any other model (AMS_LITE, AMS_1) it has no dryer. Only an
+          AMS 2 Pro or AMS HT carries one, and start_ams_dryer refuses the others.
         - The AMS model is identified by the `model` field (AMSModel enum name, e.g.
           'AMS_2_PRO', 'AMS_HT'). See the enums knowledge module for all values.
         - On H2D: AMS 2 Pro (ams_id=0, first in list) feeds the RIGHT extruder (extruder 0);
@@ -210,27 +210,27 @@ def get_ams_units(name: str) -> dict:
           Only humidity_index values of 1 or 2 indicate a moisture problem. A value of 5
           means the filament is completely dry. 0 means the sensor reading is unavailable
           (uninitialized or not supported by this AMS model — do not treat as wet).
-        - heater_state: AMSHeatingState enum name — OFF, CHECKING (transient), DRYING (active),
+        - dryer.state: AMSHeatingState enum name — OFF, CHECKING (transient), DRYING (active),
           COOLING, STOPPING, ERROR, CANNOT_STOP_HEAT_OOC, PRODUCT_TEST. CHECKING is a brief
           transition state after issuing a start_ams_dryer() command; DRYING with
-          dry_sub_status=HEATING confirms active heating.
-        - dry_refusals: why a dry cannot start now, as the printer's raw dry_sf_reason ints
-          (bpm AMSDryRefusal: 2 AMS busy, 3 filament at the AMS outlet, 4 initiating,
+          sub_status=HEATING confirms active heating.
+        - dryer.remaining_minutes: minutes left in the running dry; 0 when idle.
+        - dryer.refusals: why a dry cannot start now, as the printer's raw dry_sf_reason ints
+          (bpm AMSDryerRefusal: 2 AMS busy, 3 filament at the AMS outlet, 4 initiating,
           6 drying in progress, ...). [] means a dry can start; [6] alone means one is
-          running. dry_refusal_message is Bambu Studio's text for them, "" when a dry can
+          running. dryer.refusal_message is Bambu Studio's text for them, "" when a dry can
           start; start_ams_dryer refuses while it is set.
-        - dry_setting_temp / dry_setting_hours / dry_setting_filament: the running dry's
-          order (°C, hours, filament type); -1 / -1 / "" when idle. Prefer dry_setting_temp
-          to temp_target, which bpm estimates from temp_actual.
-        - dry_fail_code / dry_fail_message: the printer's decoded reply to the last refused
-          drying command (e.g. HMS_0500-C04B), "" after an accepted one; dry_fail_count
-          counts refused replies and only grows.
-        - dry_sub_status: AMSDrySubStatus enum name — OFF, HEATING, DEHUMIDIFY. Indicates the
+        - dryer.temp_target / duration_target_hours / filament_target: the running dry's
+          order (°C, hours, filament type); -1 / -1 / "" when idle. temp_target is the order,
+          not a measurement; temp_actual is the measured temperature.
+        - dryer.fail_code / fail_message: the printer's decoded reply to the last refused
+          drying command (e.g. HMS_0500-C04B), "" after an accepted one; fail_count counts
+          refused replies and only grows.
+        - dryer.sub_status: AMSDryerSubStatus enum name — OFF, HEATING, DEHUMIDIFY. The
           current phase within an active drying cycle.
-        - dry_fan1_status: AMSDryFanStatus enum name — OFF or ON. Primary drying fan (bits
-          18–19 of ams_info). Only meaningful while heater_state=DRYING.
-        - dry_fan2_status: AMSDryFanStatus enum name — OFF or ON. Secondary drying fan (bits
-          20–21 of ams_info). Only meaningful while heater_state=DRYING.
+        - dryer.fan1_status / fan2_status: AMSDryerFanStatus enum name — OFF or ON. The two
+          drying fans (bits 18–19 and 20–21 of ams_info). Only meaningful while
+          state=DRYING.
     """
     log.debug("get_ams_units: called for name=%s", name)
     state = session_manager.get_state(name)
@@ -537,7 +537,7 @@ def start_ams_dryer(
 
     Sibling disambiguation: ``start_ams_dryer`` turns the dryer on and waits up to 10
     seconds for the unit to report DRYING; ``stop_ams_dryer`` turns it off.
-    ``get_ams_units`` reads the resulting heater_state and dry_sub_status.
+    ``get_ams_units`` reads the resulting ``dryer.state`` and ``dryer.sub_status``.
 
     Args:
         name: Configured printer name (see ``get_configured_printers``).
@@ -548,7 +548,7 @@ def start_ams_dryer(
         duration_hours: Drying time in hours, 1-999, passed unchanged as the command's
             ``duration`` field. Default 4. Hours is settled by Bambu Studio's source and was
             measured on H2D firmware (72 h and 999 h accepted, 2026-09-26); there is no 24 h
-            cap. The printer reports the time left (``dry_time``) in minutes.
+            cap. The printer reports the time left (``dryer.remaining_minutes``) in minutes.
         rotate_tray: Passed to the printer as the rotate-tray flag for the drying command.
             Default False.
         user_permission: Must be True to execute. Default False.
@@ -560,7 +560,7 @@ def start_ams_dryer(
         ``user_permission`` is False, ``"Error: Printer '<name>' not connected."``,
         ``"Error: AMS unit <unit_id> not found on '<name>'."``, ``"Error: <reason> Nothing was sent
         to '<name>'."`` when the unit has no dryer, the temperature or duration is out of
-        range, or the AMS reports a reason it cannot dry now (bpm's ``dry_refusal_message``,
+        range, or the AMS reports a reason it cannot dry now (bpm's ``dryer.refusal_message``,
         e.g. filament left in the AMS outlet; checked before anything is published),
         ``"Error: '<name>' refused the AMS dryer start on unit <unit_id> (ams_id=<ams_id>):
         <printer's reason> (<HMS code>)"`` as soon as the printer's reply refuses the command,
@@ -577,9 +577,10 @@ def start_ams_dryer(
         it follows the new temperature and duration has to be read from ``get_ams_units``.
 
     Notes:
-        Only an AMS 2 Pro or AMS HT is sent the command. Any other unit (AMS Lite, the original
-        AMS, an unknown model) is refused before publishing, because bpm publishes before it
-        validates and the firmware does not clamp the temperature. The HTTP route
+        Only a unit whose ``dryer`` is set (an AMS 2 Pro or AMS HT) is sent the command. Any
+        other unit (AMS Lite, the original AMS, one not reported yet) is refused before
+        publishing, and so is a temperature outside the model's range, which the firmware
+        does not clamp. The HTTP route
         ``/api/turn_on_ams_dryer`` applies the same checks.
 
         filament_type is derived from the first spool in the target AMS unit that reports a
@@ -587,10 +588,10 @@ def start_ams_dryer(
         documents it only as passed to firmware for validation; what the firmware does with
         an empty value is not established by this code.
 
-        Heater state transition: after the command is sent, heater_state may briefly read
-        CHECKING (a transitional state). Active drying is confirmed by heater_state=DRYING with
-        dry_sub_status=HEATING. This tool polls once per second (first reading one second
-        after the publish), up to 10 seconds, waiting for DRYING before returning. heater_state
+        Heater state transition: after the command is sent, ``dryer.state`` may briefly read
+        CHECKING (a transitional state). Active drying is confirmed by state=DRYING with
+        sub_status=HEATING. This tool polls once per second (first reading one second after
+        the publish), up to 10 seconds, waiting for DRYING before returning. ``dryer.state``
         is only rewritten when a telemetry frame carrying the AMS info word arrives, so
         until then it still holds whatever it held before the command (OFF, COOLING, DRYING,
         ERROR, anything). The tool records that value just before publishing and ignores every
@@ -647,10 +648,10 @@ def start_ams_dryer(
             if getattr(spool, "ams_id", -1) == ams_id and getattr(spool, "type", ""):
                 filament_type = spool.type
                 break
-    # The value heater_state holds at this instant, before the command is published. An int
+    # The value the dryer state holds at this instant, before the command is published. An int
     # copy: bpm mutates the unit object in place.
-    heater_before = int(unit_before.heater_state)
-    fail_count_before = int(getattr(unit_before, "dry_fail_count", 0))
+    heater_before = int(unit_before.dryer.state)
+    fail_count_before = unit_before.dryer.fail_count
 
     def _unit():
         current = session_manager.get_state(name)
@@ -678,7 +679,7 @@ def start_ams_dryer(
             return (
                 f"AMS dryer started on unit {unit_id} (ams_id={ams_id}): "
                 f"{target_temp}°C for {duration_hours}h on '{name}'. "
-                f"heater_state={unit.heater_state.name}"
+                f"heater_state={unit.dryer.state.name}"
             )
         if outcome == "unconfirmed":
             return (
@@ -690,7 +691,7 @@ def start_ams_dryer(
         return (
             f"Error: AMS dryer command sent to unit {unit_id} (ams_id={ams_id}) on '{name}' "
             f"but heater_state did not reach DRYING within 10s "
-            f"(final state: {unit.heater_state.name if unit else 'unknown'}). "
+            f"(final state: {unit.dryer.state.name if unit else 'unknown'}). "
             f"Check get_ams_units for current state."
         )
     except Exception as e:
@@ -713,7 +714,7 @@ def stop_ams_dryer(
     refusal string naming that consequence.
 
     Sibling disambiguation: ``stop_ams_dryer`` turns the dryer off; ``start_ams_dryer`` turns
-    it on. ``get_ams_units`` reads the resulting heater_state.
+    it on. ``get_ams_units`` reads the resulting ``dryer.state``.
 
     Args:
         name: Configured printer name (see ``get_configured_printers``).
