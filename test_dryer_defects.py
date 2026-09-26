@@ -7,8 +7,8 @@ refuse a unit without a dryer (AMS Lite, original AMS, unknown), a temperature o
 (AMS 2 Pro) or 45-85°C (AMS HT), and hours outside 1-999, before anything is published. There is
 no 24 h cap: H2D firmware accepted 72 h and 999 h on 2026-09-26.
 
-The route also used to stop polling at the first read of heater_state OFF. bpm rewrites
-heater_state only when the next AMS info frame arrives, so right after the publish it still
+The route also used to stop polling at the first read of the dryer state OFF. bpm rewrites
+it only when the next AMS info frame arrives, so right after the publish it still
 reads the pre-command value, and an accepted command was answered with an error. The route now
 uses the tool's snapshot-and-ignore-stale poll.
 
@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import api_server  # noqa: E402
 import session_manager as _sm_mod  # noqa: E402
-from bpm.bambustate import AMSUnitState, BambuState  # noqa: E402
+from bpm.bambustate import AMSDryerState, AMSUnitState, BambuState  # noqa: E402
 from bpm.bambutools import AMSHeatingState as H  # noqa: E402
 from bpm.bambutools import AMSModel  # noqa: E402
 from tools import filament as filament_mod  # noqa: E402
@@ -49,9 +49,9 @@ class _Clock:
         self.polls += 1
         if self.polls in self._schedule:
             step = self._schedule[self.polls]
-            # a dict lands several bpm fields at once (a refused reply); otherwise a heater_state
-            for attr, value in (step.items() if isinstance(step, dict) else [("heater_state", step)]):
-                setattr(self._unit, attr, value)
+            # a dict lands several dryer fields at once (a refused reply); otherwise a state
+            for attr, value in (step.items() if isinstance(step, dict) else [("state", step)]):
+                setattr(self._unit.dryer, attr, value)
 
 
 class _Printer:
@@ -77,8 +77,11 @@ class _Manager:
         return ["H2D"]
 
 
-def _setup(model, schedule=None, before=H.OFF):
-    unit = AMSUnitState(ams_id=0, model=model, heater_state=before)
+def _setup(model, schedule=None, before=H.OFF, dryer=None):
+    """bpm 2.0 builds ``unit.dryer`` only for an AMS 2 Pro or AMS HT; ``dryer=False`` leaves it
+    None on one of those (a unit bpm has not built a dryer for)."""
+    has_dryer = model in (AMSModel.AMS_2_PRO, AMSModel.AMS_HT) if dryer is None else dryer
+    unit = AMSUnitState(ams_id=0, model=model, dryer=AMSDryerState(state=before) if has_dryer else None)
     printer = _Printer(BambuState(ams_units=[unit]))
     return unit, printer, _Clock(unit, schedule or {})
 
@@ -138,15 +141,15 @@ def test_route_allows_more_than_24_hours():
 
 OUTLET = "Filament in AMS outlet. The high drying temperature may cause AMS blockage, please unload first."
 REFUSED_REPLY = {
-    "dry_fail_count": 1,
-    "dry_fail_code": "HMS_0500-C04B",
-    "dry_fail_message": "Filament in AMS outlet, the high drying temperature may cause AMS blockage. Drying cannot be started. Please unload the filament first.",
+    "fail_count": 1,
+    "fail_code": "HMS_0500-C04B",
+    "fail_message": "Filament in AMS outlet, the high drying temperature may cause AMS blockage. Drying cannot be started. Please unload the filament first.",
 }
 
 
 def test_route_refuses_while_the_ams_reports_a_reason():
     unit, printer, clock = _setup(AMSModel.AMS_2_PRO)
-    unit.dry_refusal_message = OUTLET
+    unit.dryer.refusal_message = OUTLET
     status, body = _route(printer, clock, "ams_id=0&target_temp=55&duration_hours=8")
     assert status == 400 and "cannot start drying now: Filament in AMS outlet" in body["reason"], (status, body)
     assert printer.calls == [] and clock.polls == 0, (printer.calls, clock.polls)
@@ -154,7 +157,7 @@ def test_route_refuses_while_the_ams_reports_a_reason():
 
 def test_tool_refuses_while_the_ams_reports_a_reason():
     unit, printer, clock = _setup(AMSModel.AMS_2_PRO)
-    unit.dry_refusal_message = OUTLET
+    unit.dryer.refusal_message = OUTLET
     result = _tool(printer, clock)
     assert result.startswith("Error:") and "Filament in AMS outlet" in result and "Nothing was sent" in result, result
     assert printer.calls == [] and clock.polls == 0, (printer.calls, clock.polls)
@@ -177,16 +180,24 @@ def test_tool_returns_the_printers_refused_reply_at_once():
 # ── refusals: nothing is published ───────────────────────────────────────────
 
 
-def _route_refused(model, query, reason):
-    _, printer, clock = _setup(model)
+def _route_refused(model, query, reason, dryer=None):
+    _, printer, clock = _setup(model, dryer=dryer)
     status, body = _route(printer, clock, query)
     assert status == 400 and reason in body["reason"], (status, body)
     assert printer.calls == [] and clock.polls == 0, (printer.calls, clock.polls)
 
 
 def test_route_refuses_units_without_a_dryer():
-    for model in (AMSModel.AMS_LITE, AMSModel.AMS_1, AMSModel.UNKNOWN):
+    for model in (AMSModel.AMS_LITE, AMSModel.AMS_1):
         _route_refused(model, "ams_id=0&target_temp=55&duration_hours=8", "has no dryer")
+
+
+def test_route_reads_the_dryer_not_the_model():
+    _route_refused(AMSModel.AMS_2_PRO, "ams_id=0&target_temp=55&duration_hours=8", "has no dryer", dryer=False)
+
+
+def test_route_tells_a_unit_not_reported_yet_from_one_without_a_dryer():
+    _route_refused(AMSModel.UNKNOWN, "ams_id=0&target_temp=55&duration_hours=8", "has not reported yet")
 
 
 def test_route_refuses_out_of_range_values():
@@ -201,16 +212,24 @@ def test_route_refuses_an_unknown_ams_id():
     _route_refused(AMSModel.AMS_2_PRO, "ams_id=7&target_temp=55&duration_hours=8", "no AMS unit")
 
 
-def _tool_refused(model, reason, **kwargs):
-    _, printer, clock = _setup(model)
+def _tool_refused(model, reason, dryer=None, **kwargs):
+    _, printer, clock = _setup(model, dryer=dryer)
     result = _tool(printer, clock, **kwargs)
     assert result.startswith("Error:") and reason in result and "Nothing was sent" in result, result
     assert printer.calls == [] and clock.polls == 0, (printer.calls, clock.polls)
 
 
 def test_tool_refuses_units_without_a_dryer():
-    for model in (AMSModel.AMS_LITE, AMSModel.AMS_1, AMSModel.UNKNOWN):
+    for model in (AMSModel.AMS_LITE, AMSModel.AMS_1):
         _tool_refused(model, "has no dryer")
+
+
+def test_tool_reads_the_dryer_not_the_model():
+    _tool_refused(AMSModel.AMS_HT, "has no dryer", dryer=False)
+
+
+def test_tool_tells_a_unit_not_reported_yet_from_one_without_a_dryer():
+    _tool_refused(AMSModel.UNKNOWN, "has not reported yet")
 
 
 def test_tool_refuses_out_of_range_values():

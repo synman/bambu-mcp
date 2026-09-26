@@ -1,11 +1,11 @@
 """Regression tests for two spool/dryer defects in bambu-mcp.
 
 start_ams_dryer used to report an ACCEPTED command as an error. bpm's turn_on_ams_dryer
-publishes the command and returns; heater_state is only rewritten when the printer's next
+publishes the command and returns; the dryer state is only rewritten when the printer's next
 telemetry frame carries the AMS ``info`` word, so for the first seconds it still reads the
 value from BEFORE the command, whatever it was. The poll loop treated any OFF as "rejected" and
 stopped at the first poll, and once that was tolerated a stale ERROR, COOLING or DRYING still
-misreported the command. The tool now snapshots heater_state just before publishing and decides
+misreported the command. The tool now snapshots the dryer state just before publishing and decides
 only on reads that differ from it; the tests cover a stale OFF, ERROR, COOLING and DRYING.
 
 get_spool_info picked the active spool with ``s.ams_id == active_ams_id and s.slot_id ==
@@ -32,7 +32,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from bpm.bambustate import AMSUnitState, BambuState  # noqa: E402
+from bpm.bambustate import AMSDryerState, AMSUnitState, BambuState  # noqa: E402
 from bpm.bambuspool import BambuSpool  # noqa: E402
 from bpm.bambutools import AMSHeatingState as H  # noqa: E402
 from bpm.bambutools import AMSModel  # noqa: E402
@@ -60,7 +60,7 @@ class _FakeClock:
         self.now += seconds
         self.polls += 1
         if self.polls in self._schedule:
-            self._unit.heater_state = self._schedule[self.polls]
+            self._unit.dryer.state = self._schedule[self.polls]
 
 
 class _FakePrinter:
@@ -75,11 +75,11 @@ class _FakePrinter:
 
 
 def _run_dryer(schedule, before=H.OFF, on_publish=None, ams_units=None):
-    """``before`` is the heater_state the unit holds when the command goes out (the value bpm
+    """``before`` is the dryer state the unit holds when the command goes out (the value bpm
     keeps until the next AMS info frame arrives); ``schedule`` maps a poll number to the value
     a frame landing at that poll writes; ``on_publish`` runs inside the publish call."""
     # an AMS 2 Pro: start_ams_dryer refuses a unit without a dryer before publishing
-    unit = AMSUnitState(ams_id=0, model=AMSModel.AMS_2_PRO, heater_state=before)
+    unit = AMSUnitState(ams_id=0, model=AMSModel.AMS_2_PRO, dryer=AMSDryerState(state=before))
     state = BambuState(ams_units=[unit] if ams_units is None else ams_units)
     printer = _FakePrinter(on_publish=(lambda: on_publish(unit)) if on_publish else None)
     clock = _FakeClock(unit, schedule)
@@ -198,14 +198,14 @@ def test_the_snapshot_is_taken_before_the_command_is_published():
     # A frame that lands while the publish call runs is post-command telemetry. Snapshotting
     # after the publish would read that DRYING as "already drying" and refuse to confirm it.
     result, clock, _ = _run_dryer({}, before=H.OFF,
-                                  on_publish=lambda unit: setattr(unit, "heater_state", H.DRYING))
+                                  on_publish=lambda unit: setattr(unit.dryer, "state", H.DRYING))
     assert result.startswith("AMS dryer started on unit 0"), result
     assert clock.polls == 1, clock.polls
 
 
 def test_unit_never_reported_is_unknown_after_the_budget():
     other = AMSUnitState(ams_id=128)
-    unit = AMSUnitState(ams_id=0, model=AMSModel.AMS_2_PRO)
+    unit = AMSUnitState(ams_id=0, model=AMSModel.AMS_2_PRO, dryer=AMSDryerState())
     state = BambuState(ams_units=[unit])
     clock2 = _FakeClock(unit, {})
 
