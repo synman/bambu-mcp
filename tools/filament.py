@@ -183,8 +183,10 @@ def get_ams_units(name: str) -> dict:
         temperature, humidity, heater state, drying status, and per-slot filament presence, as
         the fields ams_id, chip_id, model, temp_actual, temp_target, humidity_index,
         humidity_raw, ams_info, heater_state, dry_fan1_status, dry_fan2_status,
-        dry_sub_status, dry_time (minutes left), tray_exists (list of four booleans; see
-        Notes) and assigned_to_extruder; enum fields appear as their names. Error shape:
+        dry_sub_status, dry_time (minutes left), dry_refusals, dry_refusal_message,
+        dry_setting_temp, dry_setting_hours, dry_setting_filament, dry_fail_code,
+        dry_fail_message, dry_fail_count, tray_exists (list of four booleans; see Notes) and
+        assigned_to_extruder; enum fields appear as their names. Error shape:
         ``{"error": "Printer '<name>' not connected"}``.
 
     Notes:
@@ -212,6 +214,17 @@ def get_ams_units(name: str) -> dict:
           COOLING, STOPPING, ERROR, CANNOT_STOP_HEAT_OOC, PRODUCT_TEST. CHECKING is a brief
           transition state after issuing a start_ams_dryer() command; DRYING with
           dry_sub_status=HEATING confirms active heating.
+        - dry_refusals: why a dry cannot start now, as the printer's raw dry_sf_reason ints
+          (bpm AMSDryRefusal: 2 AMS busy, 3 filament at the AMS outlet, 4 initiating,
+          6 drying in progress, ...). [] means a dry can start; [6] alone means one is
+          running. dry_refusal_message is Bambu Studio's text for them, "" when a dry can
+          start; start_ams_dryer refuses while it is set.
+        - dry_setting_temp / dry_setting_hours / dry_setting_filament: the running dry's
+          order (°C, hours, filament type); -1 / -1 / "" when idle. Prefer dry_setting_temp
+          to temp_target, which bpm estimates from temp_actual.
+        - dry_fail_code / dry_fail_message: the printer's decoded reply to the last refused
+          drying command (e.g. HMS_0500-C04B), "" after an accepted one; dry_fail_count
+          counts refused replies and only grows.
         - dry_sub_status: AMSDrySubStatus enum name — OFF, HEATING, DEHUMIDIFY. Indicates the
           current phase within an active drying cycle.
         - dry_fan1_status: AMSDryFanStatus enum name — OFF or ON. Primary drying fan (bits
