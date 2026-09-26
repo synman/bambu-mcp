@@ -35,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from bpm.bambustate import AMSUnitState, BambuState  # noqa: E402
 from bpm.bambuspool import BambuSpool  # noqa: E402
 from bpm.bambutools import AMSHeatingState as H  # noqa: E402
+from bpm.bambutools import AMSModel  # noqa: E402
 from tools import filament as filament_mod  # noqa: E402
 from tools import state as state_mod  # noqa: E402
 
@@ -77,7 +78,8 @@ def _run_dryer(schedule, before=H.OFF, on_publish=None, ams_units=None):
     """``before`` is the heater_state the unit holds when the command goes out (the value bpm
     keeps until the next AMS info frame arrives); ``schedule`` maps a poll number to the value
     a frame landing at that poll writes; ``on_publish`` runs inside the publish call."""
-    unit = AMSUnitState(ams_id=0, heater_state=before)
+    # an AMS 2 Pro: start_ams_dryer refuses a unit without a dryer before publishing
+    unit = AMSUnitState(ams_id=0, model=AMSModel.AMS_2_PRO, heater_state=before)
     state = BambuState(ams_units=[unit] if ams_units is None else ams_units)
     printer = _FakePrinter(on_publish=(lambda: on_publish(unit)) if on_publish else None)
     clock = _FakeClock(unit, schedule)
@@ -203,7 +205,7 @@ def test_the_snapshot_is_taken_before_the_command_is_published():
 
 def test_unit_never_reported_is_unknown_after_the_budget():
     other = AMSUnitState(ams_id=128)
-    unit = AMSUnitState(ams_id=0)
+    unit = AMSUnitState(ams_id=0, model=AMSModel.AMS_2_PRO)
     state = BambuState(ams_units=[unit])
     clock2 = _FakeClock(unit, {})
 

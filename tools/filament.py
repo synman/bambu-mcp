@@ -53,6 +53,79 @@ def _permission_denied(consequence: str) -> str:
     return f"Error: user_permission must be True to perform this action. {consequence}"
 
 
+# Drying temperature range per dryer-capable AMS model, in °C (Bambu Studio AMSDryControl.cpp
+# ams_limits: N3F = AMS 2 Pro, N3S = AMS HT). Neither bpm nor the firmware enforces these, and
+# bpm publishes before it validates ams_id, so a start outside them is refused before sending.
+_DRYER_TEMP_LIMITS = {3: (45, 65), 4: (45, 85)}  # bpm AMSModel.AMS_2_PRO, AMSModel.AMS_HT
+# Longest dry, in hours, H2D firmware was measured to accept (2026-09-26). Studio's 24 h cap is
+# enforced only in its own UI.
+_DRYER_MAX_HOURS = 999
+_HEATER_OFF = 0
+_HEATER_DRYING = 2
+_HEATER_ERROR = 5
+
+
+def _dryer_request_error(unit, target_temp: int, duration_hours: int) -> str:
+    """Why this dryer start must not be sent, or "" when it may be.
+
+    Shared by the ``start_ams_dryer`` tool and the ``/api/turn_on_ams_dryer`` route."""
+    model = int(getattr(unit, "model", 0))
+    limits = _DRYER_TEMP_LIMITS.get(model)
+    if limits is None:
+        model_name = getattr(getattr(unit, "model", None), "name", str(model))
+        return f"AMS unit ams_id={unit.ams_id} ({model_name}) has no dryer."
+    low, high = limits
+    if not low <= target_temp <= high:
+        return f"target_temp {target_temp} is outside {low}-{high}°C for this AMS model."
+    if not 1 <= duration_hours <= _DRYER_MAX_HOURS:
+        return f"duration_hours {duration_hours} is outside 1-{_DRYER_MAX_HOURS}."
+    return ""
+
+
+def _await_dryer_start(get_unit, heater_before, timeout: float = 10.0):
+    """Poll once per second, up to ``timeout``, for a dryer start to be confirmed.
+
+    Returns ``(outcome, unit)`` where outcome is ``"drying"`` (confirmed), ``"unconfirmed"``
+    (the unit was already DRYING and never reported anything else, so the reads cannot show
+    whether the command was accepted) or ``"failed"``. ``get_unit`` returns the unit or None.
+
+    heater_state is only rewritten when a telemetry frame carrying the AMS info word arrives,
+    so until then it still holds whatever it held before the command. Reads equal to
+    ``heater_before`` (snapshotted before publishing) are therefore ignored until one differs;
+    from then on every read counts. DRYING is success; ERROR, or OFF after another
+    post-command state, is taken as a rejection (assumed, never observed on hardware); a first
+    post-command OFF (a unit that was COOLING, say) is waited out.
+
+    Shared by the ``start_ams_dryer`` tool and the ``/api/turn_on_ams_dryer`` route.
+    """
+    deadline = time.time() + timeout
+    unit = None
+    frame_seen = False
+    left_off = False
+    while time.time() < deadline:
+        time.sleep(1)
+        current = get_unit()
+        if current is None:
+            continue
+        unit = current
+        hs = int(unit.heater_state)
+        if not frame_seen:
+            if hs == heater_before:
+                continue
+            frame_seen = True
+        if hs == _HEATER_DRYING:
+            return "drying", unit
+        if hs == _HEATER_ERROR:
+            break
+        if hs != _HEATER_OFF:
+            left_off = True
+        elif left_off:
+            break
+    if unit is not None and not frame_seen and heater_before == _HEATER_DRYING:
+        return "unconfirmed", unit
+    return "failed", unit
+
+
 def _resolve_ams_id(name: str, unit_id: int) -> int | None:
     """Resolve hardware ams_id from a 0-based positional unit_id or a raw ams_id."""
     log.debug("_resolve_ams_id: called for name=%s unit_id=%s", name, unit_id)
@@ -442,11 +515,12 @@ def start_ams_dryer(
         name: Configured printer name (see ``get_configured_printers``).
         unit_id: AMS unit index (0-based position in the ``get_ams_units`` ``units`` list). A
             value outside that range is matched against the raw hardware ams_id.
-        target_temp: Drying temperature in °C. Default 55.
-        duration_hours: Drying time, passed unchanged as the command's ``duration`` field.
-            Default 4. bpm's method docstring says hours, but its MQTT protocol reference lists
-            the field in minutes (example: 120 for "2 hours"); the unit is unverified against
-            firmware.
+        target_temp: Drying temperature in °C. Default 55. Must be 45-65 on an AMS 2 Pro and
+            45-85 on an AMS HT (Bambu Studio's limits); anything else is refused, not clamped.
+        duration_hours: Drying time in hours, 1-999, passed unchanged as the command's
+            ``duration`` field. Default 4. Hours is settled by Bambu Studio's source and was
+            measured on H2D firmware (72 h and 999 h accepted, 2026-09-26); there is no 24 h
+            cap. The printer reports the time left (``dry_time``) in minutes.
         rotate_tray: Passed to the printer as the rotate-tray flag for the drying command.
             Default False.
         user_permission: Must be True to execute. Default False.
@@ -456,7 +530,9 @@ def start_ams_dryer(
         <target_temp>°C for <duration_hours>h on '<name>'. heater_state=DRYING"``. Errors are
         ``"Error: ..."`` strings, never a dict: the ``_permission_denied`` refusal when
         ``user_permission`` is False, ``"Error: Printer '<name>' not connected."``,
-        ``"Error: AMS unit <unit_id> not found on '<name>'."``, ``"Error: AMS dryer command
+        ``"Error: AMS unit <unit_id> not found on '<name>'."``, ``"Error: <reason> Nothing was sent
+        to '<name>'."`` when the unit has no dryer or the temperature or duration is out of
+        range (checked before anything is published), ``"Error: AMS dryer command
         sent to unit <unit_id> (ams_id=<ams_id>) on '<name>' but heater_state did not reach
         DRYING within 10s (final state: <STATE or unknown>). Check get_ams_units for current
         state."`` (the command WAS sent in that case; it is returned after the full 10s, or
@@ -469,10 +545,10 @@ def start_ams_dryer(
         it follows the new temperature and duration has to be read from ``get_ams_units``.
 
     Notes:
-        The tool performs no model check: the command is published for any resolved unit.
-        bpm's data dictionary lists the drying states as AMS 2 Pro and AMS HT only. On another
-        model (e.g. AMS Lite) the call is not silent: it waits the full 10 seconds and returns
-        the "did not reach DRYING within 10s" error unless heater_state reaches DRYING.
+        Only an AMS 2 Pro or AMS HT is sent the command. Any other unit (AMS Lite, the original
+        AMS, an unknown model) is refused before publishing, because bpm publishes before it
+        validates and the firmware does not clamp the temperature. The HTTP route
+        ``/api/turn_on_ams_dryer`` applies the same checks.
 
         filament_type is derived from the first spool in the target AMS unit that reports a
         type (spool.type, e.g. "ABS", "PLA") and falls back to "" if there is none. bpm
@@ -526,18 +602,29 @@ def start_ams_dryer(
     if ams_id is None:
         return f"Error: AMS unit {unit_id} not found on '{name}'."
     state = session_manager.get_state(name)
+    unit_before = next((u for u in (state.ams_units or []) if u.ams_id == ams_id), None) if state else None
+    if unit_before is None:
+        return f"Error: AMS unit {unit_id} not found on '{name}'."
+    refusal = _dryer_request_error(unit_before, target_temp, duration_hours)
+    if refusal:
+        log.debug("start_ams_dryer: refused for %s: %s", name, refusal)
+        return f"Error: {refusal} Nothing was sent to '{name}'."
     filament_type = ""
-    if state and state.spools:
+    if state.spools:
         for spool in state.spools:
             if getattr(spool, "ams_id", -1) == ams_id and getattr(spool, "type", ""):
                 filament_type = spool.type
                 break
-    # The value heater_state holds at this instant, before the command is published. bpm rewrites
-    # it only when a telemetry frame carrying the AMS info word arrives, so until then every read
-    # returns THIS value whatever it was (OFF, COOLING, DRYING, ERROR); a read equal to it is not
-    # evidence about the command. An int copy: bpm mutates the unit object in place.
-    unit_before = next((u for u in (state.ams_units or []) if u.ams_id == ams_id), None) if state else None
-    heater_before = int(unit_before.heater_state) if unit_before is not None else None
+    # The value heater_state holds at this instant, before the command is published. An int
+    # copy: bpm mutates the unit object in place.
+    heater_before = int(unit_before.heater_state)
+
+    def _unit():
+        current = session_manager.get_state(name)
+        if not (current and current.ams_units):
+            return None
+        return next((u for u in current.ams_units if u.ams_id == ams_id), None)
+
     try:
         log.debug("start_ams_dryer: calling printer.turn_on_ams_dryer for %s", name)
         printer.turn_on_ams_dryer(
@@ -548,43 +635,14 @@ def start_ams_dryer(
             filament_type=filament_type,
         )
         log.debug("start_ams_dryer: command sent to %s", name)
-        # Poll up to 10s for heater_state=DRYING (2); CHECKING (1) is a transient state.
-        # Reads equal to the pre-command value (heater_before) are stale until a read differs:
-        # the first differing read proves a post-command frame landed, and every read from then
-        # on is post-command. Assumed, never observed on hardware: a rejected command shows as
-        # ERROR (5), or as OFF (0) after another post-command state. The first post-command read
-        # being OFF (a unit that was COOLING, say) is not a fall-back and is waited out.
-        _OFF = 0
-        _DRYING = 2
-        _ERROR = 5
-        deadline = time.time() + 10
-        unit = None
-        frame_seen = False
-        left_off = False
-        while time.time() < deadline:
-            time.sleep(1)
-            state = session_manager.get_state(name)
-            if state and state.ams_units:
-                unit = next((u for u in state.ams_units if u.ams_id == ams_id), None)
-                if unit:
-                    hs = int(unit.heater_state)
-                    if not frame_seen:
-                        if hs == heater_before:
-                            continue
-                        frame_seen = True
-                    if hs == _DRYING:
-                        return (
-                            f"AMS dryer started on unit {unit_id} (ams_id={ams_id}): "
-                            f"{target_temp}°C for {duration_hours}h on '{name}'. "
-                            f"heater_state={unit.heater_state.name}"
-                        )
-                    if hs == _ERROR:
-                        break
-                    if hs != _OFF:
-                        left_off = True
-                    elif left_off:
-                        break
-        if unit is not None and not frame_seen and heater_before == _DRYING:
+        outcome, unit = _await_dryer_start(_unit, heater_before)
+        if outcome == "drying":
+            return (
+                f"AMS dryer started on unit {unit_id} (ams_id={ams_id}): "
+                f"{target_temp}°C for {duration_hours}h on '{name}'. "
+                f"heater_state={unit.heater_state.name}"
+            )
+        if outcome == "unconfirmed":
             return (
                 f"AMS dryer command sent to unit {unit_id} (ams_id={ams_id}) on '{name}', but the "
                 f"unit was already DRYING before the command and heater_state never changed, so "
