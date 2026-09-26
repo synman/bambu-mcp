@@ -79,15 +79,28 @@ def _dryer_request_error(unit, target_temp: int, duration_hours: int) -> str:
         return f"target_temp {target_temp} is outside {low}-{high}°C for this AMS model."
     if not 1 <= duration_hours <= _DRYER_MAX_HOURS:
         return f"duration_hours {duration_hours} is outside 1-{_DRYER_MAX_HOURS}."
+    # bpm's text for the AMS's own dry_sf_reason; empty when the printer says a dry can start
+    printer_refusal = getattr(unit, "dry_refusal_message", "")
+    if printer_refusal:
+        return "The printer reports it cannot start drying now: " + printer_refusal.replace("\n", " ")
     return ""
 
 
-def _await_dryer_start(get_unit, heater_before, timeout: float = 10.0):
+def _dryer_refused_reply(unit) -> str:
+    """The printer's reason for refusing a drying command, as bpm decoded its reply."""
+    message = getattr(unit, "dry_fail_message", "") or "The printer refused the drying command."
+    code = getattr(unit, "dry_fail_code", "")
+    return f"{message} ({code})" if code else message
+
+
+def _await_dryer_start(get_unit, heater_before, timeout: float = 10.0, fail_count_before=None):
     """Poll once per second, up to ``timeout``, for a dryer start to be confirmed.
 
     Returns ``(outcome, unit)`` where outcome is ``"drying"`` (confirmed), ``"unconfirmed"``
     (the unit was already DRYING and never reported anything else, so the reads cannot show
-    whether the command was accepted) or ``"failed"``. ``get_unit`` returns the unit or None.
+    whether the command was accepted), ``"refused"`` (the printer's reply refused it: bpm's
+    ``dry_fail_count`` rose past ``fail_count_before``) or ``"failed"``. ``get_unit`` returns
+    the unit or None.
 
     heater_state is only rewritten when a telemetry frame carrying the AMS info word arrives,
     so until then it still holds whatever it held before the command. Reads equal to
@@ -108,6 +121,8 @@ def _await_dryer_start(get_unit, heater_before, timeout: float = 10.0):
         if current is None:
             continue
         unit = current
+        if fail_count_before is not None and int(getattr(unit, "dry_fail_count", 0)) > fail_count_before:
+            return "refused", unit
         hs = int(unit.heater_state)
         if not frame_seen:
             if hs == heater_before:
@@ -531,8 +546,12 @@ def start_ams_dryer(
         ``"Error: ..."`` strings, never a dict: the ``_permission_denied`` refusal when
         ``user_permission`` is False, ``"Error: Printer '<name>' not connected."``,
         ``"Error: AMS unit <unit_id> not found on '<name>'."``, ``"Error: <reason> Nothing was sent
-        to '<name>'."`` when the unit has no dryer or the temperature or duration is out of
-        range (checked before anything is published), ``"Error: AMS dryer command
+        to '<name>'."`` when the unit has no dryer, the temperature or duration is out of
+        range, or the AMS reports a reason it cannot dry now (bpm's ``dry_refusal_message``,
+        e.g. filament left in the AMS outlet; checked before anything is published),
+        ``"Error: '<name>' refused the AMS dryer start on unit <unit_id> (ams_id=<ams_id>):
+        <printer's reason> (<HMS code>)"`` as soon as the printer's reply refuses the command,
+        ``"Error: AMS dryer command
         sent to unit <unit_id> (ams_id=<ams_id>) on '<name>' but heater_state did not reach
         DRYING within 10s (final state: <STATE or unknown>). Check get_ams_units for current
         state."`` (the command WAS sent in that case; it is returned after the full 10s, or
@@ -618,6 +637,7 @@ def start_ams_dryer(
     # The value heater_state holds at this instant, before the command is published. An int
     # copy: bpm mutates the unit object in place.
     heater_before = int(unit_before.heater_state)
+    fail_count_before = int(getattr(unit_before, "dry_fail_count", 0))
 
     def _unit():
         current = session_manager.get_state(name)
@@ -635,7 +655,12 @@ def start_ams_dryer(
             filament_type=filament_type,
         )
         log.debug("start_ams_dryer: command sent to %s", name)
-        outcome, unit = _await_dryer_start(_unit, heater_before)
+        outcome, unit = _await_dryer_start(_unit, heater_before, fail_count_before=fail_count_before)
+        if outcome == "refused":
+            return (
+                f"Error: '{name}' refused the AMS dryer start on unit {unit_id} (ams_id={ams_id}): "
+                f"{_dryer_refused_reply(unit)}"
+            )
         if outcome == "drying":
             return (
                 f"AMS dryer started on unit {unit_id} (ams_id={ams_id}): "
