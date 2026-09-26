@@ -62,6 +62,13 @@ class _Printer:
     def turn_on_ams_dryer(self, **kwargs):
         self.calls.append(kwargs)
 
+    def turn_off_ams_dryer(self, ams_id):
+        # bpm 2.0 refuses a stop for a unit without a dryer before it publishes
+        unit = next(u for u in self.printer_state.ams_units if u.ams_id == ams_id)
+        if unit.dryer is None:
+            raise ValueError(f"AMS unit {ams_id} ({unit.model.name}) has no dryer")
+        self.calls.append({"stop": ams_id})
+
 
 class _Manager:
     def __init__(self, printer):
@@ -245,6 +252,37 @@ def test_tool_accepts_the_edges_and_long_dries():
         result = _tool(printer, clock, target_temp=temp, duration_hours=hours)
         assert result.startswith("AMS dryer started"), (model, result)
         assert printer.calls[0]["target_temp"] == temp and printer.calls[0]["duration"] == hours
+
+
+# ── stop: bpm's own refusal is a refusal, not a server error ─────────────────
+
+
+def test_stop_route_answers_bpms_refusal_with_400():
+    _, printer, clock = _setup(AMSModel.AMS_LITE)
+    with _Patched(printer, clock):
+        resp = _app.test_client().post("/api/turn_off_ams_dryer?printer=H2D&ams_id=0")
+    assert resp.status_code == 400 and "has no dryer" in resp.get_json()["reason"], (resp.status_code, resp.get_json())
+    assert printer.calls == [], printer.calls
+
+
+def test_stop_tool_says_nothing_was_sent_on_bpms_refusal():
+    _, printer, clock = _setup(AMSModel.AMS_LITE)
+    with _Patched(printer, clock):
+        result = filament_mod.stop_ams_dryer("H2D", 0, user_permission=True)
+    assert result.startswith("Error:") and "has no dryer" in result and "Nothing was sent" in result, result
+
+
+def test_a_unit_rebuilt_without_its_dryer_mid_poll_is_waited_out():
+    unit, printer, clock = _setup(AMSModel.AMS_2_PRO, {2: {}})
+    rebuilt = AMSUnitState(ams_id=0, model=AMSModel.AMS_2_PRO)
+
+    def swap(seconds, _sleep=clock.sleep):
+        _sleep(seconds)
+        if clock.polls == 2:
+            printer.printer_state = BambuState(ams_units=[rebuilt])
+    clock.sleep = swap
+    result = _tool(printer, clock)
+    assert "did not reach DRYING within 10s" in result, result
 
 
 if __name__ == "__main__":

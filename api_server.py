@@ -2186,7 +2186,8 @@ def _build_app():
 
         ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
 
-        ams_id is the internal chip_id: AMS 2 Pro starts at 0, AMS HT starts at 128.
+        ams_id is the internal chip_id: AMS 2 Pro starts at 0, AMS HT starts at 128. An unknown
+        ams_id or a unit without a dryer is refused with 400 before anything is published.
         """
         log.debug("turn_off_ams_dryer: called")
         p, _ = _get_printer(_rargs())
@@ -2198,6 +2199,10 @@ def _build_app():
             p.turn_off_ams_dryer(ams_id=ams_id)
             log.debug("turn_off_ams_dryer: → ok")
             return _ok()
+        except ValueError as e:
+            # bpm refuses an unknown ams_id or a unit without a dryer before it publishes
+            log.warning("turn_off_ams_dryer: refused: %s", e)
+            return _err(str(e), HTTPStatus.BAD_REQUEST)
         except Exception as e:
             log.error("turn_off_ams_dryer: error: %s", e, exc_info=True)
             return _err(str(e))
