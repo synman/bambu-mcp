@@ -2127,7 +2127,10 @@ def _build_app():
         ams_id is the internal chip_id (not the user-facing unit_id): AMS 2 Pro starts at 0,
         AMS HT starts at 128. target_temp defaults to 55°C; duration_hours defaults to 4.
         Only an AMS 2 Pro (45–65°C) or AMS HT (45–85°C) is sent the command, for 1–999 hours
-        (no 24 h cap); anything else is refused with 400 before anything is published.
+        (no 24 h cap); anything else is refused with 400 before anything is published, as is a
+        start while the AMS reports a reason it cannot dry (bpm ``dry_refusal_message``, e.g.
+        filament left in the AMS outlet). A start the printer's reply refuses answers 409 with
+        the decoded reason (bpm ``dry_fail_message``/``dry_fail_code``).
         Success needs the unit to report DRYING within 10 s; a unit that was already DRYING and
         never reports anything else answers success with ``confirmed: false``.
         """
@@ -2136,7 +2139,7 @@ def _build_app():
         if p is None:
             return _err("no printer")
         try:
-            from tools.filament import _await_dryer_start, _dryer_request_error
+            from tools.filament import _await_dryer_start, _dryer_refused_reply, _dryer_request_error
             ams_id = int(_rargs().get("ams_id", 0))
             target_temp = int(_rargs().get("target_temp", 55))
             duration_hours = int(_rargs().get("duration_hours", 4))
@@ -2151,6 +2154,7 @@ def _build_app():
             # heater_state still holds the pre-command value until the next AMS info frame, so
             # snapshot it before publishing and let the shared poll ignore reads equal to it.
             heater_before = int(unit_before.heater_state)
+            fail_count_before = int(getattr(unit_before, "dry_fail_count", 0))
             p.turn_on_ams_dryer(target_temp=target_temp, duration=duration_hours, ams_id=ams_id)
             log.debug("turn_on_ams_dryer: command sent, polling for confirmation")
 
@@ -2160,7 +2164,11 @@ def _build_app():
                     return None
                 return next((u for u in current.ams_units if u.ams_id == ams_id), None)
 
-            outcome, unit = _await_dryer_start(_unit, heater_before)
+            outcome, unit = _await_dryer_start(_unit, heater_before, fail_count_before=fail_count_before)
+            if outcome == "refused":
+                reason = _dryer_refused_reply(unit)
+                log.warning("turn_on_ams_dryer: printer refused ams_id=%s: %s", ams_id, reason)
+                return _err(f"printer refused the dryer start: {reason}", HTTPStatus.CONFLICT)
             if outcome == "drying":
                 return _ok(ams_id=ams_id, heater_state="DRYING", target_temp=target_temp, duration_hours=duration_hours)
             if outcome == "unconfirmed":

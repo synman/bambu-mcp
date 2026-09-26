@@ -48,7 +48,10 @@ class _Clock:
         self.now += seconds
         self.polls += 1
         if self.polls in self._schedule:
-            self._unit.heater_state = self._schedule[self.polls]
+            step = self._schedule[self.polls]
+            # a dict lands several bpm fields at once (a refused reply); otherwise a heater_state
+            for attr, value in (step.items() if isinstance(step, dict) else [("heater_state", step)]):
+                setattr(self._unit, attr, value)
 
 
 class _Printer:
@@ -127,6 +130,48 @@ def test_route_allows_more_than_24_hours():
     _, printer, clock = _setup(AMSModel.AMS_2_PRO, {1: H.DRYING})
     status, body = _route(printer, clock, "ams_id=0&target_temp=45&duration_hours=72")
     assert status == 200 and printer.calls[0]["duration"] == 72, (status, body, printer.calls)
+
+
+# ── the printer's own refusals ──────────────────────────────────────────────
+# Captured on an H2D 2026-09-26: filament fed past AMS A's outlet. Every AMS report carried
+# dry_sf_reason [3], and a start was answered result=fail, err_code 83935307 (0500C04B).
+
+OUTLET = "Filament in AMS outlet. The high drying temperature may cause AMS blockage, please unload first."
+REFUSED_REPLY = {
+    "dry_fail_count": 1,
+    "dry_fail_code": "HMS_0500-C04B",
+    "dry_fail_message": "Filament in AMS outlet, the high drying temperature may cause AMS blockage. Drying cannot be started. Please unload the filament first.",
+}
+
+
+def test_route_refuses_while_the_ams_reports_a_reason():
+    unit, printer, clock = _setup(AMSModel.AMS_2_PRO)
+    unit.dry_refusal_message = OUTLET
+    status, body = _route(printer, clock, "ams_id=0&target_temp=55&duration_hours=8")
+    assert status == 400 and "cannot start drying now: Filament in AMS outlet" in body["reason"], (status, body)
+    assert printer.calls == [] and clock.polls == 0, (printer.calls, clock.polls)
+
+
+def test_tool_refuses_while_the_ams_reports_a_reason():
+    unit, printer, clock = _setup(AMSModel.AMS_2_PRO)
+    unit.dry_refusal_message = OUTLET
+    result = _tool(printer, clock)
+    assert result.startswith("Error:") and "Filament in AMS outlet" in result and "Nothing was sent" in result, result
+    assert printer.calls == [] and clock.polls == 0, (printer.calls, clock.polls)
+
+
+def test_route_returns_the_printers_refused_reply_at_once():
+    _, printer, clock = _setup(AMSModel.AMS_2_PRO, {1: REFUSED_REPLY})
+    status, body = _route(printer, clock, "ams_id=0&target_temp=55&duration_hours=8")
+    assert status == 409 and "HMS_0500-C04B" in body["reason"] and "AMS outlet" in body["reason"], (status, body)
+    assert clock.polls == 1, clock.polls
+
+
+def test_tool_returns_the_printers_refused_reply_at_once():
+    _, printer, clock = _setup(AMSModel.AMS_2_PRO, {1: REFUSED_REPLY})
+    result = _tool(printer, clock)
+    assert result.startswith("Error: 'H2D' refused the AMS dryer start") and "(HMS_0500-C04B)" in result, result
+    assert clock.polls == 1, clock.polls
 
 
 # ── refusals: nothing is published ───────────────────────────────────────────
