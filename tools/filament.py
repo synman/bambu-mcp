@@ -162,6 +162,40 @@ def _resolve_ams_id(name: str, unit_id: int) -> int | None:
     return result
 
 
+# How long load_filament / unload_filament wait for the printer's ams_change_filament reply.
+# The H2D answered a refused load within one second (2026-09-26); a load it accepts may
+# send no reply this code can see, so the wait ends at the budget.
+_CHANGE_REPLY_WAIT_S = 5.0
+
+
+def _default_unload_ams_id(state) -> int:
+    """The unit (or external holder, 254/255) the active tray is in; 0 when none is active."""
+    active = getattr(state, "active_ams_id", -1)
+    return active if active >= 0 else 0
+
+
+def _await_change_refusal(name: str) -> str | None:
+    """Wait for the printer to refuse the load or unload just sent.
+
+    bpm clears the last ``ams_change_filament`` refusal when the command is sent, and adds
+    the printer's refusal reply to ``hms_errors`` as a ``command_error`` entry, e.g.
+    ``HMS_0500-C04F`` "The AMS is drying ...". Returns that entry's text when one appears
+    within the budget, else None.
+    """
+    deadline = time.time() + _CHANGE_REPLY_WAIT_S
+    while time.time() < deadline:
+        time.sleep(0.25)
+        state = session_manager.get_state(name)
+        refusal = next(
+            (e for e in (state.hms_errors if state else [])
+             if e.get("type") == "command_error" and e.get("command") == "ams_change_filament"),
+            None,
+        )
+        if refusal is not None:
+            return refusal.get("msg") or "The printer refused the filament change."
+    return None
+
+
 def get_ams_units(name: str) -> dict:
     """
     Return all AMS units and their slot states for the named printer.
@@ -390,8 +424,9 @@ def load_filament(
         unit_id: AMS index (0-based position in the ``get_ams_units`` ``units`` list). A value
             outside that range is matched against the raw hardware ams_id.
         slot_id: Slot within the unit (0-3). Use 254 to load from the external spool holder.
-            On a dual-nozzle printer 254 is the LEFT holder and 255 is the RIGHT holder;
-            loading from 255 through this tool has not been verified. The external spool
+            On a dual-nozzle printer 254 is the LEFT holder and 255 is the RIGHT holder. bpm
+            sends a holder load as Bambu Studio does (ams_id 254/255, slot_id 0, target
+            254/255); on hardware, neither holder load has been observed yet. The external spool
             holder is a separate filament feeder that attaches to the printer's side,
             holding one spool outside the AMS unit. get_external_spool() reports what is
             loaded on it.
@@ -399,7 +434,11 @@ def load_filament(
 
     Returns:
         A ``str``. Success: ``"Load filament command sent for AMS unit <unit_id> slot
-        <slot_id> on '<name>'."``. Errors are strings, never a dict: the
+        <slot_id> on '<name>'."``, returned after waiting up to 5 seconds for a refusal. A
+        refusal the printer sends back (for example while the unit is drying) returns
+        ``"Error: '<name>' refused the load from AMS unit <unit_id> slot <slot_id>: <reason>"``
+        with the printer's own reason: bpm's ``command_error`` entry in ``hms_errors``. Errors
+        are strings, never a dict: the
         ``_permission_denied`` refusal when ``user_permission`` is False,
         ``"Error: Printer '<name>' not connected."``, the active-print block message
         (``"Blocked: '<name>' is currently <gcode_state>. load_filament is not safe while
@@ -446,6 +485,10 @@ def load_filament(
         log.debug("load_filament: calling printer.load_filament(slot_id=%s, ams_id=%s) for %s", slot_id, ams_id, name)
         printer.load_filament(slot_id=slot_id, ams_id=ams_id)
         log.debug("load_filament: command sent to %s", name)
+        refusal = _await_change_refusal(name)
+        if refusal:
+            log.warning("load_filament: %s refused the load: %s", name, refusal)
+            return f"Error: '{name}' refused the load from AMS unit {unit_id} slot {slot_id}: {refusal}"
         return f"Load filament command sent for AMS unit {unit_id} slot {slot_id} on '{name}'."
     except Exception as e:
         log.error("load_filament: error for %s: %s", name, e, exc_info=True)
@@ -455,6 +498,7 @@ def load_filament(
 def unload_filament(
     name: str,
     user_permission: bool = False,
+    unit_id: int | None = None,
 ) -> str:
     """
     Unload the currently loaded filament from the extruder back into the AMS.
@@ -468,15 +512,21 @@ def unload_filament(
     call while the printer is printing (see Returns).
 
     Sibling disambiguation: ``unload_filament`` retracts the loaded filament back into the
-    AMS and takes no unit or slot; ``load_filament`` feeds a chosen slot into the extruder.
+    AMS and takes an optional unit, no slot; ``load_filament`` feeds a chosen slot into the extruder.
     ``get_spool_info`` shows which spool is currently loaded.
 
     Args:
         name: Configured printer name (see ``get_configured_printers``).
         user_permission: Must be True to execute. Default False.
+        unit_id: AMS unit to unload from, as in ``load_filament`` (positional index, or a raw
+            ams_id). Default None: the unit, or external holder (254/255), the active tray is
+            in; unit 0 when nothing is active.
 
     Returns:
-        A ``str``. Success: ``"Unload filament command sent to '<name>'."``. Errors are
+        A ``str``. Success: ``"Unload filament command sent to '<name>'."``, returned after
+        waiting up to 5 seconds for a refusal. A refusal the printer sends back returns
+        ``"Error: '<name>' refused the unload from AMS unit <ams_id>: <reason>"``, and an
+        unknown ``unit_id`` returns ``"Error: AMS unit <unit_id> not found on '<name>'."``. Errors are
         strings, never a dict: the ``_permission_denied`` refusal when ``user_permission`` is
         False, ``"Error: Printer '<name>' not connected."``, the active-print block message
         (``"Blocked: '<name>' is currently <gcode_state>. unload_filament is not safe
@@ -487,11 +537,8 @@ def unload_filament(
         ⛔ BLOCKED during active prints (gcode_state RUNNING or PREPARE), because a filament
         change during a print risks toolhead crashes or failed prints.
 
-        The tool has no unit selector: it calls the printer library's unload with its
-        default ams_id (0), so the command always names AMS unit 0. It cannot name another
-        unit, such as AMS HT (ams_id 128, the left extruder), even though load_filament
-        accepts an AMS HT unit_id; whether the printer then unloads whichever filament is
-        loaded is not established by this code.
+        The command names one AMS unit (see ``unit_id``). An unload naming an AMS HT
+        (ams_id 128) has not been tried on hardware.
     """
     log.debug("unload_filament: called for name=%s user_permission=%s", name, user_permission)
     if not user_permission:
@@ -508,10 +555,20 @@ def unload_filament(
     blocked = check_active_print_guard(printer, name, "unload_filament")
     if blocked:
         return blocked.get("error", "Blocked: active print in progress.")
+    if unit_id is None:
+        ams_id = _default_unload_ams_id(printer.printer_state)
+    else:
+        ams_id = _resolve_ams_id(name, unit_id)
+        if ams_id is None:
+            return f"Error: AMS unit {unit_id} not found on '{name}'."
     try:
-        log.debug("unload_filament: calling printer.unload_filament() for %s", name)
-        printer.unload_filament()
+        log.debug("unload_filament: calling printer.unload_filament(ams_id=%s) for %s", ams_id, name)
+        printer.unload_filament(ams_id=ams_id)
         log.debug("unload_filament: command sent to %s", name)
+        refusal = _await_change_refusal(name)
+        if refusal:
+            log.warning("unload_filament: %s refused the unload: %s", name, refusal)
+            return f"Error: '{name}' refused the unload from AMS unit {ams_id}: {refusal}"
         return f"Unload filament command sent to '{name}'."
     except Exception as e:
         log.error("unload_filament: error for %s: %s", name, e, exc_info=True)
@@ -962,15 +1019,21 @@ def send_ams_control_command(
     name: str,
     cmd: str,
     user_permission: bool = False,
+    resume_print: bool = True,
 ) -> str:
     """
-    Send an AMS control command to pause, resume, or reset the AMS.
+    Send an AMS control command: pause, resume, reset, done or abort.
 
     WHEN to use: recover from an AMS-triggered pause (filament runout, AMS fault) with
-    'RESUME', or pause the AMS feed or reset the AMS with 'PAUSE' or 'RESET'.
+    'RESUME', or pause the AMS feed or reset the AMS with 'PAUSE' or 'RESET'. During a
+    filament load, answer the printer's prompt the way Bambu Studio's buttons do: 'RESUME'
+    with ``resume_print=False`` for "Finished, Continue" and the Retry buttons, 'DONE' for
+    "Filament Extruded, Continue", and 'ABORT' to cancel the load or unload. The buttons the
+    printer offers are the ``actions`` of the ``device_error`` entry in ``get_hms_errors``.
 
     WRITE GUARD: sends the chosen AMS control command to the printer, which pauses the AMS
-    feed, resets the AMS, or, for 'RESUME', unblocks the AMS feed and resumes the halted
+    feed, resets the AMS, tells a waiting load to go on, cancels the running load or unload
+    ('ABORT'), or, for 'RESUME', unblocks the AMS feed and by default resumes the halted
     print job. With ``user_permission`` False the tool changes nothing and returns the
     refusal string naming that consequence.
 
@@ -980,15 +1043,17 @@ def send_ams_control_command(
 
     Args:
         name: Configured printer name (see ``get_configured_printers``).
-        cmd: One of 'PAUSE', 'RESUME', 'RESET' (case-insensitive).
+        cmd: One of 'PAUSE', 'RESUME', 'RESET', 'DONE', 'ABORT' (case-insensitive).
         user_permission: Must be True to execute. Default False.
+        resume_print: With 'RESUME', also resume the print (default True). Pass False to
+            answer a load prompt, which Studio does with the AMS command alone.
 
     Returns:
         A ``str``. Success: ``"AMS control command <CMD> sent to '<name>'."`` with CMD in
         upper case. Errors are ``"Error: ..."`` strings, never a dict: the
         ``_permission_denied`` refusal when ``user_permission`` is False,
         ``"Error: Printer '<name>' not connected."``, ``"Error: Unknown AMS control command
-        '<cmd>'. Must be one of: PAUSE, RESUME, RESET."``, or ``"Error sending AMS control
+        '<cmd>'. Must be one of: PAUSE, RESUME, RESET, DONE, ABORT."``, or ``"Error sending AMS control
         command to '<name>': <exception>"`` when the command fails.
 
     Notes:
@@ -998,13 +1063,16 @@ def send_ams_control_command(
           AMS fault). Do not also call resume_print() after this — that would be
           a duplicate command.
         - 'RESET'  — reset the AMS to its idle/ready state.
+        - 'DONE'   — the filament is extruded; the waiting load goes on.
+        - 'ABORT'  — cancel the running filament load or unload.
     """
     log.debug("send_ams_control_command: called for name=%s cmd=%s user_permission=%s", name, cmd, user_permission)
     if not user_permission:
         log.debug("send_ams_control_command: permission denied for %s", name)
         return _permission_denied(
-            "This would send a PAUSE, RESUME or RESET command to the AMS; RESUME also resumes "
-            "the halted print job."
+            "This would send a PAUSE, RESUME, RESET, DONE or ABORT command to the AMS; ABORT "
+            "cancels a running filament load or unload, and RESUME also resumes the halted "
+            "print job unless resume_print is False."
         )
     printer = session_manager.get_printer(name)
     if printer is None:
@@ -1016,12 +1084,12 @@ def send_ams_control_command(
         log.debug("send_ams_control_command: resolved cmd=%s for %s", cmd_upper, name)
         ams_cmd = AMSControlCommand[cmd_upper]
         log.debug("send_ams_control_command: calling printer.send_ams_control_command(%s) for %s", ams_cmd, name)
-        printer.send_ams_control_command(ams_cmd)
+        printer.send_ams_control_command(ams_cmd, resume_print=resume_print)
         log.debug("send_ams_control_command: command sent to %s", name)
         return f"AMS control command {cmd_upper} sent to '{name}'."
     except KeyError:
         log.error("send_ams_control_command: unknown cmd '%s' for %s", cmd, name)
-        return f"Error: Unknown AMS control command '{cmd}'. Must be one of: PAUSE, RESUME, RESET."
+        return f"Error: Unknown AMS control command '{cmd}'. Must be one of: PAUSE, RESUME, RESET, DONE, ABORT."
     except Exception as e:
         log.error("send_ams_control_command: error for %s: %s", name, e, exc_info=True)
         return f"Error sending AMS control command to '{name}': {e}"

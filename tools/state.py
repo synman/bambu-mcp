@@ -522,7 +522,16 @@ def get_hms_errors(name: str) -> dict:
         ``{"hms_errors": [dict], "print_error": int}``. Each hms_errors entry is
         ``{"code": str (e.g. "HMS_0300-0400-0002-000C"), "msg": str (human-readable
         description), "module": str, "severity": str, "is_critical": bool, "type":
-        "device_hms" | "device_error", "url": str}``; the code is a string, not a number. The
+        "device_hms" | "device_error" | "command_error", "url": str}``; the code is a string,
+        not a number. A ``command_error`` is a command the printer refused in its reply (bpm
+        adds it; e.g. a filament load while the AMS dries, ``HMS_0500-C04F``) and also carries
+        ``command``, ``ams_id`` and ``timestamp``; it is never relabelled and stays until that
+        command is sent again or accepted, so it can outlive its cause. A ``device_error``
+        entry also carries ``actions``: the buttons Bambu Studio shows for that print_error on
+        this printer, ``[{"id", "name", "label", "command"}]``; ``command`` is ``resume``,
+        ``done`` or ``abort`` (send with ``send_ams_control_command``, RESUME with
+        ``resume_print=False``), ``clean_print_error``, ``assistant`` or ``close``, and empty
+        for a button this server cannot send. The
         list holds both the active entry and the Historical-labelled ones (see Notes), and is
         empty only when the printer reports no HMS entries and print_error is 0. Filter on
         ``severity != "Historical"`` (or ``is_critical``) to see only the active fault.

@@ -1,4 +1,4 @@
-"""Regression tests for two spool/dryer defects in bambu-mcp.
+"""Regression tests for spool, dryer and load-refusal defects in bambu-mcp.
 
 start_ams_dryer used to report an ACCEPTED command as an error. bpm's turn_on_ams_dryer
 publishes the command and returns; the dryer state is only rewritten when the printer's next
@@ -333,6 +333,246 @@ def test_an_empty_external_placeholder_is_not_promoted_to_active_by_its_id():
     # slot rule never matched it and the id alternative must not start to.
     r = _active(_four_units() + [BambuSpool(254)], active_ams_id=-1, active_tray_id=254)
     assert r["active_spool"] is None, r["active_spool"]
+
+
+# --------------------------------------------------------------------------- load refusals
+# load_filament and unload_filament used to answer "sent" whatever the printer did. On the H2D
+# (2026-09-26) a load from a drying AMS HT was refused (reply err_code 0x0500C04F) while the tool
+# said "sent". bpm now adds the refusal to hms_errors as a command_error; the tools wait for it.
+
+_DRYING = "The AMS is drying and cannot perform this operation at the moment."
+
+
+class _ChangePrinter:
+    """Records load/unload calls and does what bpm does: sending clears the last
+    ``ams_change_filament`` refusal from ``hms_errors``, and ``refuse`` makes the printer's
+    reply land a ``command_error`` entry there a moment later."""
+
+    def __init__(self, state, refuse=False):
+        self.printer_state = state
+        self.calls = []
+        self._refuse = refuse
+
+    def _publish(self, ams_id):
+        state = self.printer_state
+        state.hms_errors = [e for e in state.hms_errors if e.get("type") != "command_error"]
+        if self._refuse:
+            state.hms_errors.append({
+                "code": "HMS_0500-C04F", "msg": _DRYING, "type": "command_error",
+                "command": "ams_change_filament", "ams_id": ams_id,
+            })
+
+    def load_filament(self, slot_id, ams_id=0):
+        self.calls.append(("load", slot_id, ams_id))
+        self._publish(ams_id)
+
+    def unload_filament(self, ams_id=0):
+        self.calls.append(("unload", ams_id))
+        self._publish(ams_id)
+
+
+def _run_change(call, refuse=False, active_ams_id=-1):
+    units = [AMSUnitState(ams_id=0, model=AMSModel.AMS_2_PRO),
+             AMSUnitState(ams_id=128, model=AMSModel.AMS_HT, tray_exists=[True])]
+    state = BambuState(ams_units=units, active_ams_id=active_ams_id)
+    printer = _ChangePrinter(state, refuse=refuse)
+    clock = _FakeClock(units[0], {})
+
+    class _Manager:
+        def get_printer(self, name):
+            return printer
+
+        def get_state(self, name):
+            return state
+
+    real = (time.time, time.sleep, filament_mod.session_manager)
+    time.time, time.sleep, filament_mod.session_manager = clock.time, clock.sleep, _Manager()
+    try:
+        result = call()
+    finally:
+        time.time, time.sleep, filament_mod.session_manager = real
+    return result, printer, clock
+
+
+def test_a_refused_load_reports_the_printers_reason():
+    r, printer, _ = _run_change(
+        lambda: filament_mod.load_filament("H2D", 1, 0, user_permission=True), refuse=True)
+    assert printer.calls == [("load", 0, 128)], printer.calls
+    assert r.startswith("Error: 'H2D' refused the load"), r
+    assert _DRYING in r, r
+
+
+def test_an_accepted_load_says_sent_after_the_wait():
+    r, _, clock = _run_change(lambda: filament_mod.load_filament("H2D", 1, 0, user_permission=True))
+    assert r == "Load filament command sent for AMS unit 1 slot 0 on 'H2D'.", r
+    assert clock.now - 1000.0 >= filament_mod._CHANGE_REPLY_WAIT_S
+
+
+def test_unload_names_the_unit_feeding_the_active_extruder():
+    _, printer, _ = _run_change(
+        lambda: filament_mod.unload_filament("H2D", user_permission=True), active_ams_id=128)
+    assert printer.calls == [("unload", 128)], printer.calls
+
+
+def test_unload_with_no_active_unit_names_unit_0():
+    _, printer, _ = _run_change(lambda: filament_mod.unload_filament("H2D", user_permission=True))
+    assert printer.calls == [("unload", 0)], printer.calls
+
+
+def test_unload_takes_a_unit():
+    _, printer, _ = _run_change(
+        lambda: filament_mod.unload_filament("H2D", user_permission=True, unit_id=1))
+    assert printer.calls == [("unload", 128)], printer.calls
+
+
+def test_a_refused_unload_reports_the_printers_reason():
+    r, _, _ = _run_change(
+        lambda: filament_mod.unload_filament("H2D", user_permission=True, unit_id=1), refuse=True)
+    assert r.startswith("Error: 'H2D' refused the unload"), r
+    assert _DRYING in r, r
+
+
+# The HTTP routes had the same unit-0 bug: /api/load_filament took only a slot and
+# /api/unload_filament named no unit. They now take ams_id and answer 409 on a refusal.
+
+def _run_route(path, refuse=False, active_ams_id=-1):
+    import api_server
+    import session_manager as sm_mod
+
+    units = [AMSUnitState(ams_id=0, model=AMSModel.AMS_2_PRO),
+             AMSUnitState(ams_id=128, model=AMSModel.AMS_HT, tray_exists=[True])]
+    state = BambuState(ams_units=units, active_ams_id=active_ams_id)
+    printer = _ChangePrinter(state, refuse=refuse)
+    clock = _FakeClock(units[0], {})
+    sm = sm_mod.session_manager
+    real = (time.time, time.sleep, sm.get_printer, sm.get_state)
+    time.time, time.sleep = clock.time, clock.sleep
+    sm.get_printer, sm.get_state = (lambda name: printer), (lambda name: state)
+    try:
+        resp = api_server._build_app().test_client().post(path)
+    finally:
+        time.time, time.sleep, sm.get_printer, sm.get_state = real
+    return resp, printer
+
+
+def test_the_load_route_names_the_unit():
+    resp, printer = _run_route("/api/load_filament?printer=H2D&slot=0&ams_id=128")
+    assert resp.status_code == 200, resp.get_json()
+    assert printer.calls == [("load", 0, 128)], printer.calls
+
+
+def test_the_load_route_without_a_unit_is_unit_0():
+    _, printer = _run_route("/api/load_filament?printer=H2D&slot=2")
+    assert printer.calls == [("load", 2, 0)], printer.calls
+
+
+def test_the_load_route_answers_409_with_the_printers_reason():
+    resp, _ = _run_route("/api/load_filament?printer=H2D&slot=0&ams_id=128", refuse=True)
+    assert resp.status_code == 409, resp.status_code
+    assert _DRYING in str(resp.get_json()), resp.get_json()
+
+
+def test_the_unload_route_names_the_unit():
+    _, printer = _run_route("/api/unload_filament?printer=H2D&ams_id=128")
+    assert printer.calls == [("unload", 128)], printer.calls
+
+
+def test_the_unload_route_defaults_to_the_active_unit():
+    _, printer = _run_route("/api/unload_filament?printer=H2D", active_ams_id=128)
+    assert printer.calls == [("unload", 128)], printer.calls
+
+
+def test_the_unload_route_answers_409_with_the_printers_reason():
+    resp, _ = _run_route("/api/unload_filament?printer=H2D&ams_id=128", refuse=True)
+    assert resp.status_code == 409, resp.status_code
+    assert _DRYING in str(resp.get_json()), resp.get_json()
+
+
+# --- load workflow: DONE / ABORT, RESUME without the print, the prompt's buttons ---
+
+
+def _change_printer():
+    printer = _ChangePrinter(BambuState())
+    printer.ams_calls = []
+    printer.send_ams_control_command = (
+        lambda cmd, resume_print=True: printer.ams_calls.append((cmd.name, resume_print)))
+    return printer
+
+
+def _run_ams_tool(cmd, **kw):
+    printer = _change_printer()
+
+    class _Manager:
+        def get_printer(self, name):
+            return printer
+
+    real = filament_mod.session_manager
+    filament_mod.session_manager = _Manager()
+    try:
+        result = filament_mod.send_ams_control_command("H2D", cmd, user_permission=True, **kw)
+    finally:
+        filament_mod.session_manager = real
+    return result, printer.ams_calls
+
+
+def test_the_ams_tool_sends_done_and_abort():
+    for cmd in ("DONE", "abort"):
+        r, calls = _run_ams_tool(cmd)
+        assert calls == [(cmd.upper(), True)], calls
+        assert r == f"AMS control command {cmd.upper()} sent to 'H2D'.", r
+
+
+def test_the_ams_tool_can_resume_without_the_print():
+    assert _run_ams_tool("RESUME")[1] == [("RESUME", True)]
+    assert _run_ams_tool("RESUME", resume_print=False)[1] == [("RESUME", False)]
+
+
+def test_the_ams_tool_names_every_command_when_it_refuses_one():
+    r, calls = _run_ams_tool("CANCEL")
+    assert calls == [] and r.endswith("PAUSE, RESUME, RESET, DONE, ABORT."), r
+
+
+def _run_ams_route(path):
+    import api_server
+    import session_manager as sm_mod
+
+    printer = _change_printer()
+    sm = sm_mod.session_manager
+    real = sm.get_printer
+    sm.get_printer = lambda name: printer
+    try:
+        resp = api_server._build_app().test_client().post(path)
+    finally:
+        sm.get_printer = real
+    return resp, printer.ams_calls
+
+
+def test_the_ams_route_takes_abort_and_resume_without_the_print():
+    resp, calls = _run_ams_route("/api/send_ams_control_command?printer=H2D&cmd=ABORT")
+    assert resp.status_code == 200 and calls == [("ABORT", True)], (resp.status_code, calls)
+    _, calls = _run_ams_route(
+        "/api/send_ams_control_command?printer=H2D&cmd=RESUME&resume_print=false")
+    assert calls == [("RESUME", False)], calls
+
+
+def test_get_hms_errors_passes_the_prompts_buttons_through():
+    actions = [{"id": 9, "name": "CONTINUE", "label": "Finished, Continue", "command": "resume"}]
+    state = BambuState(print_error=0x07FFC006, hms_errors=[
+        {"code": "HMS_07FF-C006", "type": "device_error", "actions": actions},
+        {"code": "HMS_07FF-2000-0002-0002", "type": "device_hms"},
+    ])
+
+    class _Manager:
+        def get_state(self, name):
+            return state
+
+    real = state_mod.session_manager
+    state_mod.session_manager = _Manager()
+    try:
+        result = state_mod.get_hms_errors("H2D")
+    finally:
+        state_mod.session_manager = real
+    assert result["hms_errors"][0]["actions"] == actions, result
 
 
 if __name__ == "__main__":

@@ -232,6 +232,8 @@ _ROUTE_PARAM_DESCRIPTIONS: dict[tuple[str, str], str] = {
     # ── Print control ──────────────────────────────────────────────────────────
     ("set_speed_level",                 "level"):       "Print speed profile.",
     ("load_filament",                   "slot"):        "AMS slot index (0–3).",
+    ("load_filament",                   "ams_id"):      "Internal AMS unit ID. AMS 2 Pro starts at 0; AMS HT starts at 128. Default 0.",
+    ("unload_filament",                 "ams_id"):      "Internal AMS unit ID (or external holder 254/255) to unload from. Default: the active tray's unit, else 0.",
     ("refresh_spool_rfid",              "slot_id"):     "Slot index within the AMS unit (0–3).",
     ("refresh_spool_rfid",              "ams_id"):      "AMS unit index (0-based).",
     ("print_3mf",                       "filename"):    "Full SD card path to the .3mf file (e.g. /_jobs/myprint.gcode.3mf).",
@@ -252,6 +254,7 @@ _ROUTE_PARAM_DESCRIPTIONS: dict[tuple[str, str], str] = {
     ("set_spool_details",               "nozzle_temp_min"): "Minimum nozzle temperature in °C. Pass -1 to keep existing.",
     ("set_spool_details",               "nozzle_temp_max"): "Maximum nozzle temperature in °C. Pass -1 to keep existing.",
     ("send_ams_control_command",        "cmd"):          "AMS control command.",
+    ("send_ams_control_command",        "resume_print"): "With RESUME, also resume the print (default true). false answers a load prompt.",
     ("set_ams_user_setting",            "setting"):      "AMS user setting to toggle.",
     ("set_ams_user_setting",            "enabled"):      "Enable or disable the setting.",
     # ── File management ────────────────────────────────────────────────────────
@@ -464,7 +467,7 @@ _ROUTE_EXAMPLES: dict[str, dict] = {
     },
     "load_filament": {
         "response": {"status": "success"},
-        "params": {"printer": "H2D", "slot": "0"},
+        "params": {"printer": "H2D", "slot": "0", "ams_id": "128"},
     },
     "refresh_spool_rfid": {
         "response": {"status": "success"},
@@ -1237,17 +1240,29 @@ def _build_app():
 
     @app.route("/api/unload_filament", methods=["POST"])
     def unload_filament():
-        """⚠️ Unload the currently loaded filament back to AMS.
+        """⚠️ Unload the currently loaded filament back to AMS. ?ams_id=<int>
 
         ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+
+        ams_id is the internal unit id (AMS 2 Pro from 0, AMS HT from 128); without it the
+        unload names the unit, or external holder (254/255), the active tray is in, or 0 when none is. An unload the
+        printer's reply refuses within 5 s answers 409 with the decoded reason (bpm's
+        ``command_error`` entry in ``hms_errors``).
         """
         log.debug("unload_filament: called")
-        p, _ = _get_printer(_rargs())
+        p, name = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
-            log.debug("unload_filament: calling printer.unload_filament()")
-            p.unload_filament()
+            from tools.filament import _await_change_refusal, _default_unload_ams_id
+            raw = _rargs().get("ams_id")
+            ams_id = int(raw) if raw not in (None, "") else _default_unload_ams_id(p.printer_state)
+            log.debug("unload_filament: calling printer.unload_filament(ams_id=%s)", ams_id)
+            p.unload_filament(ams_id=ams_id)
+            refusal = _await_change_refusal(name)
+            if refusal:
+                log.warning("unload_filament: printer refused ams_id=%s: %s", ams_id, refusal)
+                return _err(f"printer refused the unload: {refusal}", HTTPStatus.CONFLICT)
             log.debug("unload_filament: → ok")
             return _ok()
         except Exception as e:
@@ -1256,18 +1271,28 @@ def _build_app():
 
     @app.route("/api/load_filament", methods=["POST"])
     def load_filament():
-        """⚠️ Load filament from AMS slot. ?slot=<0-3>
+        """⚠️ Load filament from an AMS slot. ?slot=<0-3>&ams_id=<int>
 
         ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
+
+        ams_id is the internal unit id (AMS 2 Pro from 0, AMS HT from 128; default 0). A load
+        the printer's reply refuses within 5 s (for example while the unit is drying) answers
+        409 with the decoded reason (bpm's ``command_error`` entry in ``hms_errors``).
         """
         log.debug("load_filament: called")
-        p, _ = _get_printer(_rargs())
+        p, name = _get_printer(_rargs())
         if p is None:
             return _err("no printer")
         try:
+            from tools.filament import _await_change_refusal
             slot = int(_rargs().get("slot", 0))
-            log.debug("load_filament: slot=%s", slot)
-            p.load_filament(slot)
+            ams_id = int(_rargs().get("ams_id", 0))
+            log.debug("load_filament: slot=%s ams_id=%s", slot, ams_id)
+            p.load_filament(slot, ams_id=ams_id)
+            refusal = _await_change_refusal(name)
+            if refusal:
+                log.warning("load_filament: printer refused ams_id=%s slot=%s: %s", ams_id, slot, refusal)
+                return _err(f"printer refused the load: {refusal}", HTTPStatus.CONFLICT)
             log.debug("load_filament: → ok")
             return _ok()
         except Exception as e:
@@ -2053,7 +2078,10 @@ def _build_app():
 
     @app.route("/api/send_ams_control_command", methods=["POST"])
     def send_ams_control_command():
-        """⚠️ Send AMS control command. ?cmd=PAUSE|RESUME|RESET
+        """⚠️ Send AMS control command. ?cmd=PAUSE|RESUME|RESET|DONE|ABORT&resume_print=true|false
+
+        DONE answers a load prompt's "Filament Extruded, Continue"; ABORT cancels the running
+        filament load or unload. RESUME also resumes the print unless resume_print=false.
 
         ⚠️ WRITE OPERATION — requires explicit user confirmation before calling.
         """
@@ -2065,7 +2093,8 @@ def _build_app():
             from bpm.bambutools import AMSControlCommand
             cmd = AMSControlCommand[_rargs().get("cmd", "").upper()]
             log.debug("send_ams_control_command: cmd=%s", cmd)
-            p.send_ams_control_command(cmd)
+            resume_print = str(_rargs().get("resume_print", "true")).lower() != "false"
+            p.send_ams_control_command(cmd, resume_print=resume_print)
             log.debug("send_ams_control_command: → ok")
             return _ok()
         except Exception as e:
