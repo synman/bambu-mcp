@@ -14,11 +14,12 @@
 - Smoke test: `.venv/bin/python3 smoke_test.py`
 - Reload: `~/bin/mcp-reload`
 - Full restart sequence: see shared rules — MCP Server Restart
+- Published docs (bpm site, `bambu-mcp` tab): after any tool, docstring, route or `docs/site/overview.md` change, run `.venv/bin/python3 gen_docs.py`, then stage `../bambu-printer-manager/docs/bambu-mcp/` in bpm (user-only commit there). It also refreshes the README Tools block. `.venv/bin/python3 test_gen_docs.py` checks the generator.
 - Daemon administration (launchd supervision, restart, log levels, debug logging): `docs/operators-guide.md` — the daemon is launchd-supervised; do NOT rely on `bambu-mcp-daemon.sh restart` for env changes
 
 ## Architecture
 
-- 101 MCP tools (measured live 2026-09-15), 80 HTTP routes (2026-09-17: added `/api/set_bpm_verbose` — live per-session `BambuConfig.verbose` toggle, no restart), 1 system prompt (domain knowledge lives in node-kb-mcp `bambu-*` articles)
+- 101 MCP tools (measured live 2026-09-15), 81 HTTP routes (2026-09-27 via `gen_docs.py`; 2026-09-17: added `/api/set_bpm_verbose` — live per-session `BambuConfig.verbose` toggle, no restart), 1 system prompt (domain knowledge lives in node-kb-mcp `bambu-*` articles)
 - All printer ops route through BPM library via `session_manager.get_printer(name)`
 - BPM is considered stable — do not modify it to solve MCP-layer problems
 - No tool may open its own direct FTPS/MQTT/socket/HTTP connection (camera streaming excepted)

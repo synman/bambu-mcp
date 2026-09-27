@@ -1,17 +1,18 @@
 """
 bambu-mcp-api — HTTP REST API server for the bambu-mcp MCP service.
 
-Exposes 67 routes mirroring the bambu-printer-app container API so existing clients
-work unchanged. Backed directly by session_manager / BambuPrinter — no dependency
-on the bambu-printer-app container.
+Exposes the printer sessions over HTTP, mirroring the bambu-printer-app container API.
+Backed directly by session_manager / BambuPrinter — no dependency on the bambu-printer-app
+container.
 
 Service details:
   Port:       Dynamically allocated from the shared ephemeral port pool (IANA RFC 6335
               range 49152–65535).  If BAMBU_API_PORT is set it is used as a preferred-port
               hint (tried first; rotates to next available pool port if taken).
+  Bind:       0.0.0.0 (all interfaces).
   Base URL:   http://localhost:{port}/api  — call get_server_info() or GET /api/server_info
               to discover the actual port at runtime.
-  Auth:       HTTP Basic — credentials from BAMBU_API_USER / BAMBU_API_PASS env vars.
+  Auth:       none. No route checks credentials.
   Swagger UI: http://localhost:{port}/api/docs
   OpenAPI:    http://localhost:{port}/api/openapi.json
 
@@ -23,14 +24,8 @@ Lifecycle:
   get_url()    — returns "http://localhost:{port}".
   get_port()   — returns the currently bound port integer (0 if not running).
 
-Route categories (67 routes total):
-  Printer state  (6)  — full state, progress, temperatures, spools, nozzle, AMS
-  Print control  (8)  — print 3mf, pause, resume, stop, speed, skip objects, options
-  AMS/filament   (7)  — load, unload, set filament, dryer start/stop, RFID calibrate
-  Climate        (7)  — bed/nozzle/chamber temp, fan speeds, chamber light
-  Hardware       (8)  — nozzle config, refresh nozzles, 5 AI detector routes, swap tool
-  File mgmt     (12)  — list, upload, download, delete, rename, mkdir, project info, print
-  System         (6)  — health, session CRUD, printer discovery, OpenAPI docs
+Route inventory: build_openapi_document(), served at /api/openapi.json; published by
+gen_docs.py as the REST API page of the bambu-printer-manager docs site.
 
 Agent reference: query node-kb (kb_get('bambu-http-*')) or the Swagger UI at /api/docs for the full route inventory.
 """
