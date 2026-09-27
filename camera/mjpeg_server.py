@@ -635,8 +635,9 @@ function _hpPoll(){
     if(f>0){
       fpsCont.style.display='flex';
       var numEl=document.getElementById('fps-num');
+      var cap=d.fps_cap||20;
+      f=Math.min(f,cap);  // the gauge tops out at the cap
       numEl.textContent=f<2?f.toFixed(1):f;
-      var cap=d.fps_cap||30;
       numEl.className=f>=cap*.8?'fps-hi':f>=cap*.4?'fps-mid':'fps-lo';
       var hist=d.fps_history||[];
       var cv=document.getElementById('fps-chart');
@@ -651,7 +652,7 @@ function _hpPoll(){
         var inLine=false;
         for(var i=0;i<hist.length;i++){
           var x=i/(hist.length-1)*cv.width;
-          var v=hist[i];
+          var v=Math.min(hist[i],maxV);
           if(v<0.5){inLine=false;continue;}
           var y=cv.height-(v/maxV)*(cv.height-2)+1;
           if(!inLine){ctx.moveTo(x,y);inLine=true;}else ctx.lineTo(x,y);
@@ -805,7 +806,7 @@ class _MJPEGHTTPServer(ThreadingHTTPServer):
                  status_fn: Callable[[], dict] | None = None,
                  thumbnail_fn: Callable[[], bytes | None] | None = None,
                  layout_fn: Callable[[], bytes | None] | None = None,
-                 fps_cap: float = 30,
+                 fps_cap: float = 20,
                  printer_name: str = "",
                  frame_transform_fn: Callable[[bytes, str, int], bytes] | None = None):
         super().__init__(addr, handler_class)
@@ -1174,7 +1175,7 @@ class MJPEGServer:
               thumbnail_fn: Callable[[], bytes | None] | None = None,
               layout_fn: Callable[[], bytes | None] | None = None,
               closer: Callable[[], None] | None = None,
-              fps_cap: float = 30,
+              fps_cap: float = 20,
               frame_transform_fn: Callable[[bytes, str, int], bytes] | None = None) -> str:
         """
         Start a local MJPEG server for the named printer.
