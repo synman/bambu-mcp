@@ -756,3 +756,70 @@ def truncate_log(user_permission: bool = False) -> dict:
     except Exception as e:
         log.error("truncate_log: error truncating log: %s", e, exc_info=True)
         return {"error": f"Error truncating log file: {e}"}
+
+
+def get_user_pref(name: str, key: str) -> dict:
+    """
+    Return a sticky preference stored for a printer.
+
+    WHEN to use: before presenting a choice the user has made before, such as the
+    ``print_file`` flags, the ``set_print_speed`` level or the ``start_ams_dryer`` settings,
+    so the stored value can be offered as "(your preference)". Those tools' Notes name the
+    keys they use.
+
+    Sibling disambiguation: ``get_user_pref`` reads one stored preference; ``set_user_pref``
+    stores one. Neither touches the printer. They are the same store as the REST route
+    ``/api/user_prefs``.
+
+    Args:
+        name: Printer name the preference belongs to (see ``get_configured_printers``). It is
+            not checked against the configured printers.
+        key: Preference key, for example ``bed_leveling`` or ``ams0:target_temp``.
+
+    Returns:
+        ``{"key": "<name>:<key>", "value": <stored value or null>}``. ``value`` is null when
+        nothing is stored. Error shape: ``{"error": "Error reading preference: <exception>"}``.
+    """
+    log.debug("get_user_pref: called for name=%s key=%s", name, key)
+    full_key = f"{name}:{key}"
+    try:
+        from user_prefs import get_pref
+        return {"key": full_key, "value": get_pref(full_key)}
+    except Exception as e:
+        log.error("get_user_pref: error for %s: %s", full_key, e, exc_info=True)
+        return {"error": f"Error reading preference: {e}"}
+
+
+def set_user_pref(name: str, key: str, value: str | int | float | bool | None) -> dict:
+    """
+    Store a sticky preference for a printer.
+
+    WHEN to use: after a tool call the user confirmed, to remember the value they chose, as the
+    Notes of ``print_file``, ``set_print_speed`` and ``start_ams_dryer`` direct.
+
+    Side effects: writes the value to the server's local preference file, replacing any value
+    stored under the same key. Nothing is sent to the printer, so no ``user_permission`` is
+    needed.
+
+    Sibling disambiguation: ``set_user_pref`` stores one preference; ``get_user_pref`` reads
+    one back.
+
+    Args:
+        name: Printer name the preference belongs to (see ``get_configured_printers``). It is
+            not checked against the configured printers.
+        key: Preference key, for example ``bed_leveling`` or ``ams0:target_temp``.
+        value: Value to store: a string, number, boolean or null.
+
+    Returns:
+        ``{"key": "<name>:<key>", "value": <stored value>}`` on success. Error shape:
+        ``{"error": "Error storing preference: <exception>"}``.
+    """
+    log.debug("set_user_pref: called for name=%s key=%s value=%r", name, key, value)
+    full_key = f"{name}:{key}"
+    try:
+        from user_prefs import set_pref
+        set_pref(full_key, value)
+        return {"key": full_key, "value": value}
+    except Exception as e:
+        log.error("set_user_pref: error for %s: %s", full_key, e, exc_info=True)
+        return {"error": f"Error storing preference: {e}"}

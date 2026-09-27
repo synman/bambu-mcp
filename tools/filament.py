@@ -665,18 +665,14 @@ def start_ams_dryer(
         accepts but whose first frame arrives later than 10 seconds still ends in the timeout
         error with the command in effect; confirm with get_ams_units.
 
-        Sticky preferences: before presenting parameters to the user, look up stored values:
-          from user_prefs import get_pref
-          target_temp    = get_pref(f"{name}:ams{unit_id}:target_temp",    55)
-          duration_hours = get_pref(f"{name}:ams{unit_id}:duration_hours", 4)
-          rotate_tray    = get_pref(f"{name}:ams{unit_id}:rotate_tray",    False)
+        Sticky preferences: before presenting parameters to the user, look up stored values
+        with ``get_user_pref(name, key)``, keys ``ams<unit_id>:target_temp``,
+        ``ams<unit_id>:duration_hours`` and ``ams<unit_id>:rotate_tray`` (for example
+        ``ams0:target_temp``). A null value means nothing is stored: use the factory default.
         Factory defaults: target_temp=55, duration_hours=4, rotate_tray=False.
         Label each "(your preference)" if stored value differs from factory default, "(default)" otherwise.
-        After a successful call, store the confirmed values:
-          from user_prefs import set_pref
-          set_pref(f"{name}:ams{unit_id}:target_temp",    target_temp)
-          set_pref(f"{name}:ams{unit_id}:duration_hours", duration_hours)
-          set_pref(f"{name}:ams{unit_id}:rotate_tray",    rotate_tray)
+        After a successful call, store the confirmed values with
+        ``set_user_pref(name, key, value)`` for each of the three keys.
     """
     log.debug("start_ams_dryer: called for name=%s unit_id=%s target_temp=%s duration_hours=%s user_permission=%s", name, unit_id, target_temp, duration_hours, user_permission)
     if not user_permission:
@@ -1093,3 +1089,50 @@ def send_ams_control_command(
     except Exception as e:
         log.error("send_ams_control_command: error for %s: %s", name, e, exc_info=True)
         return f"Error sending AMS control command to '{name}': {e}"
+
+
+def get_filament_catalog(filament_type: str = "", search: str = "") -> dict:
+    """
+    Return Bambu filament profiles from the catalog bundled with bambu-printer-manager.
+
+    WHEN to use: find the ``filament_id`` (``tray_info_idx``, for example ``GFA00``) to pass
+    to ``set_ams_filament_setting``, or read a profile's nozzle, bed and drying temperatures.
+
+    Sibling disambiguation: ``get_filament_catalog`` is static reference data and reads no
+    printer. ``get_spool_info`` and ``get_ams_units`` report what is loaded in the AMS now.
+
+    Args:
+        filament_type: Keep only profiles of this type, for example ``PLA`` or ``ABS-GF``.
+            Case-insensitive exact match. Default "" keeps every type.
+        search: Keep only profiles whose ``tray_info_idx``, name or vendor contains this text.
+            Case-insensitive. Default "" keeps every profile.
+
+    Returns:
+        ``{"count": int, "filaments": [ {...}, ... ]}``. Each profile carries
+        ``tray_info_idx``, ``name``, ``vendor``, ``filament_type``, ``nozzle_temperature``,
+        ``nozzle_temperature_range_low``, ``nozzle_temperature_range_high`` and
+        ``hot_plate_temp``, plus drying fields keyed by AMS model where the catalog has them.
+        Any payload over 300 characters is returned as a gzip+base64 envelope:
+        ``{"compressed": True, "encoding": "gzip+base64", "original_size_bytes": int,
+        "compressed_size_bytes": int, "data": str}``. Filter to keep responses small. Error
+        shape: ``{"error": "Error reading filament catalog: <exception>"}``.
+    """
+    log.debug("get_filament_catalog: called filament_type=%r search=%r", filament_type, search)
+    try:
+        from bpm.bambucommands import FILAMENT_CATALOG
+        from tools._response import compress_if_large
+        wanted_type = filament_type.strip().lower()
+        needle = search.strip().lower()
+        matches = [
+            f for f in FILAMENT_CATALOG
+            if (not wanted_type or str(f.get("filament_type", "")).lower() == wanted_type)
+            and (not needle or any(
+                needle in str(f.get(field, "")).lower()
+                for field in ("tray_info_idx", "name", "vendor")
+            ))
+        ]
+        log.debug("get_filament_catalog: → %d profile(s)", len(matches))
+        return compress_if_large({"count": len(matches), "filaments": matches})
+    except Exception as e:
+        log.error("get_filament_catalog: error: %s", e, exc_info=True)
+        return {"error": f"Error reading filament catalog: {e}"}

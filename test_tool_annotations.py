@@ -26,7 +26,7 @@ from mcp.server.fastmcp import FastMCP  # noqa: E402
 
 from tools import _registry  # noqa: E402
 
-EXPECTED_TOOLS = 101
+EXPECTED_TOOLS = 104
 EXPECTED_GUARDED = 50
 GUARD = "user_permission"
 PRIOR: dict[str, dict] = {}

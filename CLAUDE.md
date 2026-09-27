@@ -19,7 +19,7 @@
 
 ## Architecture
 
-- 101 MCP tools (measured live 2026-09-15), 81 HTTP routes (2026-09-27 via `gen_docs.py`; 2026-09-17: added `/api/set_bpm_verbose` — live per-session `BambuConfig.verbose` toggle, no restart), 1 system prompt (domain knowledge lives in node-kb-mcp `bambu-*` articles)
+- 104 MCP tools, 87 HTTP routes (2026-09-27 via `gen_docs.py`, after closing tool and route gaps; 2026-09-17: added `/api/set_bpm_verbose` — live per-session `BambuConfig.verbose` toggle, no restart), 1 system prompt (domain knowledge lives in node-kb-mcp `bambu-*` articles)
 - All printer ops route through BPM library via `session_manager.get_printer(name)`
 - BPM is considered stable — do not modify it to solve MCP-layer problems
 - No tool may open its own direct FTPS/MQTT/socket/HTTP connection (camera streaming excepted)

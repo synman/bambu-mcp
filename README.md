@@ -79,19 +79,19 @@ Run `.venv/bin/python3 server.py --transport streamable-http` and point the clie
 ## Tools
 
 <!-- gen_docs:tools:begin -->
-101 tools (49 read-only, 52 write) and 81 REST routes. Full reference: [bambu-mcp docs](https://synman.github.io/bambu-printer-manager/bambu-mcp/).
+104 tools (51 read-only, 53 write) and 87 REST routes. Full reference: [bambu-mcp docs](https://synman.github.io/bambu-printer-manager/bambu-mcp/).
 
 | Category | Tools |
 |---|---|
 | [Printer State](https://synman.github.io/bambu-printer-manager/bambu-mcp/tools/state/) | `get_ams_status`, `get_capabilities`, `get_fan_speeds`, `get_hms_errors`, `get_job_info`, `get_print_progress`, `get_printer_info`, `get_printer_state`, `get_spool_info`, `get_temperatures`, `get_wifi_signal` |
 | [Print Control](https://synman.github.io/bambu-printer-manager/bambu-mcp/tools/print-control/) | `clear_print_error`, `pause_print`, `resume_print`, `select_extrusion_calibration`, `send_gcode`, `set_print_option`, `set_print_speed`, `skip_objects`, `stop_print` |
 | [Climate](https://synman.github.io/bambu-printer-manager/bambu-mcp/tools/climate/) | `get_chamber_light`, `get_climate`, `set_bed_temp`, `set_chamber_light`, `set_chamber_temp`, `set_fan_speed`, `set_nozzle_temp` |
-| [Filament & AMS](https://synman.github.io/bambu-printer-manager/bambu-mcp/tools/filament/) | `calibrate_ams_remaining`, `get_ams_units`, `get_external_spool`, `load_filament`, `send_ams_control_command`, `set_ams_filament_setting`, `set_ams_user_setting`, `start_ams_dryer`, `stop_ams_dryer`, `unload_filament` |
+| [Filament & AMS](https://synman.github.io/bambu-printer-manager/bambu-mcp/tools/filament/) | `calibrate_ams_remaining`, `get_ams_units`, `get_external_spool`, `get_filament_catalog`, `load_filament`, `send_ams_control_command`, `set_ams_filament_setting`, `set_ams_user_setting`, `start_ams_dryer`, `stop_ams_dryer`, `unload_filament` |
 | [Nozzles](https://synman.github.io/bambu-printer-manager/bambu-mcp/tools/nozzle/) | `get_nozzle_info`, `refresh_nozzles`, `set_nozzle_config`, `swap_tool` |
 | [Detectors](https://synman.github.io/bambu-printer-manager/bambu-mcp/tools/detectors/) | `get_detector_settings`, `set_air_printing_detection`, `set_buildplate_marker_detection`, `set_first_layer_inspection`, `set_nozzle_clumping_detection`, `set_purge_chute_detection`, `set_spaghetti_detection` |
 | [Printer Management](https://synman.github.io/bambu-printer-manager/bambu-mcp/tools/management/) | `add_printer`, `disconnect_printer`, `get_configured_printers`, `get_printer_connection_status`, `remove_printer`, `start_printer`, `update_printer_credentials` |
 | [Files](https://synman.github.io/bambu-printer-manager/bambu-mcp/tools/files/) | `create_folder`, `delete_file`, `download_file`, `get_3mf_entry_by_id`, `get_3mf_entry_by_name`, `get_all_project_info`, `get_current_job_project_info`, `get_file_info`, `get_plate_thumbnail`, `get_plate_topview`, `get_project_info`, `list_sdcard_files`, `open_plate_layout`, `open_plate_viewer`, `preview_ams_mapping`, `print_file`, `refresh_sdcard`, `rename_sdcard_file`, `upload_file` |
-| [System](https://synman.github.io/bambu-printer-manager/bambu-mcp/tools/system/) | `dump_log`, `force_state_refresh`, `get_firmware_version`, `get_server_info`, `get_session_status`, `pause_mqtt_session`, `rename_printer`, `resume_mqtt_session`, `set_print_options`, `trigger_printer_refresh`, `truncate_log` |
+| [System](https://synman.github.io/bambu-printer-manager/bambu-mcp/tools/system/) | `dump_log`, `force_state_refresh`, `get_firmware_version`, `get_server_info`, `get_session_status`, `get_user_pref`, `pause_mqtt_session`, `rename_printer`, `resume_mqtt_session`, `set_print_options`, `set_user_pref`, `trigger_printer_refresh`, `truncate_log` |
 | [Discovery](https://synman.github.io/bambu-printer-manager/bambu-mcp/tools/discovery/) | `discover_printers` |
 | [Raw Commands](https://synman.github.io/bambu-printer-manager/bambu-mcp/tools/commands/) | `send_mqtt_command` |
 | [Camera](https://synman.github.io/bambu-printer-manager/bambu-mcp/tools/camera/) | `analyze_active_job`, `get_stream_url`, `open_job_state`, `start_stream`, `stop_stream`, `view_stream` |

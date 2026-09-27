@@ -6,8 +6,9 @@ Every registered tool MUST have an ANNOTATIONS entry: a missing or orphaned entr
 startup, so a new tool cannot ship without a title and a read-only classification.
 
 Entry: name -> (title, read_only, destructive, idempotent, open_world). read_only is False
-for every tool that takes user_permission, and for the two unguarded stream tools that start
-and stop the local MJPEG server (start_stream, stop_stream). The tools that only show data are
+for every tool that takes user_permission, for the two unguarded stream tools that start
+and stop the local MJPEG server (start_stream, stop_stream), and for set_user_pref, which
+writes only the server's local preference file. The tools that only show data are
 read-only even though they write a temp file or open a viewer or browser tab (view_stream,
 open_charts, open_job_state, open_plate_layout, open_plate_viewer), as is analyze_active_job,
 whose store_as_reference option is an opt-in mode; they are not idempotent because each repeat
@@ -87,6 +88,7 @@ ANNOTATIONS: dict[str, tuple[str, bool, bool, bool, bool]] = {
     "get_external_spool": ("Bambu: Get External Spool", True, False, True, False),
     "get_fan_speeds": ("Bambu: Get Fan Speeds", True, False, True, False),
     "get_file_info": ("Bambu: Get SD Card File Info", True, False, True, True),
+    "get_filament_catalog": ("Bambu: Get Filament Catalog", True, False, True, False),
     "get_firmware_version": ("Bambu: Get Firmware Version", True, False, True, False),
     "get_hms_errors": ("Bambu: Get HMS Errors", True, False, True, False),
     "get_job_info": ("Bambu: Get Print Job Info", True, False, True, False),
@@ -108,6 +110,7 @@ ANNOTATIONS: dict[str, tuple[str, bool, bool, bool, bool]] = {
     "get_spool_info": ("Bambu: Get Spool Info", True, False, True, False),
     "get_stream_url": ("Bambu: Get Camera Stream Info", True, False, True, False),
     "get_temperatures": ("Bambu: Get Temperatures", True, False, True, False),
+    "get_user_pref": ("Bambu: Get Sticky Preference", True, False, True, False),
     "get_wifi_signal": ("Bambu: Get Wi-Fi Signal", True, False, True, False),
     "list_sdcard_files": ("Bambu: List SD Card Files", True, False, True, True),
     "load_filament": ("Bambu: Load Filament", False, False, False, True),
@@ -149,6 +152,7 @@ ANNOTATIONS: dict[str, tuple[str, bool, bool, bool, bool]] = {
     "set_print_speed": ("Bambu: Set Print Speed", False, False, True, True),
     "set_purge_chute_detection": ("Bambu: Set Purge Chute Detection", False, False, True, True),
     "set_spaghetti_detection": ("Bambu: Set Spaghetti Detection", False, False, True, True),
+    "set_user_pref": ("Bambu: Set Sticky Preference", False, False, True, False),
     "skip_objects": ("Bambu: Skip Print Objects", False, True, True, True),
     "start_ams_dryer": ("Bambu: Start AMS Dryer", False, False, False, True),
     "start_printer": ("Bambu: Start Printer Session", False, False, False, True),

@@ -1338,11 +1338,9 @@ def print_file(
         visuals to the user, call ``open_plate_viewer(name, file_path)``; do NOT call
         ``get_plate_thumbnail`` or ``get_plate_topview`` and embed the data_uri in the
         response. Humans cannot see raw base64 in a terminal or chat context. Also look up
-        stored preferences for each sticky field using user_prefs:
-          from user_prefs import get_pref
-          bed_leveling     = get_pref(f"{name}:bed_leveling",     True)
-          flow_calibration = get_pref(f"{name}:flow_calibration", False)
-          timelapse        = get_pref(f"{name}:timelapse",        False)
+        the stored preference for each sticky field with ``get_user_pref(name, key)``, keys
+        ``bed_leveling``, ``flow_calibration`` and ``timelapse``. A null value means nothing is
+        stored: use the factory default.
         Factory defaults: bed_leveling=True, flow_calibration=False, timelapse=False. Label
         each field "(your preference)" if the stored value differs from the factory default,
         or "(default)" if it matches the factory default.
@@ -1364,12 +1362,8 @@ def print_file(
         after confirming individual parameters across separate turns. Confirming
         flow_calibration, timelapse, or bed_leveling mid-conversation does NOT satisfy this
         gate. The go-ahead must come in the turn immediately after the full summary is shown
-        with all six items visible. After print_file is called successfully, update stored
-        preferences:
-          from user_prefs import set_pref
-          set_pref(f"{name}:bed_leveling",     bed_leveling)
-          set_pref(f"{name}:flow_calibration", flow_calibration)
-          set_pref(f"{name}:timelapse",        timelapse)
+        with all six items visible. After print_file is called successfully, store the values
+        used with ``set_user_pref(name, key, value)`` for each of the three keys.
     """
     log.debug("print_file: called for name=%s file_path=%s plate_num=%s bed_type=%s user_permission=%s", name, file_path, plate_num, bed_type, user_permission)
     if not user_permission:

@@ -143,6 +143,8 @@ _ROUTE_ENUM_VALUES: dict[tuple[str, str], list] = {
     # ── Print control ──────────────────────────────────────────────────────────
     ("set_speed_level",              "level"):         _bpm_enum_names("bpm.bambutools.SpeedLevel"),
     ("print_3mf",                    "plate"):         _bpm_enum_names("bpm.bambutools.PlateType", exclude=["NONE"]),
+    ("plate_thumbnail",              "quality"):       ["preview", "standard", "full"],
+    ("plate_topview",                "quality"):       ["preview", "standard", "full"],
     # ── Climate ────────────────────────────────────────────────────────────────
     ("set_light_state",              "state"):         ["on", "off"],
     # ── AI detectors ───────────────────────────────────────────────────────────
@@ -261,7 +263,23 @@ _ROUTE_PARAM_DESCRIPTIONS: dict[tuple[str, str], str] = {
     ("upload_file_to_printer",          "dest"):        "Destination path on the printer SD card.",
     ("download_file_from_printer",      "src"):         "Full SD card path of the file to download.",
     ("get_3mf_props_for_file",          "file"):        "Full SD card path to the .3mf file.",
-    ("get_3mf_props_for_file",          "plate"):       "Plate number within the .3mf project (1-based). Returns one plate per call — use the get_all_project_info MCP tool to fetch every plate in a single call.",
+    ("get_3mf_props_for_file",          "plate"):       "Plate number within the .3mf project (1-based). Returns one plate per call — use GET /api/get_all_3mf_props_for_file to fetch every plate in a single call.",
+    ("get_all_3mf_props_for_file",      "file"):        "Full SD card path to the .3mf file.",
+    ("get_all_3mf_props_for_file",      "include_images"): "true to include each plate's thumbnail and top-view images as data URIs. Default false.",
+    ("get_file_info_route",             "file"):        "Full SD card path to the file or folder.",
+    ("plate_thumbnail",                 "file"):        "Full SD card path to the .3mf file.",
+    ("plate_thumbnail",                 "plate"):       "Plate number within the .3mf project (1-based). Default 1.",
+    ("plate_thumbnail",                 "quality"):     "Image size tier. Default standard.",
+    ("plate_topview",                   "file"):        "Full SD card path to the .3mf file.",
+    ("plate_topview",                   "plate"):       "Plate number within the .3mf project (1-based). Default 1.",
+    ("plate_topview",                   "quality"):     "Image size tier. Default standard.",
+    ("preview_ams_mapping_route",       "file"):        "Full SD card path to the .3mf file.",
+    ("preview_ams_mapping_route",       "plate"):       "Plate number within the .3mf project (1-based). Default 1.",
+    ("get_user_pref",                   "printer"):     "Printer name the preference belongs to.",
+    ("get_user_pref",                   "key"):         "Preference key, e.g. bed_leveling or ams0:target_temp.",
+    ("set_user_pref",                   "printer"):     "Printer name the preference belongs to.",
+    ("set_user_pref",                   "key"):         "Preference key, e.g. bed_leveling or ams0:target_temp.",
+    ("set_user_pref",                   "value"):       "Value to store. Send a JSON body to keep its type; a form or query value is stored as a string.",
     # ── AI detectors ───────────────────────────────────────────────────────────
     ("set_buildplate_marker_detector",  "enabled"):     "Enable or disable the detector.",
     ("set_first_layer_inspection",      "enabled"):     "Enable or disable first-layer LiDAR/camera inspection.",
@@ -333,6 +351,7 @@ _ROUTE_TAGS: dict[str, str] = {
     "get_printer_info": "System",
     "trigger_printer_refresh": "System",
     "toggle_session": "System",
+    "session_status": "System",
     "dump_log": "System",
     "truncate_log": "System",
     "log_level": "System",
@@ -394,6 +413,11 @@ _ROUTE_TAGS: dict[str, str] = {
     "upload_file_to_printer": "Files",
     "download_file_from_printer": "Files",
     "get_3mf_props_for_file": "Files",
+    "get_all_3mf_props_for_file": "Files",
+    "get_file_info_route": "Files",
+    "plate_thumbnail": "Files",
+    "plate_topview": "Files",
+    "preview_ams_mapping_route": "Files",
     "get_current_3mf_props": "Files",
     # Camera
     "analyze_active_job": "Camera",
@@ -638,6 +662,27 @@ _ROUTE_EXAMPLES: dict[str, dict] = {
             "filaments": [{"type": "PLA", "color": "FF0000", "nozzle_temp_min": 190, "nozzle_temp_max": 240}],
         },
         "params": {"printer": "H2D", "file": "/_jobs/myprint.gcode.3mf", "plate": "1"},
+    },
+    "get_all_3mf_props_for_file": {
+        "response": [{"plate_num": 1, "id": "myprint"}, {"plate_num": 2, "id": "myprint"}],
+        "params": {"printer": "H2D", "file": "/_jobs/myprint.gcode.3mf", "include_images": "false"},
+    },
+    "get_file_info_route": {
+        "response": {"file": {"id": "/_jobs/myprint.gcode.3mf", "name": "myprint.gcode.3mf", "size": 1048576, "timestamp": 1784080200.0}},
+        "params": {"printer": "H2D", "file": "/_jobs/myprint.gcode.3mf"},
+    },
+    "plate_thumbnail": {
+        "params": {"printer": "H2D", "file": "/_jobs/myprint.gcode.3mf", "plate": "1", "quality": "standard"},
+    },
+    "plate_topview": {
+        "params": {"printer": "H2D", "file": "/_jobs/myprint.gcode.3mf", "plate": "1", "quality": "standard"},
+    },
+    "preview_ams_mapping_route": {
+        "params": {"printer": "H2D", "file": "/_jobs/myprint.gcode.3mf", "plate": "1"},
+    },
+    "session_status": {
+        "response": {"name": "H2D", "connected": True, "service_state": "CONNECTED", "session_active": True},
+        "params": {"printer": "H2D"},
     },
     "get_current_3mf_props": {
         "response": {"id": "myprint", "status": "success", "plates": [1]},
@@ -2299,6 +2344,90 @@ def _build_app():
             log.error("get_3mf_props_for_file: error: %s", e, exc_info=True)
             return _err(str(e))
 
+    def _tool_json(result):
+        """Return an MCP tool's result as JSON, mapping its {"error": ...} shape to an error.
+
+        A missing file, plate or image is 404; any other tool error is 500.
+        """
+        if isinstance(result, dict) and "error" in result:
+            msg = str(result["error"])
+            missing = msg.startswith(("File not found", "Could not retrieve", "No "))
+            return _err(msg, HTTPStatus.NOT_FOUND if missing else HTTPStatus.INTERNAL_SERVER_ERROR)
+        return jsonify(result)
+
+    @app.route("/api/get_all_3mf_props_for_file")
+    def get_all_3mf_props_for_file():
+        """Return 3MF project properties for every plate of a file on SD card. ?file=<path>
+
+        Same data as /api/get_3mf_props_for_file, one entry per plate, in one call. Plate
+        thumbnail and top-view images are left out unless include_images=true.
+        """
+        log.debug("get_all_3mf_props_for_file: called")
+        p, pname = _get_printer(_rargs())
+        if p is None:
+            return _err("no printer")
+        from tools.files import get_all_project_info
+        file = _rargs().get("file")
+        include_images = _rargs().get("include_images", "false") == "true"
+        return _tool_json(get_all_project_info(pname, file, include_images=include_images))
+
+    @app.route("/api/get_file_info")
+    def get_file_info_route():
+        """Return the SD card listing entry for one file or folder. ?file=<path>"""
+        log.debug("get_file_info_route: called")
+        p, pname = _get_printer(_rargs())
+        if p is None:
+            return _err("no printer")
+        from tools.files import get_file_info
+        return _tool_json(get_file_info(pname, _rargs().get("file")))
+
+    def _plate_image(pname, file, plate, quality, image_key):
+        """Serve a plate image of a .3mf on SD card as image/jpeg."""
+        import base64
+        from tools.files import _get_plate_image
+        result = _get_plate_image(pname, file, plate, quality, image_key=image_key)
+        if "error" in result:
+            return _tool_json(result)
+        jpeg = base64.b64decode(result["data_uri"].split(",", 1)[1])
+        return Response(jpeg, mimetype="image/jpeg")
+
+    @app.route("/api/plate_thumbnail")
+    def plate_thumbnail():
+        """Return a plate's slicer thumbnail from a .3mf on SD card as a JPEG image. ?file=<path>&plate=<int>&quality=preview|standard|full"""
+        log.debug("plate_thumbnail: called")
+        p, pname = _get_printer(_rargs())
+        if p is None:
+            return _err("no printer")
+        return _plate_image(pname, _rargs().get("file"), int(_rargs().get("plate", 1)),
+                            _rargs().get("quality", "standard"), "thumbnail")
+
+    @app.route("/api/plate_topview")
+    def plate_topview():
+        """Return a plate's top-down layout image from a .3mf on SD card as a JPEG image. ?file=<path>&plate=<int>&quality=preview|standard|full"""
+        log.debug("plate_topview: called")
+        p, pname = _get_printer(_rargs())
+        if p is None:
+            return _err("no printer")
+        return _plate_image(pname, _rargs().get("file"), int(_rargs().get("plate", 1)),
+                            _rargs().get("quality", "standard"), "topimg")
+
+    @app.route("/api/preview_ams_mapping")
+    def preview_ams_mapping_route():
+        """Resolve, without printing, the ams_mapping print_3mf would send. ?file=<path>&plate=<int>
+
+        Uses the spools the printer last reported, as print_3mf does when use_ams=true and no
+        ams_mapping is given. A payload that carries an "error" key is still a preview: it is
+        the reason print_3mf would refuse that plate.
+        """
+        log.debug("preview_ams_mapping_route: called")
+        p, pname = _get_printer(_rargs())
+        if p is None:
+            return _err("no printer")
+        from tools.files import _resolve_print_mapping
+        file = _rargs().get("file")
+        plate = int(_rargs().get("plate", 1))
+        return jsonify(_resolve_print_mapping(pname, p, file, plate))
+
     @app.route("/api/get_current_3mf_props")
     def get_current_3mf_props():
         """Return 3MF project properties for the currently active print job."""
@@ -2361,6 +2490,16 @@ def _build_app():
         except Exception as e:
             log.error("trigger_printer_refresh: error: %s", e, exc_info=True)
             return _err(str(e))
+
+    @app.route("/api/session_status")
+    def session_status():
+        """Return the MQTT session state and connectivity for a printer."""
+        log.debug("session_status: called")
+        p, pname = _get_printer(_rargs())
+        if p is None:
+            return _err("no printer")
+        from tools.system import get_session_status
+        return _tool_json(get_session_status(pname))
 
     @app.route("/api/toggle_session", methods=["PATCH"])
     def toggle_session():
@@ -2833,9 +2972,8 @@ def _build_app():
         No write operation — no user_permission required.
         """
         log.debug("get_user_pref: called")
-        args = _rargs()
-        printer_name = args.get("printer", "")
-        key = args.get("key", "")
+        printer_name = _rargs().get("printer")
+        key = _rargs().get("key")
         if not printer_name or not key:
             return _err("printer and key are required", HTTPStatus.BAD_REQUEST)
         try:
@@ -2862,8 +3000,8 @@ def _build_app():
         """
         log.debug("set_user_pref: called")
         args = _rargs()
-        printer_name = args.get("printer", "")
-        key = args.get("key", "")
+        printer_name = _rargs().get("printer")
+        key = _rargs().get("key")
         if not printer_name or not key:
             return _err("printer, key, and value are required", HTTPStatus.BAD_REQUEST)
         if "value" not in args:
@@ -2871,7 +3009,7 @@ def _build_app():
         try:
             from user_prefs import set_pref
             full_key = f"{printer_name}:{key}"
-            value = args["value"]
+            value = _rargs().get("value")
             set_pref(full_key, value)
             log.debug("set_user_pref: %s ← %r", full_key, value)
             return jsonify({"success": True})
