@@ -24,6 +24,8 @@ import pathlib
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from datetime import datetime, timezone
 
 log = logging.getLogger(__name__)
@@ -460,38 +462,58 @@ def start_stream(name: str, port: int | None = None) -> dict:
         def status_fn(n=name):
             return _build_status(n)
 
-        # Shared image cache — regenerated only when job (gcode_file + plate_num) changes
-        _img_cache: dict = {"key": None, "thumbnail": None, "layout": None}
+        # Shared image cache, keyed on the job's (3mf path, plate). `retry_at` spaces out a
+        # retry after a failed fetch, since the A1's FTPS drops connections during a print.
+        _img_cache: dict = {"key": None, "thumbnail": None, "layout": None, "retry_at": 0.0}
+        _img_lock = threading.Lock()   # /thumbnail and /layout arrive together on two threads
 
         _plate_dir = pathlib.Path.home() / ".bambu-mcp"
         _plate_dir.mkdir(parents=True, exist_ok=True)
         _thumb_path  = _plate_dir / f"plate_thumb_{name}.png"
         _layout_path = _plate_dir / f"plate_layout_{name}.png"
+        # The job the disk PNGs belong to. Without it a failed fetch for a new job kept
+        # showing whichever plate was saved last, for good.
+        _key_path    = _plate_dir / f"plate_key_{name}.json"
 
         def _load_plate_disk():
-            """Return (thumbnail_bytes, layout_bytes) from disk, or (None, None)."""
+            """Return (thumbnail_bytes, layout_bytes, key) from disk.
+
+            The key is ("", 0) for images saved before keys were, so any job replaces them.
+            """
+            import json as _json
             try:
                 t = _thumb_path.read_bytes()  if _thumb_path.exists()  else None
                 l = _layout_path.read_bytes() if _layout_path.exists() else None
-                return t, l
             except Exception:
-                return None, None
+                return None, None, None
+            try:
+                k = tuple(_json.loads(_key_path.read_text()))
+            except Exception:
+                k = ("", 0)
+            return t, l, k
 
-        def _save_plate_disk(thumb: bytes | None, layout: bytes | None):
+        def _save_plate_disk(thumb: bytes | None, layout: bytes | None, key: tuple):
+            import json as _json
             try:
                 if thumb:  _thumb_path.write_bytes(thumb)
                 if layout: _layout_path.write_bytes(layout)
+                _key_path.write_text(_json.dumps(list(key)))
             except Exception as _e:
                 log.debug("_save_plate_disk: %s", _e)
 
         # Pre-load from disk so panels appear immediately on stream start / MCP restart.
-        _disk_t, _disk_l = _load_plate_disk()
+        _disk_t, _disk_l, _disk_k = _load_plate_disk()
         if _disk_t or _disk_l:
+            _img_cache["key"]       = _disk_k
             _img_cache["thumbnail"] = _disk_t
             _img_cache["layout"]    = _disk_l
 
         def _get_images(n=name):
             """Return cached (thumbnail_bytes, layout_bytes), regenerating on job change."""
+            with _img_lock:
+                return _get_images_locked(n)
+
+        def _get_images_locked(n):
             import re, base64, json as _json, dataclasses
             from enum import Enum
             from bpm.bambuproject import get_project_info as _get_project_info
@@ -507,54 +529,54 @@ def start_stream(name: str, port: int | None = None) -> dict:
             # covers every start path, including a print started at the printer's
             # screen, which reports an empty subtask_name — keying on the name
             # alone left the panels showing the previous job's cached images.
+            # The project comes from bpm alone, which finds a screen-started job's file
+            # itself, from its cache when the SD listing fails. This page keeps no name
+            # search of its own and never lists the card.
             import job_project
             tmf_path = None
+            plate_num = None
             _pi = getattr(job, "project_info", None)
             _pi_id = _pi.get("id", "") if isinstance(_pi, dict) else getattr(_pi, "id", "")
             _recalled = None if _pi_id else job_project.recall(n, job)
             if _pi_id:
                 tmf_path = _pi_id
+                plate_num = _pi.get("plate_num") if isinstance(_pi, dict) else getattr(_pi, "plate_num", None)
                 job_project.remember(n, job)
             elif _recalled:
                 # bpm lost the project across a daemon restart; use what this
                 # daemon (or the one before it) persisted for the same job.
-                tmf_path = _recalled[0]
-            elif job.subtask_name:
-                # Fallback: search the SD card file cache by filename. Files may be
-                # anywhere on the SD card; never assume a fixed directory.
-                tmf_name = f"{job.subtask_name}.gcode.3mf"
-                try:
-                    from bpm.bambuproject import get_3mf_entry_by_name as _bpm_find
-                    _pr = session_manager.get_printer(n)
-                    if _pr is not None:
-                        _tree = _pr.get_sdcard_3mf_files()
-                        if _tree:
-                            _entry = _bpm_find(_tree, tmf_name)
-                            if _entry:
-                                tmf_path = _entry.get("id")
-                except Exception as _fe:
-                    log.debug("_get_images: 3mf lookup failed: %s", _fe)
-
+                tmf_path, plate_num = _recalled
             if not tmf_path:
                 log.debug("_get_images: no project path for %s (subtask_name=%r)", n, job.subtask_name)
                 return _img_cache.get("thumbnail"), _img_cache.get("layout")
 
-            m = re.search(r"plate_(\d+)", job.gcode_file or "")
-            plate_num = int(m.group(1)) if m else 1
+            if not plate_num:
+                m = re.search(r"plate_(\d+)", job.gcode_file or "")
+                plate_num = int(m.group(1)) if m else 1
 
             cache_key = (tmf_path, plate_num)
-            if _img_cache["key"] == cache_key and _img_cache["thumbnail"] is not None:
-                return _img_cache["thumbnail"], _img_cache["layout"]
+            if _img_cache["key"] == cache_key:
+                if _img_cache["thumbnail"] is not None or _img_cache["layout"] is not None:
+                    return _img_cache["thumbnail"], _img_cache["layout"]
+                if time.monotonic() < _img_cache["retry_at"]:
+                    return None, None
 
             # New job — clear stale disk images so old job doesn't bleed into new one.
             if _img_cache["key"] is not None and _img_cache["key"] != cache_key:
                 try:
                     if _thumb_path.exists():  _thumb_path.unlink()
                     if _layout_path.exists(): _layout_path.unlink()
+                    if _key_path.exists():    _key_path.unlink()
                 except Exception:
                     pass
                 _img_cache["thumbnail"] = None
                 _img_cache["layout"]    = None
+
+            def _failed():
+                # Remember the job with no images, and try again after a pause
+                _img_cache["key"]      = cache_key
+                _img_cache["retry_at"] = time.monotonic() + 60
+                return None, None
 
             p = session_manager.get_printer(n)
             if p is None:
@@ -570,7 +592,7 @@ def start_stream(name: str, port: int | None = None) -> dict:
 
                 info = _get_project_info(tmf_path, p, plate_num=plate_num)
                 if info is None:
-                    return None, None
+                    return _failed()
                 d = _json.loads(_json.dumps(_to_dict(info), default=str))
                 meta = d.get("metadata", {})
 
@@ -593,14 +615,11 @@ def start_stream(name: str, port: int | None = None) -> dict:
                 _img_cache["key"]       = cache_key
                 _img_cache["thumbnail"] = thumb_bytes
                 _img_cache["layout"]    = layout_bytes
-                _save_plate_disk(thumb_bytes, layout_bytes)
+                _save_plate_disk(thumb_bytes, layout_bytes, cache_key)
                 return thumb_bytes, layout_bytes
             except Exception as _e:
-                # Negative-cache this key so we don't spam the log every poll
-                # cycle when the 3MF isn't in sdcard_3mf_files.
-                _img_cache["key"] = cache_key
                 log.debug("_get_images: project info unavailable for %s: %s", tmf_path, _e)
-                return None, None
+                return _failed()
 
         def thumbnail_fn():
             return _get_images()[0]

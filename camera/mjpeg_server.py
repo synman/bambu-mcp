@@ -444,22 +444,20 @@ function update(d){
 function refreshImages(){
   var t=Date.now();
   var pw=document.getElementById('preview-wrap');
-  var _thumbOk=false,_layoutOk=false;
-  function _updatePreview(){if(_thumbOk||_layoutOk)pw.classList.remove('hidden');else pw.classList.add('hidden');}
-  fetch('/thumbnail?t='+t).then(function(r){
-    if(r.ok&&r.headers.get('Content-Type').indexOf('image')>=0){
-      document.getElementById('thumb-img').src='/thumbnail?t='+t;
-      _thumbOk=true;
+  // An image the server no longer has is cleared, so a panel never keeps an older plate.
+  function _plateImg(url,id){
+    var el=document.getElementById(id);
+    function show(ok){
+      if(ok){el.src=url;el.style.display='';}
+      else{el.removeAttribute('src');el.style.display='none';}
+      return ok;
     }
-    _updatePreview();
-  }).catch(function(){_updatePreview();});
-  fetch('/layout?t='+t).then(function(r){
-    if(r.ok&&r.headers.get('Content-Type').indexOf('image')>=0){
-      document.getElementById('layout-img').src='/layout?t='+t;
-      _layoutOk=true;
-    }
-    _updatePreview();
-  }).catch(function(){_updatePreview();});
+    return fetch(url).then(function(r){
+      return show(r.ok&&(r.headers.get('Content-Type')||'').indexOf('image')>=0);
+    }).catch(function(){return show(false);});
+  }
+  Promise.all([_plateImg('/thumbnail?t='+t,'thumb-img'),_plateImg('/layout?t='+t,'layout-img')])
+    .then(function(ok){if(ok[0]||ok[1])pw.classList.remove('hidden');else pw.classList.add('hidden');});
   fetch('/factors_radar?t='+t).then(function(r){
     if(r.ok&&r.status!==204&&r.headers.get('Content-Type')&&r.headers.get('Content-Type').indexOf('image')>=0){
       document.getElementById('hp-radar-img').src='/factors_radar?t='+t;
