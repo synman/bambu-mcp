@@ -11,7 +11,7 @@ import logging
 
 log = logging.getLogger(__name__)
 
-from session_manager import session_manager
+from session_manager import remember_connection, session_manager
 import auth
 
 
@@ -192,6 +192,7 @@ def remove_printer(name: str, user_permission: bool = False) -> str:
         log.warning("remove_printer: printer not configured: %s", name)
         return f"Error: Printer '{name}' is not configured."
     session_manager.stop_printer(name)
+    remember_connection(name, True)  # a re-added printer starts connected
     try:
         auth.delete_printer_credentials(name)
         log.info("remove_printer: printer removed: %s", name)
@@ -321,8 +322,9 @@ def disconnect_printer(name: str, user_permission: bool = False) -> str:
 
     Notes:
         ``start_printer`` restores the MQTT session but NOT the camera stream this tool stopped;
-        call ``start_stream`` for that. The disconnect is in-memory only: the printer stays
-        configured, so the next server restart starts its session again. The per-printer job
+        call ``start_stream`` for that. The disconnect is remembered: the server keeps the printer
+        disconnected across restarts (``~/.bambu-mcp/connection_<name>.json``) until
+        ``start_printer`` or ``add_printer`` connects it again. The per-printer job
         monitor is NOT stopped: camera.job_monitor exposes only a global stop_all(), no per-printer
         stop, so it keeps running. That applies only to printers registered at server startup; one
         added later with ``add_printer`` has no monitor.
@@ -344,6 +346,7 @@ def disconnect_printer(name: str, user_permission: bool = False) -> str:
     except Exception as e:
         log.warning("disconnect_printer: error stopping stream for %s: %s", name, e, exc_info=True)
     session_manager.stop_printer(name)
+    remember_connection(name, False)
     log.info("disconnect_printer: session stopped for %s", name)
     return f"Printer '{name}' disconnected. Configuration retained; use start_printer('{name}') to reconnect."
 

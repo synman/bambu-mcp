@@ -14,6 +14,7 @@ Run directly (no pytest needed):  .venv/bin/python3 test_management_defects.py
 """
 
 import sys
+import tempfile
 import threading
 import types
 from pathlib import Path
@@ -91,6 +92,10 @@ class _Env:
         self.real_save = sm_module.auth.save_printer_credentials
         self.real_delete = sm_module.auth.delete_printer_credentials
         self.real_mgr = management.session_manager
+        # The remembered connection state goes to a temp dir, never the real ~/.bambu-mcp
+        self.real_state_dir = sm_module._STATE_DIR
+        self.state_tmp = tempfile.TemporaryDirectory(prefix="connection-state-")
+        sm_module._STATE_DIR = Path(self.state_tmp.name)
         sm_module._BambuPrinter = FakePrinter
         sm_module.auth.get_printer_credentials = self._creds
         sm_module.auth.get_configured_printer_names = lambda: list(CONFIGURED)
@@ -112,6 +117,8 @@ class _Env:
         sm_module.auth.save_printer_credentials = self.real_save
         sm_module.auth.delete_printer_credentials = self.real_delete
         management.session_manager = self.real_mgr
+        sm_module._STATE_DIR = self.real_state_dir
+        self.state_tmp.cleanup()
         sys.modules.pop("camera.mjpeg_server", None)
         return False
 
@@ -130,6 +137,60 @@ class _Env:
         CALLS.append(("delete", name))
         if name in CONFIGURED:
             CONFIGURED.remove(name)
+
+
+# ── Remembered connection state ───────────────────────────────────────────────
+
+
+def _started_by_start_all():
+    """A fresh manager, as after a daemon restart; returns the names start_all connected."""
+    mgr = sm_module.SessionManager()
+    mgr.start_all()
+    return sorted(mgr.list_connected())
+
+
+def test_a_disconnected_printer_stays_disconnected_after_a_restart():
+    with _Env() as env:
+        CONFIGURED[:] = ["p1", "p2"]
+        env.mgr.start_all()
+        sys.modules["camera.mjpeg_server"] = types.SimpleNamespace(
+            mjpeg_server=types.SimpleNamespace(stop=lambda n: False))
+        assert management.disconnect_printer("p1", user_permission=True).startswith("Printer 'p1' disconnected")
+        assert _started_by_start_all() == ["p2"]
+
+
+def test_start_printer_after_a_disconnect_connects_it_again_after_a_restart():
+    with _Env() as env:
+        sys.modules["camera.mjpeg_server"] = types.SimpleNamespace(
+            mjpeg_server=types.SimpleNamespace(stop=lambda n: False))
+        management.disconnect_printer("p1", user_permission=True)
+        assert _started_by_start_all() == []
+        management.start_printer("p1", user_permission=True)
+        assert _started_by_start_all() == ["p1"]
+
+
+def test_a_shutdown_records_nothing():
+    with _Env() as env:
+        env.mgr.start_all()
+        env.mgr.stop_all()
+        assert _started_by_start_all() == ["p1"]
+        assert not list(sm_module._STATE_DIR.iterdir())
+
+
+def test_a_removed_printer_readded_starts_connected():
+    with _Env() as env:
+        sys.modules["camera.mjpeg_server"] = types.SimpleNamespace(
+            mjpeg_server=types.SimpleNamespace(stop=lambda n: False))
+        management.disconnect_printer("p1", user_permission=True)
+        management.remove_printer("p1", user_permission=True)
+        CONFIGURED[:] = ["p1"]
+        assert _started_by_start_all() == ["p1"]
+
+
+def test_an_unreadable_state_file_reads_as_connected():
+    with _Env():
+        sm_module._connection_path("p1").write_text("not json")
+        assert _started_by_start_all() == ["p1"]
 
 
 # ── Defect 13: session_manager ────────────────────────────────────────────────

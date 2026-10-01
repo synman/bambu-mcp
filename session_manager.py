@@ -8,9 +8,11 @@ Tools access printers via get_printer(name) — never create BambuPrinter ad-hoc
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import os
 import threading
+from pathlib import Path
 from typing import Callable
 
 import auth
@@ -70,6 +72,44 @@ def _bpm_config_overrides() -> dict:
     return overrides
 
 
+# The connection state each printer was last put in, so a restart of the daemon keeps it: a printer
+# disconnected with disconnect_printer stays disconnected until start_printer or add_printer. One
+# file per printer, ~/.bambu-mcp/connection_<name>.json = {"connected": false}. No file means
+# connected, which is how every printer behaved before this existed. Shutdown (stop_all) records
+# nothing, so the state saved is the operator's last choice, not "stopped by the shutdown".
+_STATE_DIR = Path.home() / ".bambu-mcp"
+
+
+def _connection_path(name: str) -> Path:
+    return _STATE_DIR / f"connection_{name}.json"
+
+
+def remember_connection(name: str, connected: bool) -> None:
+    """Record the operator's last choice for ``name``; connected removes the file."""
+    path = _connection_path(name)
+    try:
+        if connected:
+            path.unlink(missing_ok=True)
+        else:
+            _STATE_DIR.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({"connected": False}))
+        logger.info("remember_connection: %s -> %s", name, "connected" if connected else "disconnected")
+    except OSError as e:
+        logger.warning("remember_connection: could not record %s for %s: %s", connected, name, e)
+
+
+def remembered_connected(name: str) -> bool:
+    """The connection state ``name`` was last left in. Absent or unreadable reads as connected."""
+    path = _connection_path(name)
+    try:
+        return bool(json.loads(path.read_text()).get("connected", True))
+    except FileNotFoundError:
+        return True
+    except (OSError, ValueError, AttributeError) as e:
+        logger.warning("remembered_connected: unreadable %s (%s), treating %s as connected", path, e, name)
+        return True
+
+
 class _NameGuard:
     """One printer name's lock plus the number of threads holding or waiting for it."""
 
@@ -108,9 +148,13 @@ class SessionManager:
         logger.debug("register_update_callback: registered callback %s", cb)
 
     def start_all(self) -> None:
-        """Start sessions for all configured printers."""
+        """Start sessions for every configured printer that was not left disconnected."""
         _ensure_imports()
-        names = auth.get_configured_printer_names()
+        configured = auth.get_configured_printer_names()
+        names = [n for n in configured if remembered_connected(n)]
+        skipped = [n for n in configured if n not in names]
+        if skipped:
+            logger.info("start_all: leaving %s disconnected, as they were last left", skipped)
         logger.info("start_all: starting sessions for %d printers: %s", len(names), names)
         for name in names:
             try:
@@ -128,6 +172,9 @@ class SessionManager:
         """
         logger.debug("start_printer: called for name=%s", name)
         _ensure_imports()
+        # Every caller asks for the printer to be connected, so a restart reconnects it even if
+        # this start fails (an unreachable printer is retried at the next daemon start).
+        remember_connection(name, True)
         self._start_printer(name)
 
     @contextlib.contextmanager
