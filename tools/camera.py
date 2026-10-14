@@ -107,6 +107,7 @@ def _build_status(name: str) -> dict:
             "aux_pct": climate.aux_fan_speed_percent,
             "exhaust_pct": climate.exhaust_fan_speed_percent,
             "heatbreak_pct": getattr(climate, "heatbreak_fan_speed_percent", 0),
+            "circulation_pct": getattr(climate, "circulation_fan_speed_percent", 0),
             "is_chamber_door_open": getattr(climate, "is_chamber_door_open", False),
             "is_chamber_lid_open": getattr(climate, "is_chamber_lid_open", False),
             "active_filament": active_filament,

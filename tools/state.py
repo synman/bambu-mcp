@@ -312,13 +312,20 @@ def get_fan_speeds(name: str) -> dict:
         name: Configured printer name (see ``get_configured_printers``).
 
     Returns:
-        ``{"part_cooling_pct", "aux_pct", "exhaust_pct", "heatbreak_pct",
+        ``{"part_cooling_pct", "aux_pct", "exhaust_pct", "heatbreak_pct", "circulation_pct",
         "enhanced_cooling_pct"}``, each a percentage. Fans reported: part_cooling, aux
-        (recirculation), exhaust (chamber), heatbreak, enhanced_cooling (Toolhead Enhanced
-        Cooling Fan, H2-series extension-tool only). Error shape:
-        ``{"error": "Printer '<name>' not connected"}``.
+        (auxiliary part cooling, side of the chamber), exhaust (chamber), heatbreak,
+        circulation (the H2 Chamber Heat Circulation Fan inside the chamber heater; 0 on
+        every other model), enhanced_cooling (Toolhead Enhanced Cooling Fan, H2-series
+        extension-tool only). Error shape: ``{"error": "Printer '<name>' not connected"}``.
 
     Notes:
+        On the H2 series the firmware's heating mode stops the aux and exhaust fans and runs
+        the circulation fan, so while the chamber heats aux_pct and exhaust_pct read 0 and
+        circulation_pct is the chamber fan that is on. That is the printer's own rule table
+        (``device.airduct.modeList``), not a telemetry gap.
+
+
         enhanced_cooling_pct is NOT a measured speed — the printer publishes no run-state
         telemetry for this fan. It is the last target commanded through THIS server's
         current session (sticky): it persists unchanged across telemetry updates, reads 0
@@ -339,6 +346,7 @@ def get_fan_speeds(name: str) -> dict:
         "aux_pct": c.aux_fan_speed_percent,
         "exhaust_pct": c.exhaust_fan_speed_percent,
         "heatbreak_pct": c.heatbreak_fan_speed_percent,
+        "circulation_pct": c.circulation_fan_speed_percent,
         "enhanced_cooling_pct": c.enhanced_cooling_fan_target_percent,
     }
 

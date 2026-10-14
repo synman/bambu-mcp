@@ -380,7 +380,7 @@ function update(d){
 
   // E2 — heatbreak fan added to fan list
   var fanSec=document.getElementById('sec-fans');
-  var fanData=[['Part',Number(d.part_cooling_pct)||0],['Aux',Number(d.aux_pct)||0],['Exhaust',Number(d.exhaust_pct)||0],['Heatbreak',Number(d.heatbreak_pct)||0]].filter(function(f){return f[1]>0;});
+  var fanData=[['Part',Number(d.part_cooling_pct)||0],['Aux',Number(d.aux_pct)||0],['Exhaust',Number(d.exhaust_pct)||0],['Circulation',Number(d.circulation_pct)||0],['Heatbreak',Number(d.heatbreak_pct)||0]].filter(function(f){return f[1]>0;});
   if(fanData.length>0){
     var fEl=document.getElementById('fans');
     fEl.innerHTML='';
