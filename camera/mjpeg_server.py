@@ -1,13 +1,17 @@
 """
-mjpeg_server.py — Local HTTP MJPEG server for Bambu Lab camera streams.
+mjpeg_server.py — per-printer local stream server: the live camera page with its HUD.
 
-Serves Motion JPEG (multipart/x-mixed-replace) over HTTP using Python stdlib only.
+The video is the bambu-mse-stream camera relay's fragmented MP4 (camera/mse_relay.py runs it as a
+child process), played in the page with Media Source Extensions. Every Bambu model streams the same
+way: RTSPS printers (X1, H2D, P2S) pass their H.264 through untouched, A1/P1 JPEG stills are encoded
+once as intra H.264 frames. The module keeps its MJPEG-era name; it no longer serves MJPEG.
+
+Routes: / (page), /open (single-tab portal), /stream.mp4 and /stats (proxied to the relay),
+/snapshot (the relay's latest frame as JPEG), /status (printer telemetry), /thumbnail and /layout
+(plate images), /job_state, /annotated and /factors_radar (job monitor results).
+
 One server instance per active printer stream. Started on demand, stopped on request
 or MCP shutdown.
-
-MJPEG is a standard HTTP streaming format where each frame is a complete JPEG image
-delivered as a multipart HTTP part. Any modern browser natively displays it as live
-video when the URL is opened directly.
 
 Port allocation: drawn from the shared ephemeral port pool (port_pool.py).
 Pool default range: 49152–49251 (IANA RFC 6335 Dynamic/Private range).
@@ -16,17 +20,13 @@ URL format: http://localhost:{port}/
 
 from __future__ import annotations
 
-import collections
 import json
 import logging
-import re
 import threading
-import time
-import urllib.parse
 from dataclasses import dataclass
 from html import escape as _escape_html
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Callable, Iterator
+from typing import Callable
 
 log = logging.getLogger(__name__)
 
@@ -39,7 +39,7 @@ _HTML_PAGE = """\
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:#000;display:flex;align-items:center;justify-content:center;height:100vh;overflow:hidden}
-#stream{max-width:100%;max-height:100vh;display:block}
+#stream{max-width:100%;max-height:100vh;display:block;background:#000}
 #hud{position:fixed;top:16px;left:16px;background:rgba(0,0,0,.85);color:#ddd;
   font:14px/1.6 'Courier New',monospace;padding:10px 14px;border-radius:8px;
   pointer-events:none;min-width:230px;max-width:310px;
@@ -156,7 +156,7 @@ body{background:#000;display:flex;align-items:center;justify-content:center;heig
 </style>
 </head>
 <body>
-<canvas id="stream"></canvas>
+<video id="stream" autoplay muted playsinline></video>
 <div id="fps"><span id="fps-num"></span><span id="fps-lbl">FPS</span><canvas id="fps-chart" width="52" height="20"></canvas></div>
 <div id="health-panel">
   <div class="hp-hdr" onclick="hpToggle(this)">
@@ -625,39 +625,6 @@ function _hpPoll(){
     // Reset history when a new print job starts
     var sub=d.subtask_name||'';
     if(sub&&sub!==_hpCurrentJob){_hpCurrentJob=sub;_hpScores=[];_hpDcScores=[];_hpNozzles=[];_hpBeds=[];}
-    var f=d.fps||0;
-    if(_lastFrameMs>0&&Date.now()-_lastFrameMs>15000)f=0;
-    // Auto-recover frozen fetch stream
-    if(_lastFrameMs>0&&Date.now()-_lastFrameMs>15000&&typeof _streamConnect==='function'){_lastFrameMs=0;_streamConnect();}
-    var fpsCont=document.getElementById('fps');
-    if(f>0){
-      fpsCont.style.display='flex';
-      var numEl=document.getElementById('fps-num');
-      var cap=d.fps_cap||20;
-      f=Math.min(f,cap);  // the gauge tops out at the cap
-      numEl.textContent=f<2?f.toFixed(1):f;
-      numEl.className=f>=cap*.8?'fps-hi':f>=cap*.4?'fps-mid':'fps-lo';
-      var hist=d.fps_history||[];
-      var cv=document.getElementById('fps-chart');
-      if(cv&&hist.length>1){
-        var ctx=cv.getContext('2d');
-        ctx.clearRect(0,0,cv.width,cv.height);
-        var maxV=cap;
-        var lineColor=f>=cap*.8?'#39ff6e':f>=cap*.4?'#f5a623':'#ff4444';
-        ctx.strokeStyle=lineColor;
-        ctx.lineWidth=1.5;
-        ctx.beginPath();
-        var inLine=false;
-        for(var i=0;i<hist.length;i++){
-          var x=i/(hist.length-1)*cv.width;
-          var v=Math.min(hist[i],maxV);
-          if(v<0.5){inLine=false;continue;}
-          var y=cv.height-(v/maxV)*(cv.height-2)+1;
-          if(!inLine){ctx.moveTo(x,y);inLine=true;}else ctx.lineTo(x,y);
-        }
-        ctx.stroke();
-      }
-    }else{fpsCont.style.display='none';}
     // Update temp sparklines (fixed scales: nozzle 0-310°C, bed 0-120°C)
     var nozzle=d.nozzles&&d.nozzles.length?d.nozzles[0].temp:0;
     var bed=d.bed_temp||0;
@@ -668,75 +635,149 @@ function _hpPoll(){
     hpPollJobState();
   }).catch(function(){});}
 poll();setInterval(poll,2000);
-// Fetch-based MJPEG parser: bypasses Safari's broken <img src="multipart"> loader.
-// Reads the raw multipart stream via fetch(), parses Content-Length from each part
-// header, extracts the JPEG bytes, and renders each frame to a <canvas> via
-// createImageBitmap (NOT img.src=objectURL — see the render block below). Works in all browsers.
-var _lastFrameMs=0;var _streamConnect=null;
+// Live video: the camera relay's fragmented MP4 (/stream.mp4) played through Media Source
+// Extensions, ported from bambu-mse-stream's index.html. RTSPS printers (H2D, X1, P2S) send their
+// own H.264, passed through untouched; A1/P1 stills arrive as one intra H.264 frame each, every
+// 2 to 3 s. The relay ends the response when its camera session resets; the page reconnects.
 (function(){
-  var cv=document.getElementById('stream');
-  var ctx=cv.getContext('2d');
-  var _busy=false;
-  var _ctrl=null;
-  function connect(){
-    if(_ctrl){try{_ctrl.abort();}catch(e){}}
-    _ctrl=new AbortController();
-    fetch('/stream',{signal:_ctrl.signal}).then(function(r){
-      var reader=r.body.getReader();
-      var buf=new Uint8Array(0);
-      function indexOf(h,n,s){
-        s=s||0;
-        outer:for(var i=s;i<=h.length-n.length;i++){
-          for(var j=0;j<n.length;j++){if(h[i+j]!==n[j])continue outer;}
-          return i;
-        }
-        return -1;
-      }
-      var HDR_END=new Uint8Array([13,10,13,10]); // \r\n\r\n
-      function process(){
-        while(true){
-          var he=indexOf(buf,HDR_END);
-          if(he===-1)return;
-          var hdr=new TextDecoder().decode(buf.slice(0,he));
-          var m=hdr.match(/Content-Length:\\s*(\\d+)/i);
-          if(!m){buf=buf.slice(he+4);continue;}
-          var cl=parseInt(m[1]);
-          var ds=he+4;
-          if(buf.length<ds+cl)return;
-          var jpeg=buf.slice(ds,ds+cl);
-          buf=buf.slice(ds+cl);
-          var blob=new Blob([jpeg],{type:'image/jpeg'});
-          // Render via canvas + ImageBitmap, NOT <img src=objectURL>. revokeObjectURL
-          // frees the JPEG bytes but WebKit keeps the DECODED bitmap in its <img> image
-          // cache (revoke does not evict it) -> unbounded growth at native frame sizes
-          // (decoded RGBA ~= W*H*4 per frame). createImageBitmap + drawImage + bm.close()
-          // releases the decoded frame deterministically and never touches the <img>
-          // decoded-image cache, so memory stays flat at full native resolution.
-          if(_busy)continue; // drop frame while a decode is in flight (bounds memory + latency)
-          _busy=true;
-          createImageBitmap(blob).then(function(bm){
-            if(cv.width!==bm.width||cv.height!==bm.height){cv.width=bm.width;cv.height=bm.height;}
-            ctx.drawImage(bm,0,0);
-            bm.close();
-            _lastFrameMs=Date.now();
-            _busy=false;
-          }).catch(function(){_busy=false;});
-        }
-      }
-      function pump(){
-        reader.read().then(function(res){
-          if(res.done){setTimeout(connect,1000);return;}
-          var n=new Uint8Array(buf.length+res.value.length);
-          n.set(buf);n.set(res.value,buf.length);buf=n;
-          process();
-          pump();
-        }).catch(function(){setTimeout(connect,1000);});
-      }
-      pump();
-    }).catch(function(){setTimeout(connect,1000);});
+  var video=document.getElementById('stream');
+  var MS=window.ManagedMediaSource||window.MediaSource;
+  var hasRVFC=typeof HTMLVideoElement!=='undefined'&&'requestVideoFrameCallback' in HTMLVideoElement.prototype;
+  // live edge per camera family: 30 fps can sit 0.5 s behind it, a still stream holds each frame 2-3 s
+  var EDGE={rtsps:{target:0.5,max:1.5},jpeg:{target:2.5,max:8}};
+  // a TCP path that goes quiet looks like a live stream; reconnect when no bytes come for this long
+  var STALL_MS={rtsps:10000,jpeg:20000};
+  var camera='rtsps',serverRate=0,ctrl=null,ms=null,sb=null,pending=[],frames=[],lastQ=null;
+  var stopped=false,gen=0,lastByteAt=0,fpsHist=[];
+  if(hasRVFC){var tick=function(now){frames.push(now);video.requestVideoFrameCallback(tick);};video.requestVideoFrameCallback(tick);}
+  function ahead(){var b=video.buffered;return b&&b.length?b.end(b.length-1)-video.currentTime:null;}
+  function drawFps(f){
+    var box=document.getElementById('fps');
+    if(!(f>0)){box.style.display='none';return;}
+    box.style.display='flex';
+    // judged against the rate the relay receives from the printer, never a fixed number: the H2D
+    // sends about 20 fps idle and 30 while printing, an A1 about 0.5
+    var ref=serverRate||(camera==='jpeg'?0.5:30);
+    var cls=f>=ref*.8?'fps-hi':f>=ref*.4?'fps-mid':'fps-lo';
+    var num=document.getElementById('fps-num');
+    num.textContent=f<2?f.toFixed(2):Math.round(f);
+    num.className=cls;
+    var cv=document.getElementById('fps-chart');
+    if(!cv||fpsHist.length<2)return;
+    var c=cv.getContext('2d');
+    c.clearRect(0,0,cv.width,cv.height);
+    var maxV=Math.max.apply(null,fpsHist.concat([ref]));
+    c.strokeStyle=cls==='fps-hi'?'#39ff6e':cls==='fps-mid'?'#f5a623':'#ff4444';
+    c.lineWidth=1.5;
+    c.beginPath();
+    var inLine=false;
+    for(var i=0;i<fpsHist.length;i++){
+      var x=i/(fpsHist.length-1)*cv.width,v=fpsHist[i];
+      if(!(v>0)){inLine=false;continue;}
+      var y=cv.height-(v/maxV)*(cv.height-2)+1;
+      if(!inLine){c.moveTo(x,y);inLine=true;}else c.lineTo(x,y);
+    }
+    c.stroke();
   }
-  _streamConnect=connect;
-  connect();
+  setInterval(function(){
+    var now=performance.now(),win=camera==='jpeg'?10000:2000,f=0;
+    frames=frames.filter(function(t){return now-t<=win;});
+    // frames per second across the frames seen, not frames per window: an A1's 3 or 4 stills in
+    // 10 s would read 0.3 against its 0.45 and show amber while healthy. Zero once the last frame
+    // is over three gaps (and at least 1.5 s) old.
+    if(hasRVFC&&frames.length>1){
+      var n=frames.length,gap=(frames[n-1]-frames[0])/(n-1);
+      f=gap>0&&now-frames[n-1]<=Math.max(3*gap,1500)?1000/gap:0;
+    }
+    else if(video.getVideoPlaybackQuality){
+      var q=video.getVideoPlaybackQuality();
+      f=lastQ?q.totalVideoFrames-lastQ.totalVideoFrames:0;
+      lastQ=q;
+    }
+    if(!lastByteAt)f=0;
+    fpsHist.push(f);if(fpsHist.length>60)fpsHist.shift();
+    drawFps(f);
+    var lat=ahead(),edge=EDGE[camera]||EDGE.rtsps;
+    if(lat!=null&&lat>edge.max)video.currentTime=video.buffered.end(video.buffered.length-1)-edge.target;
+    if(video.paused&&!video.ended)video.play().catch(function(){});
+    if(lastByteAt&&now-lastByteAt>(STALL_MS[camera]||STALL_MS.rtsps)){lastByteAt=0;restart();}
+  },1000);
+  function pollStats(){
+    return fetch('/stats',{cache:'no-store'}).then(function(r){return r.json();}).then(function(s){
+      camera=s.camera||camera;serverRate=s.packets_per_s||0;return s;});
+  }
+  setInterval(function(){pollStats().catch(function(){});},2000);
+  function appendNext(){
+    if(!sb||sb.updating||!pending.length)return;
+    var chunk=pending.shift();
+    try{sb.appendBuffer(chunk);}catch(e){restart();}
+  }
+  function trimBuffer(){
+    if(!sb||sb.updating||!video.buffered.length)return;
+    var s=video.buffered.start(0);
+    if(video.currentTime-s>20){try{sb.remove(s,video.currentTime-10);}catch(e){}}
+  }
+  function retry(g,ms_){setTimeout(function(){if(g===gen)restart();},ms_);}
+  function start(){
+    var g=++gen;stopped=false;lastByteAt=0;
+    pollStats().then(function(s){
+      if(g!==gen)return;
+      if(!s.codec){retry(g,2000);return;}   // the relay has no camera session yet
+      var mime='video/mp4; codecs="'+s.codec+'"';
+      if(!MS||!MS.isTypeSupported(mime))return;   // this browser cannot play the stream
+      ms=new MS();
+      if(window.ManagedMediaSource)video.disableRemotePlayback=true;
+      var src=URL.createObjectURL(ms);
+      video.src=src;
+      ms.addEventListener('sourceopen',function(){
+        URL.revokeObjectURL(src);   // the element holds the MediaSource; the URL entry is not needed
+        if(g!==gen)return;
+        sb=ms.addSourceBuffer(mime);
+        sb.mode='segments';
+        var seeded=false;
+        sb.addEventListener('updateend',function(){
+          // start on the first buffered frame at once, not on the next 1 s tick
+          if(!seeded&&video.buffered.length){
+            seeded=true;
+            var edge=EDGE[camera]||EDGE.rtsps,end=video.buffered.end(video.buffered.length-1);
+            video.currentTime=Math.max(video.buffered.start(0),end-edge.target);
+          }
+          trimBuffer();appendNext();
+        });
+        ctrl=new AbortController();
+        fetch('/stream.mp4?cb='+Date.now(),{cache:'no-store',signal:ctrl.signal}).then(function(res){
+          if(g!==gen)return;
+          if(!res.ok||!res.body)throw new Error('http '+res.status);
+          lastByteAt=performance.now();
+          var reader=res.body.getReader();
+          function pump(){
+            return reader.read().then(function(r){
+              if(g!==gen)return;
+              if(r.done)throw new Error('stream ended');
+              lastByteAt=performance.now();
+              pending.push(r.value);appendNext();
+              return pump();
+            });
+          }
+          return pump();
+        }).catch(function(){if(g===gen&&!stopped)retry(g,1000);});
+      },{once:true});
+    }).catch(function(){if(g===gen)retry(g,2000);});
+  }
+  function stop(){
+    stopped=true;
+    try{if(ctrl)ctrl.abort();}catch(e){}
+    pending=[];frames=[];
+    try{if(ms&&ms.readyState==='open')ms.endOfStream();}catch(e){}
+    sb=null;ms=null;
+    video.removeAttribute('src');video.load();
+  }
+  function restart(){stop();start();}
+  video.addEventListener('error',function(){
+    if(!video.error)return;   // emptied by our own restart, not a failure
+    retry(gen,1000);
+  });
+  start();
 })();
 </script>
 </body>
@@ -744,40 +785,11 @@ var _lastFrameMs=0;var _streamConnect=null;
 """
 
 
-_QUALITY_RE = re.compile(r"[0-9]{1,6}")   # ASCII digits only: int() also takes "5_0" and non-ASCII digits
-_QUALITY_MIN, _QUALITY_MAX = 1, 100
-
-
-class _BadStreamParam(ValueError):
-    """A resolution or quality query value the stream server does not accept."""
-
-    def __init__(self, error: str, detail: str):
-        super().__init__(detail)
-        self.error = error
-        self.detail = detail
-
-
-def _parse_stream_params(path: str) -> tuple[str, int]:
-    """Return the (resolution, quality) a request path asks for; ("native", 85) when it names none.
-
-    The resolution must be a key of tools.camera._RESOLUTION_MAP, the set view_stream accepts and the
-    frame transform honours, and the quality an integer from 1 to 100. Anything else raises
-    _BadStreamParam; the rejected value is left out of the message.
-    """
-    from tools.camera import _RESOLUTION_MAP  # here, not at the top: tools.camera imports this module
-    resolution, quality = "native", 85
-    if "?" in path:
-        params = urllib.parse.parse_qs(path.split("?", 1)[1])
-        resolution = params.get("resolution", ["native"])[0]
-        raw_quality = params.get("quality", ["85"])[0]
-        if resolution not in _RESOLUTION_MAP:
-            raise _BadStreamParam("invalid_resolution",
-                                  f"resolution must be one of: {', '.join(_RESOLUTION_MAP)}")
-        if not _QUALITY_RE.fullmatch(raw_quality) or not _QUALITY_MIN <= int(raw_quality) <= _QUALITY_MAX:
-            raise _BadStreamParam("invalid_quality",
-                                  f"quality must be an integer from {_QUALITY_MIN} to {_QUALITY_MAX}")
-        quality = int(raw_quality)
-    return resolution, quality
+# Seconds with no /stream.mp4 client before an idle-stop server shuts down (RTSPS printers only)
+_IDLE_STOP_S = 10.0
+# Hop-by-hop headers a proxy never forwards (RFC 9110 7.6.1)
+_HOP_HEADERS = {"connection", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade",
+                "proxy-authenticate", "proxy-authorization", "content-length"}
 
 
 def _js_str(value: str) -> str:
@@ -786,7 +798,7 @@ def _js_str(value: str) -> str:
     for ch in value:
         if ch in "\\'":
             out.append("\\" + ch)
-        elif ch == "<" or ch < " " or ch in "\u2028\u2029":
+        elif ch == "<" or ch < " " or ch in "  ":
             out.append(f"\\u{ord(ch):04x}")
         else:
             out.append(ch)
@@ -794,39 +806,62 @@ def _js_str(value: str) -> str:
 
 
 class _MJPEGHTTPServer(ThreadingHTTPServer):
-    """HTTPServer subclass that holds a frame factory and optional status/image callbacks.
+    """One printer's stream server: the HUD page, its data routes, and the camera relay's routes.
 
-    Each client connection to /stream gets its own independent frame iterator via
-    frame_factory(), so multiple browser tabs never compete for the same generator.
+    ``relay`` is the printer's camera.mse_relay.RelayProcess, or any object with its ``get(path)``,
+    ``open_stream()`` and ``snapshot()``. /stream.mp4 and /stats are proxied to it, so the page has
+    one origin.
     """
 
-    def __init__(self, addr, handler_class, frame_factory: Callable[[], Iterator[bytes]],
+    daemon_threads = True
+
+    def __init__(self, addr, handler_class, relay=None,
                  status_fn: Callable[[], dict] | None = None,
                  thumbnail_fn: Callable[[], bytes | None] | None = None,
                  layout_fn: Callable[[], bytes | None] | None = None,
-                 fps_cap: float = 20,
                  printer_name: str = "",
-                 frame_transform_fn: Callable[[bytes, str, int], bytes] | None = None):
+                 on_idle: Callable[[], None] | None = None):
         super().__init__(addr, handler_class)
         log.debug("_MJPEGHTTPServer.__init__: starting on port %s", addr[1])
-        self.frame_factory = frame_factory
+        self.relay = relay
         self.status_fn = status_fn
         self.thumbnail_fn = thumbnail_fn
         self.layout_fn = layout_fn
-        self.fps_cap = fps_cap
         self.printer_name = printer_name
-        self.frame_transform_fn = frame_transform_fn
         self._running = True
-        # FPS tracking — rolling 10s window of frame timestamps; deduplicated by frame id
-        self._fps_lock = threading.Lock()
-        self._fps_times: collections.deque[float] = collections.deque()
-        self._fps_last_frame_id: int = -1
-        self._fps_history: collections.deque[float] = collections.deque([fps_cap] * 60, maxlen=60)
-        log.debug("_MJPEGHTTPServer.__init__: ready on port %s", addr[1])
+        # Idle stop: armed only after a /stream.mp4 client has come and gone, as before.
+        self.on_idle = on_idle
+        self._clients_lock = threading.Lock()
+        self._stream_clients = 0
+        self._idle_timer: threading.Timer | None = None
+
+    def stream_client_added(self) -> None:
+        with self._clients_lock:
+            self._stream_clients += 1
+            if self._idle_timer is not None:
+                self._idle_timer.cancel()
+                self._idle_timer = None
+
+    def stream_client_removed(self) -> None:
+        with self._clients_lock:
+            self._stream_clients -= 1
+            if self._stream_clients > 0 or self.on_idle is None or not self._running:
+                return
+            log.debug("stream server: no clients left, stopping in %.0f s unless one returns", _IDLE_STOP_S)
+            self._idle_timer = threading.Timer(_IDLE_STOP_S, self._idle_check)
+            self._idle_timer.daemon = True
+            self._idle_timer.start()
+
+    def _idle_check(self) -> None:
+        with self._clients_lock:
+            self._idle_timer = None
+            if self._stream_clients > 0 or not self._running:
+                return
+        log.info("stream server: idle for %.0f s, stopping %s", _IDLE_STOP_S, self.printer_name)
+        self.on_idle()
 
 
 class _StreamHandler(BaseHTTPRequestHandler):
-    # HTTP/1.0: no chunked encoding; Safari's MJPEG parser expects raw multipart bytes
     def do_GET(self):
         path = self.path.split("?", 1)[0]  # strip query params (cache-busting)
         log.debug("do_GET: path=%s client=%s", path, self.client_address[0])
@@ -848,45 +883,27 @@ class _StreamHandler(BaseHTTPRequestHandler):
             self._serve_job_state()
         elif path == "/open":
             self._serve_open()
-        else:
+        elif path == "/stream.mp4":
             self._serve_stream()
+        elif path == "/stats":
+            self._serve_stats()
+        else:
+            self._send_bytes(404, "text/plain", b"not found")
 
-    def _stream_params_or_400(self) -> tuple[str, int] | None:
-        """The request's (resolution, quality), or None after answering 400 with the JSON error body."""
-        try:
-            return _parse_stream_params(self.path)
-        except _BadStreamParam as e:
-            log.debug("%s: rejected %s: %s", self.path.split("?", 1)[0], e.error, e.detail)
-            body = json.dumps({"error": e.error, "detail": e.detail}).encode()
-            self.send_response(400)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-            return None
+    def _send_bytes(self, code: int, ctype: str, body: bytes, no_store: bool = False) -> None:
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        if no_store:
+            self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
 
     def _serve_html(self):
         log.debug("_serve_html: serving HTML to %s", self.client_address)
         title = f"Bambu Cam — {_escape_html(self.server.printer_name)}" if self.server.printer_name else "Bambu Cam"
-        # Intended: inject per-client quality params into the stream fetch URL so each browser
-        # tab gets the resolution/quality it requested via ?resolution=X&quality=Y. NOT in effect
-        # today: the page's call is fetch('/stream',{signal:...}), which the needle below never
-        # matches, so the replace changes nothing and the page always fetches plain /stream.
-        params = self._stream_params_or_400()
-        if params is None:
-            return
-        resolution, quality = params
-        stream_url = "/stream"
-        if not (resolution == "native" and quality == 85):
-            stream_url = "/stream?" + urllib.parse.urlencode({"resolution": resolution, "quality": quality})
-        body = _HTML_PAGE.replace("<title>Bambu Cam</title>", f"<title>{title}</title>", 1)
-        body = body.replace("fetch('/stream')", f"fetch({_js_str(stream_url)})").encode()
-        log.debug("_serve_html: %d bytes", len(body))
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        body = _HTML_PAGE.replace("<title>Bambu Cam</title>", f"<title>{title}</title>", 1).encode()
+        self._send_bytes(200, "text/html; charset=utf-8", body)
         log.debug("_serve_html: done, %d bytes sent to %s", len(body), self.client_address)
 
     def _serve_status(self):
@@ -897,27 +914,17 @@ class _StreamHandler(BaseHTTPRequestHandler):
                 data = self.server.status_fn()
             except Exception as e:
                 log.error("_serve_status: status_fn raised: %s", e, exc_info=True)
-        # Compute FPS from rolling 10s window
-        now = time.monotonic()
-        with self.server._fps_lock:
-            dq = self.server._fps_times
-            while dq and now - dq[0] > 10.0:
-                dq.popleft()
-            total = len(dq)
-        fps_val = total / 10.0
-        fps_rounded = round(fps_val, 2) if fps_val < 2 else round(fps_val)
-        self.server._fps_history.append(fps_rounded)
-        fps_history = list(self.server._fps_history)
-        data["fps"] = fps_rounded
-        data["fps_cap"] = self.server.fps_cap
-        data["fps_history"] = fps_history
-        log.debug("_serve_status: fps=%.1f for request from %s", fps_val, self.client_address)
-        body = json.dumps(data).encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        self._send_bytes(200, "application/json", json.dumps(data).encode())
+
+    def _serve_stats(self):
+        """The relay's /stats: camera family, codec, input rates, clients. 503 when the relay is down."""
+        relay = self.server.relay
+        try:
+            status, ctype, body = relay.get("/stats", timeout=5.0) if relay else (503, "text/plain", b"")
+        except OSError as e:
+            log.debug("_serve_stats: relay unreachable: %s", e)
+            status, ctype, body = 503, "text/plain", b"camera relay unreachable"
+        self._send_bytes(status, ctype or "application/json", body, no_store=True)
 
     def _serve_image(self, fn: Callable[[], bytes | None] | None):
         log.debug("_serve_image: fn=%s", 'present' if fn else 'None')
@@ -937,12 +944,7 @@ class _StreamHandler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         log.debug("_serve_image: served %d bytes to %s", len(data), self.client_address)
-        self.send_response(200)
-        self.send_header("Content-Type", "image/png")
-        self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(data)
+        self._send_bytes(200, "image/png", data, no_store=True)
 
     def _serve_job_state(self):
         """Return the cached active job state report from the background monitor."""
@@ -983,9 +985,6 @@ class _StreamHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
-
-
-
 
     def _serve_annotated(self):
         """Return the annotated anomaly-detection frame from the background monitor cache."""
@@ -1035,30 +1034,16 @@ class _StreamHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def _serve_snapshot(self):
-        """Return a single JPEG frame as image/jpeg and close the connection."""
+        """Return the relay's latest frame as image/jpeg; 503 while it has none."""
         log.debug("_serve_snapshot: requested by %s", self.client_address)
-        _gen = self.server.frame_factory()
-        try:
-            jpeg = next(_gen)
-        except StopIteration:
+        relay = self.server.relay
+        jpeg = relay.snapshot() if relay else None
+        if not jpeg:
             log.warning("_serve_snapshot: no frame available for %s", self.client_address)
-            self.send_response(503)
-            self.end_headers()
+            self._send_bytes(503, "text/plain", b"no frame yet")
             return
-        except Exception as e:
-            log.error("_serve_snapshot: frame_factory raised: %s", e, exc_info=True)
-            self.send_response(500)
-            self.end_headers()
-            return
-        finally:
-            _gen.close()  # always decrement _client_count; don't rely on GC
         log.debug("_serve_snapshot: serving %d bytes to %s", len(jpeg), self.client_address)
-        self.send_response(200)
-        self.send_header("Content-Type", "image/jpeg")
-        self.send_header("Content-Length", str(len(jpeg)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(jpeg)
+        self._send_bytes(200, "image/jpeg", jpeg, no_store=True)
 
     def _serve_open(self):
         """Serve a portal page that opens the stream in a named browser window/tab.
@@ -1066,84 +1051,56 @@ class _StreamHandler(BaseHTTPRequestHandler):
         Called by view_stream() via webbrowser.open('/open?name=bambu-{printer}').
         The page calls window.open('/', target) — browsers reuse an existing window
         with that name on subsequent calls, achieving single-tab-per-printer behavior.
-        Resolution/quality params are forwarded to the stream page; a resolution that is not in
-        tools.camera._RESOLUTION_MAP or a quality that is not an integer from 1 to 100 is answered
-        with a 400 JSON error body instead.
         """
         log.debug("_serve_open: serving portal to %s", self.client_address)
-        # Forward resolution/quality so the opened tab requests the right quality.
-        params = self._stream_params_or_400()
-        if params is None:
-            return
-        resolution, quality = params
-        stream_path = "/"
-        if not (resolution == "native" and quality == 85):
-            stream_path = "/?" + urllib.parse.urlencode({"resolution": resolution, "quality": quality})
-        stream_js = _js_str(stream_path)
+        stream_js = _js_str("/")
         html = (
-            "<!doctype html><html><head><title>Opening Bambu Cam\u2026</title></head>"
+            "<!doctype html><html><head><title>Opening Bambu Cam…</title></head>"
             "<body><script>"
             "var n=new URLSearchParams(location.search).get('name')||'bambu-cam';"
             f"var w=window.open(location.origin+{stream_js},n);"
             "if(w){w.focus();setTimeout(function(){window.close();},150);}"
             f"else{{location.replace({stream_js});}}"
-            "</script><p>Opening stream\u2026</p></body></html>"
+            "</script><p>Opening stream…</p></body></html>"
         ).encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(html)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(html)
+        self._send_bytes(200, "text/html; charset=utf-8", html, no_store=True)
 
     def _serve_stream(self):
+        """Proxy the relay's live fragmented MP4 to this client until either side ends it."""
         ua = self.headers.get("User-Agent", "unknown")
-        log.debug("_serve_stream: starting for client %s", self.client_address)
-        # Per-client quality params from the request URL; a bad one is a 400 before any stream header.
-        params = self._stream_params_or_400()
-        if params is None:
+        relay = self.server.relay
+        if relay is None:
+            self._send_bytes(503, "text/plain", b"no camera relay")
             return
-        resolution, quality = params
-        log.info("stream_connect: client=%s ua=%s", self.client_address[0], ua)
-        transform = self.server.frame_transform_fn
-        apply_transform = transform is not None and not (resolution == "native" and quality == 85)
-        log.debug("_serve_stream: resolution=%s quality=%d apply_transform=%s", resolution, quality, apply_transform)
-        self.send_response(200)
-        self.send_header("Content-Type", "application/octet-stream")
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("Pragma", "no-cache")
-        self.end_headers()
-        _gen = self.server.frame_factory()
         try:
-            for jpeg in _gen:
-                if not self.server._running:
+            conn, resp = relay.open_stream()
+        except OSError as e:
+            log.warning("_serve_stream: relay unreachable: %s", e)
+            self._send_bytes(503, "text/plain", b"camera relay unreachable")
+            return
+        log.info("stream_connect: client=%s ua=%s", self.client_address[0], ua)
+        self.server.stream_client_added()
+        try:
+            self.send_response(resp.status, resp.reason)
+            for k, v in resp.getheaders():
+                if k.lower() not in _HOP_HEADERS:
+                    self.send_header(k, v)
+            self.send_header("Connection", "close")
+            self.end_headers()
+            while self.server._running:
+                chunk = resp.read1(64 * 1024)
+                if not chunk:
                     break
-                if apply_transform:
-                    try:
-                        jpeg = transform(jpeg, resolution, quality)
-                    except Exception as _te:
-                        log.debug("_serve_stream: transform error: %s", _te)
-                self.wfile.write(b"--frame\r\n")
-                self.wfile.write(b"Content-Type: image/jpeg\r\n")
-                self.wfile.write(b"X-Timestamp: 0.000000\r\n")
-                self.wfile.write(f"Content-Length: {len(jpeg)}\r\n\r\n".encode())
-                self.wfile.write(jpeg)
-                self.wfile.write(b"\r\n")
+                self.wfile.write(chunk)
                 self.wfile.flush()
-                log.debug("_serve_stream: frame written size=%d", len(jpeg))
-                # Count FPS once per unique frame regardless of how many clients are connected
-                with self.server._fps_lock:
-                    fid = id(jpeg)
-                    if fid != self.server._fps_last_frame_id:
-                        self.server._fps_last_frame_id = fid
-                        self.server._fps_times.append(time.monotonic())
-        except (BrokenPipeError, ConnectionResetError, RuntimeError) as e:
-            log.warning("_serve_stream: client %s disconnected: %s", self.client_address, e)
+        except (BrokenPipeError, ConnectionResetError, OSError) as e:
+            log.info("stream_disconnect: client=%s reason=%s", self.client_address[0], type(e).__name__)
         else:
             log.info("stream_disconnect: client=%s reason=normal", self.client_address[0])
         finally:
-            _gen.close()
-        log.debug("_serve_stream: stream ended for client %s", self.client_address)
+            conn.close()
+            self.close_connection = True
+            self.server.stream_client_removed()
 
     def log_message(self, format, *args):
         log.debug("HTTP %s %s from %s", args[1] if len(args) > 1 else '?', self.path, self.client_address[0])
@@ -1159,7 +1116,7 @@ class _ServerEntry:
 
 class MJPEGServer:
     """
-    Manages per-printer local MJPEG HTTP servers.
+    Manages the per-printer local stream servers (HUD page + camera relay proxy).
 
     Each printer gets its own server instance on a unique port.
     """
@@ -1168,15 +1125,14 @@ class MJPEGServer:
         self._servers: dict[str, _ServerEntry] = {}
         self._lock = threading.Lock()
 
-    def start(self, name: str, frame_factory: Callable[[], Iterator[bytes]], port: int | None = None,
+    def start(self, name: str, relay, port: int | None = None,
               status_fn: Callable[[], dict] | None = None,
               thumbnail_fn: Callable[[], bytes | None] | None = None,
               layout_fn: Callable[[], bytes | None] | None = None,
               closer: Callable[[], None] | None = None,
-              fps_cap: float = 20,
-              frame_transform_fn: Callable[[bytes, str, int], bytes] | None = None) -> str:
+              idle_stop: bool = False) -> str:
         """
-        Start a local MJPEG server for the named printer.
+        Start the local stream server for the named printer.
 
         If a server is already running for this name, returns the existing URL.
         Returns the server URL: http://localhost:{port}/
@@ -1185,27 +1141,31 @@ class MJPEGServer:
         49152–49251 by default).  Caller may pass a preferred port; the pool will
         try it first and rotate to the next available port if it is taken.
 
-        frame_factory — callable returning a fresh Iterator[bytes] per client connection;
-                        each browser tab gets its own independent RTSPS session.
+        relay       — the printer's running camera.mse_relay.RelayProcess; /stream.mp4,
+                      /stats and /snapshot are served from it
         status_fn   — returns live printer state dict for /status (polled every 2s)
         thumbnail_fn — returns PNG bytes of the isometric 3D thumbnail for /thumbnail
         layout_fn   — returns PNG bytes of the annotated top-down plate layout for /layout
         Both image endpoints are polled every 15s and hidden when unavailable.
+        closer      — called once when the server stops (stops the relay)
+        idle_stop   — stop the server 10 s after its last /stream.mp4 client leaves
         """
         with self._lock:
             log.debug("MJPEGServer.start: name=%s port=%s", name, port if port is not None else "auto")
             if name in self._servers:
                 existing_port = self._servers[name].port
                 log.info("MJPEGServer.start: '%s' already running on port %d", name, existing_port)
+                if closer:
+                    closer()   # a racing start's relay is not used; stop it rather than leak it
                 return f"http://localhost:{existing_port}/"
             from port_pool import port_pool as _pp
             allocated_port = _pp.allocate(preferred=port)
             log.info("MJPEGServer.start: starting '%s' on port %d", name, allocated_port)
             server = _MJPEGHTTPServer(
-                ("", allocated_port), _StreamHandler, frame_factory,
+                ("", allocated_port), _StreamHandler, relay,
                 status_fn=status_fn, thumbnail_fn=thumbnail_fn, layout_fn=layout_fn,
-                fps_cap=fps_cap, printer_name=name,
-                frame_transform_fn=frame_transform_fn,
+                printer_name=name,
+                on_idle=(lambda n=name: self.stop(n)) if idle_stop else None,
             )
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
@@ -1239,6 +1199,7 @@ class MJPEGServer:
             return False
         entry.server._running = False
         entry.server.shutdown()
+        entry.server.server_close()   # free the listening socket before the port goes back to the pool
         try:
             from port_pool import port_pool as _pp
             _pp.release(entry.port)

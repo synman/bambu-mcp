@@ -69,7 +69,7 @@ def _stream(disk=None, key=None, fetch=None, job=None, printer=None):
         calls.append((path, plate_num))
         return (fetch or (lambda: _info()))()
 
-    def start(name, frame_factory, port, **kw):
+    def start(name, relay, port, **kw):
         captured.update(kw)
         return "http://localhost:49999/"
 
@@ -77,7 +77,7 @@ def _stream(disk=None, key=None, fetch=None, job=None, printer=None):
         (camera.pathlib.Path, "home", classmethod(lambda cls: home)),
         (camera, "_get_printer_checked", lambda n: (printer, None)),
         (camera, "get_protocol", lambda p: "tcp_tls"),
-        (camera, "_make_stream_session", lambda p: (SimpleNamespace(), lambda: None)),
+        (camera, "_start_relay", lambda n, p: SimpleNamespace(close=lambda: None)),
         (camera.mjpeg_server, "is_running", lambda n: False),
         (camera.mjpeg_server, "start", start),
         (camera.session_manager, "get_job", lambda n: job),

@@ -7,7 +7,7 @@ startup, so a new tool cannot ship without a title and a read-only classificatio
 
 Entry: name -> (title, read_only, destructive, idempotent, open_world). read_only is False
 for every tool that takes user_permission, for the two unguarded stream tools that start
-and stop the local MJPEG server (start_stream, stop_stream), and for set_user_pref, which
+and stop the local stream server (start_stream, stop_stream), and for set_user_pref, which
 writes only the server's local preference file. The tools that only show data are
 read-only even though they write a temp file or open a viewer or browser tab (view_stream,
 open_charts, open_job_state, open_plate_layout, open_plate_viewer), as is analyze_active_job,

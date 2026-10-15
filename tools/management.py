@@ -176,7 +176,7 @@ def remove_printer(name: str, user_permission: bool = False) -> str:
         user_permission must be True to perform this action. <consequence>"``.
 
     Notes:
-        Only the MQTT session is stopped. A running MJPEG camera stream is left running (it
+        Only the MQTT session is stopped. A running camera stream is left running (it
         captured the ip and access code when it started, so it keeps serving after the credentials
         are deleted; call ``stop_stream`` first), and the per-printer job monitor and its collected
         telemetry are neither stopped nor cleared.
@@ -295,7 +295,7 @@ def disconnect_printer(name: str, user_permission: bool = False) -> str:
     WHEN to use: take a printer offline from this server (stop its telemetry and camera stream)
     while keeping its credentials so it can be reconnected later without re-entering them.
 
-    WRITE GUARD: stops the printer's MJPEG camera stream (if running), then stops its MQTT
+    WRITE GUARD: stops the printer's camera stream and relay (if running), then stops its MQTT
     session, in that order, mirroring server._shutdown(). Live telemetry and every tool that
     needs a session stop working for this printer until ``start_printer`` reconnects it. An
     active print is not cancelled. With ``user_permission`` unset the tool changes nothing and

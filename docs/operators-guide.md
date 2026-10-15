@@ -107,7 +107,7 @@ sessions on the http binding; a stdio-bound or stuck client still needs `~/bin/m
 The printer runs the job on its own firmware; the daemon only watches and commands it over
 MQTT, so stopping the daemon neither pauses, stops, nor restarts a print, and there is no
 need to wait for one to finish. The cost is a short observation gap while the sessions
-reconnect: health-monitor camera analysis, telemetry capture and any open MJPEG stream
+reconnect: health-monitor camera analysis, telemetry capture and any open camera stream
 pause and must be reopened, and in-memory state resets, including a per-printer verbose
 log flag set through `/api/set_bpm_verbose` (re-set it after the restart). Nothing is sent
 to the printer by the restart itself.
@@ -218,7 +218,7 @@ Two separate port systems — do not conflate them:
 - **MCP** (streamable-http, what CC sessions connect to): fixed at **25099**
   (designated; range 25000–25099, port file `~/.bambu-mcp/daemon.port`, PID file
   `~/.bambu-mcp/daemon.pid`).
-- **REST API + MJPEG streams**: dynamic, from a shared `PortPool` starting **49152** —
+- **REST API + camera streams (page and relay)**: dynamic, from a shared `PortPool` starting **49152** —
   there is no fixed REST port; never hardcode one. Discover via `get_server_info()`
   (MCP) or probe `GET http://localhost:49152/api/server_info` upward.
 

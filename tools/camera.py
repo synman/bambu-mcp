@@ -8,8 +8,8 @@ which protocol a printer uses.
 Tools:
   get_snapshot(name)        — capture one JPEG frame, return as base64 data URI
   get_stream_url(name)      — return stream URL info without starting a server
-  start_stream(name, port?) — start local MJPEG HTTP server, return URL
-  stop_stream(name)         — stop the MJPEG server for this printer
+  start_stream(name, port?) — start the camera relay + local stream page, return URL
+  stop_stream(name)         — stop the stream page and relay for this printer
   view_stream(name)         — start stream + open in system default browser
   open_job_state(name)      — open latest background monitor diagnostic images in viewer
   analyze_active_job(name)  — AI-facing: capture + analyze, return data_uri assets
@@ -31,16 +31,11 @@ from datetime import datetime, timezone
 log = logging.getLogger(__name__)
 
 from session_manager import session_manager
+from camera import mse_relay
 from camera.mjpeg_server import mjpeg_server
 from camera.protocol import get_protocol, get_rtsps_url
 from camera.status_helpers import build_active_filament
 from tools.url_factory import _q
-
-# ---------------------------------------------------------------------------
-# Active RTSPS stream registry — allows _capture_jpeg to reuse a live stream
-# ---------------------------------------------------------------------------
-_active_rtsps_streams: dict = {}
-
 
 def _no_printer(name: str) -> dict:
     return {"error": f"Printer '{name}' not connected"}
@@ -167,18 +162,22 @@ def _jpeg_dimensions(jpeg: bytes) -> tuple[int, int]:
 
 
 def _capture_jpeg(printer) -> bytes:
-    """Capture one JPEG frame from the printer using the appropriate protocol."""
+    """Capture one JPEG frame from the printer using the appropriate protocol.
+
+    While a stream is running its camera relay already holds the latest frame, so that is used and no
+    second camera connection is opened. Otherwise one frame is read over a fresh connection.
+    """
     protocol = get_protocol(printer)
     ip = printer.config.hostname
     log.debug("_capture_jpeg: protocol=%s ip=%s", protocol, ip)
     access_code = printer.config.access_code
+    relay = mse_relay.for_host(ip)
+    if relay is not None:
+        frame = relay.snapshot()
+        if frame is not None:
+            log.debug("_capture_jpeg: reusing the live camera relay for %s (%d bytes)", ip, len(frame))
+            return frame
     if protocol == "rtsps":
-        running = _active_rtsps_streams.get(ip)
-        if running is not None:
-            frame = running.get_latest_frame()
-            if frame is not None:
-                log.debug("_capture_jpeg: reusing live RTSPS stream for %s (%d bytes)", ip, len(frame))
-                return frame
         from camera.rtsps_stream import capture_frame
         log.debug("_capture_jpeg: calling rtsps capture_frame for %s", ip)
         result = capture_frame(ip, access_code)
@@ -193,31 +192,14 @@ def _capture_jpeg(printer) -> bytes:
     raise ValueError(f"No camera protocol for this printer model")
 
 
-def _make_stream_session(printer):
-    """Create the appropriate streaming session object for this printer."""
+def _start_relay(name: str, printer) -> mse_relay.RelayProcess:
+    """Start the printer's camera relay child (camera/mse_relay.py) and return it once it listens."""
     protocol = get_protocol(printer)
-    log.debug("_make_stream_session: protocol=%s", protocol)
-    ip = printer.config.hostname
-    access_code = printer.config.access_code
-    if protocol == "rtsps":
-        from camera.rtsps_stream import RTSPSFrameBuffer
-        session = RTSPSFrameBuffer(ip, access_code)
-        log.info("_make_stream_session: waiting for first RTSPS frame from %s", ip)
-        session.wait_first_frame(timeout=15.0)
-        _active_rtsps_streams[ip] = session
-        def _rtsps_closer(ip=ip, session=session):
-            _active_rtsps_streams.pop(ip, None)
-            session.close()
-        log.debug("_make_stream_session: → session type=%s", type(session).__name__)
-        return session, _rtsps_closer
-    if protocol == "tcp_tls":
-        from camera.tcp_stream import TCPFrameBuffer
-        buf = TCPFrameBuffer(ip, access_code)
-        log.info("_make_stream_session: waiting for first TCP frame from %s", ip)
-        buf.wait_first_frame(timeout=30.0)
-        log.debug("_make_stream_session: → session type=%s", type(buf).__name__)
-        return buf, buf.close
-    raise ValueError("No camera protocol for this printer model")
+    log.debug("_start_relay: %s protocol=%s", name, protocol)
+    relay = mse_relay.RelayProcess(name, printer.config.hostname, printer.config.access_code,
+                                   mse_relay.family_for(protocol))
+    relay.start()
+    return relay
 
 
 # Resolution string → (width, height); "native" means passthrough (no resize).
@@ -234,9 +216,8 @@ _RESOLUTION_MAP: dict[str, tuple[int, int] | None] = {
 def _resize_camera_frame(frame_bytes: bytes, resolution: str, quality_int: int) -> bytes:
     """Resize and re-encode a JPEG camera frame.
 
-    Used both by get_snapshot (one-shot) and by the MJPEG server's per-client
-    frame_transform_fn (streaming). Returns the original bytes unchanged when
-    resolution is "native" and quality_int is 85.
+    Used by get_snapshot. Returns the original bytes unchanged when resolution is
+    "native" and quality_int is 85.
     """
     dims = _RESOLUTION_MAP.get(resolution)
     if dims is None and quality_int == 85:
@@ -306,7 +287,7 @@ def get_snapshot(name: str, resolution: str = "native", quality: int = 85, inclu
 
     When the human user wants to *see* the camera feed themselves — "show me",
     "open the camera", "let me see what it's doing" — call view_stream() instead.
-    It starts a local MJPEG server and opens it in the browser. Returning a raw
+    It starts the local stream page and opens it in the browser. Returning a raw
     data_uri to a human in a chat or terminal context is never the right choice.
 
     Note: this tool returns a raw base64 data URI which may exceed the CLI inline
@@ -366,16 +347,16 @@ def _redact_rtsps_url(url: str | None) -> str | None:
 def get_stream_url(name: str) -> dict:
     """Return camera stream URL information without starting a server or connecting to the camera.
 
-    WHEN to use: to learn which camera protocol a printer uses, to get the redacted RTSPS URL for an external player (VLC, ffplay), or to check whether a local MJPEG stream is already running before starting one.
+    WHEN to use: to learn which camera protocol a printer uses, to get the redacted RTSPS URL for an external player (VLC, ffplay), or to check whether the local stream page is already running before starting one.
 
-    Sibling disambiguation: ``get_stream_url`` only reports state and starts nothing; ``start_stream`` starts the local MJPEG server, ``view_stream`` starts it and opens the browser, and ``get_snapshot`` returns a URL for one still frame.
+    Sibling disambiguation: ``get_stream_url`` only reports state and starts nothing; ``start_stream`` starts the local stream server, ``view_stream`` starts it and opens the browser, and ``get_snapshot`` returns a URL for one still frame.
 
     Args:
         name: Printer name (as returned by ``get_configured_printers``).
 
     Returns:
         ``{"protocol": "rtsps" | "tcp_tls" | "none", "rtsps_url": str | None, "local_mjpeg_url": str | None, "streaming": bool}``.
-        ``rtsps_url`` is set only for RTSPS printers (X1/H2D) with the password redacted (``rtsps://user:****@host``), otherwise null; ``local_mjpeg_url`` is null when no local MJPEG server is running; ``streaming`` is True when one is.
+        ``rtsps_url`` is set only for RTSPS printers (X1/H2D) with the password redacted (``rtsps://user:****@host``), otherwise null; ``local_mjpeg_url`` is the local stream page's URL (the key keeps its MJPEG-era name), null when no stream server is running; ``streaming`` is True when one is.
         Errors are dicts: ``{"error": "Printer '<name>' not connected"}`` when the printer is not registered, or ``{"error": "not_connected", "detail": "Printer hostname is not set"}`` when it has no hostname.
     """
     log.debug("get_stream_url: called for %s", name)
@@ -395,11 +376,11 @@ def get_stream_url(name: str) -> dict:
 
 
 def start_stream(name: str, port: int | None = None) -> dict:
-    """Start a local MJPEG HTTP server for this printer's camera feed.
+    """Start a local stream server for this printer's camera feed: live video plus the HUD.
 
     WHEN to use: to make the live camera feed available at a local URL without opening a browser (for example to hand the URL to the user or another tool). To watch the feed in a browser use ``view_stream`` instead.
 
-    Side effects: starts a local MJPEG HTTP server on a port from the shared ephemeral pool (49152-49351 by default; 200 ports, overridable with ``BAMBU_PORT_POOL_START`` / ``BAMBU_PORT_POOL_END``). The server listens on ALL network interfaces, not loopback only, and has NO authentication: anyone on the network who can reach the port can view the live camera feed and the printer's job name, temperatures, fan speeds and HMS errors until ``stop_stream`` is called. The returned URL says ``localhost`` for convenience only. The tool also opens a camera session to the printer (RTSPS or TCP-TLS) and waits up to 15 s (RTSPS) or 30 s (TCP-TLS) for a first frame; a timeout does NOT fail the call and the server still starts. For RTSPS that wait normally runs to the full timeout, because the RTSPS buffer stores frames only while a consumer is attached. Auto-stop applies to RTSPS printers ONLY: it fires 10 s after the last connected MJPEG consumer disconnects and never arms if no consumer ever attached. TCP-TLS streams run until ``stop_stream``. ``start_stream`` itself only creates ``~/.bambu-mcp`` and pre-loads any plate images already on disk; while a browser has the HUD page open, its plate panels poll ``/thumbnail`` and ``/layout``, which resolve the running job's project info (this may download the .3mf over FTPS) and write ``plate_thumb_{name}.png``, ``plate_layout_{name}.png`` and ``active_project_{name}.json`` under ``~/.bambu-mcp``, deleting the two PNGs when a different job is detected. If a stream is already running for this printer nothing is changed and the existing URL is returned.
+    Side effects: starts a local HTTP stream server on a port from the shared ephemeral pool (49152-49351 by default; 200 ports, overridable with ``BAMBU_PORT_POOL_START`` / ``BAMBU_PORT_POOL_END``). The server listens on ALL network interfaces, not loopback only, and has NO authentication: anyone on the network who can reach the port can view the live camera feed and the printer's job name, temperatures, fan speeds and HMS errors until ``stop_stream`` is called. The returned URL says ``localhost`` for convenience only. The tool also starts the bambu-mse-stream camera relay (``camera/mse_relay.py``) as a child process on a second pool port, bound to 127.0.0.1 only, and waits up to 5 s for it to listen; a relay that does not start fails the call with ``stream_failed``. The relay holds one camera session to the printer (RTSPS or TCP-TLS), reconnecting every 2 s while the printer is away, and serves the page's video, ``/stats`` and the ``/snapshot`` frame that ``get_snapshot`` and the job monitor reuse. Auto-stop applies to RTSPS printers ONLY: it fires 10 s after the last ``/stream.mp4`` viewer disconnects and never arms if no viewer ever attached. TCP-TLS streams run until ``stop_stream``. ``start_stream`` itself only creates ``~/.bambu-mcp`` and pre-loads any plate images already on disk; while a browser has the HUD page open, its plate panels poll ``/thumbnail`` and ``/layout``, which resolve the running job's project info (this may download the .3mf over FTPS) and write ``plate_thumb_{name}.png``, ``plate_layout_{name}.png`` and ``active_project_{name}.json`` under ``~/.bambu-mcp``, deleting the two PNGs when a different job is detected. If a stream is already running for this printer nothing is changed and the existing URL is returned.
 
     Sibling disambiguation: ``start_stream`` only starts the server; ``view_stream`` starts it (if needed) and also opens it in the browser; ``stop_stream`` shuts it down; ``get_stream_url`` reports whether it is running without starting it.
 
@@ -441,7 +422,7 @@ def start_stream(name: str, port: int | None = None) -> dict:
           - Failure Drivers section: 8-factor spider chart (factors_radar image)
           - Polls /job_state every 8 s; auto-expands when RUNNING/PAUSE/FAILED/FINISH
 
-        The HUD's FPS gauge is scaled to 0.5 fps for TCP-TLS printers (A1/P1) and 30 fps for RTSPS printers; the server does NOT throttle, and frames are served at whatever rate the camera delivers them. The stream itself always carries native frames; per-client resolution and quality are applied by ``view_stream``.
+        Video: the page plays ``/stream.mp4``, fragmented MP4 through Media Source Extensions. RTSPS printers (X1, H2D, P2S) send their own H.264, copied with no decode; TCP-TLS printers (A1, P1) send a JPEG still every 2 to 3 s, which the relay encodes once as an intra H.264 frame. Frames arrive at whatever rate the camera sends them, at native size. The FPS gauge counts frames the browser presents and colours them against the input rate the relay measures from the printer (``/stats`` ``packets_per_s``), so an H2D's 20 fps idle and 30 fps printing both read as healthy.
     """
     log.debug("start_stream: called for %s port=%s", name, port)
     printer, err = _get_printer_checked(name)
@@ -455,10 +436,7 @@ def start_stream(name: str, port: int | None = None) -> dict:
         url = mjpeg_server.get_url(name)
         return {"url": url, "port": int(url.split(":")[-1].rstrip("/")), "protocol": protocol}
     try:
-        session, closer = _make_stream_session(printer)
-
-        def frame_factory(s=session):
-            return s.iter_frames() if hasattr(s, 'iter_frames') else iter(s)
+        relay = _start_relay(name, printer)
 
         def status_fn(n=name):
             return _build_status(n)
@@ -628,23 +606,21 @@ def start_stream(name: str, port: int | None = None) -> dict:
         def layout_fn():
             return _get_images()[1]
 
-        log.debug("start_stream: frame_factory created, calling mjpeg_server.start")
-        # gauge max: the H2D's RTSPS stream runs at 20 fps (measured), though it advertises 30
-        fps_cap = 0.5 if protocol == "tcp_tls" else 20
-        url = mjpeg_server.start(name, frame_factory, port,
-                                 status_fn=status_fn,
-                                 thumbnail_fn=thumbnail_fn,
-                                 layout_fn=layout_fn,
-                                 closer=closer,
-                                 fps_cap=fps_cap,
-                                 frame_transform_fn=_resize_camera_frame)
+        log.debug("start_stream: relay up, calling mjpeg_server.start")
+        try:
+            # RTSPS streams stop themselves once the last viewer has been gone 10 s; the next
+            # view_stream() starts them again. TCP-TLS (A1/P1) streams run until stop_stream.
+            url = mjpeg_server.start(name, relay, port,
+                                     status_fn=status_fn,
+                                     thumbnail_fn=thumbnail_fn,
+                                     layout_fn=layout_fn,
+                                     closer=relay.close,
+                                     idle_stop=protocol == "rtsps")
+        except Exception:
+            relay.close()
+            raise
         allocated_port = int(url.split(":")[-1].rstrip("/"))
         log.info("start_stream: server started for '%s' at %s protocol=%s", name, url, protocol)
-        # Auto-stop: tear down when all MJPEG consumers disconnect.
-        # Mirrors on-demand start — stream auto-restarts on next view_stream() call.
-        if hasattr(session, '_on_idle'):
-            session._on_idle = lambda n=name: mjpeg_server.stop(n)
-            log.debug("start_stream: auto-stop wired for %s", name)
         return {"url": url, "port": allocated_port, "protocol": protocol}
     except Exception as e:
         log.error("start_stream: exception: %s", e, exc_info=True)
@@ -652,11 +628,11 @@ def start_stream(name: str, port: int | None = None) -> dict:
 
 
 def stop_stream(name: str) -> dict:
-    """Stop the local MJPEG HTTP server for this printer and disconnect from the camera.
+    """Stop the local stream server for this printer and its camera relay.
 
     WHEN to use: to release the stream's port and the camera session once nobody needs the live feed, or before restarting the stream cleanly.
 
-    Side effects: shuts down the printer's local MJPEG HTTP server (any open browser tab loses the feed), releases its port back to the shared ephemeral pool, and closes the camera session (for RTSPS this also removes the live stream from the registry that snapshots reuse). When no stream is running nothing is changed.
+    Side effects: shuts down the printer's local stream server (any open browser tab loses the feed), stops its camera relay child, which closes the camera session, and releases both ports back to the shared ephemeral pool. Snapshots then open their own camera connection again. When no stream is running nothing is changed.
 
     Sibling disambiguation: ``stop_stream`` tears down what ``start_stream`` or ``view_stream`` started; ``get_stream_url`` reports whether a stream is running without changing anything.
 
@@ -1122,37 +1098,24 @@ return false
         return False
 
 
-def view_stream(name: str, resolution: str = "native", quality: int = 85) -> dict:
-    """Start the local MJPEG camera stream server (if not already running) and open it in the system default browser.
+def view_stream(name: str) -> dict:
+    """Start the printer's local camera stream server (if not already running) and open it in the system default browser.
 
     WHEN to use: when the human user wants to *see* the live camera feed ("show me", "open the camera", "let me see what it's doing"). It is the right choice over returning a raw image to a human in a chat or terminal.
 
-    Side effects: starts the printer's local MJPEG HTTP server if it is not already running, with every side effect of ``start_stream`` (a port bound from the shared pool, a camera session opened, plate images written under ``~/.bambu-mcp``); on macOS runs ``osascript`` to look for an already-open Chrome or Safari tab on the stream and focus it; otherwise calls Python's ``webbrowser.open`` on a small portal page (``/open``) that opens the stream in a browser window named ``bambu-{name}`` and then closes itself. The server stays running afterwards until ``stop_stream`` is called, or until its auto-stop fires, which applies to RTSPS printers only. Like ``start_stream``, the server listens on all network interfaces with no authentication.
+    Side effects: starts the printer's local stream server if it is not already running, with every side effect of ``start_stream`` (two pool ports, a camera relay child process holding one camera session, plate images written under ``~/.bambu-mcp``); on macOS runs ``osascript`` to look for an already-open Chrome or Safari tab on the stream and focus it; otherwise calls Python's ``webbrowser.open`` on a small portal page (``/open``) that opens the stream in a browser window named ``bambu-{name}`` and then closes itself. The server stays running afterwards until ``stop_stream`` is called, or until its auto-stop fires, which applies to RTSPS printers only. Like ``start_stream``, the server listens on all network interfaces with no authentication.
 
     Sibling disambiguation: ``view_stream`` starts the server and opens the browser; ``start_stream`` starts the server only and returns the URL; ``get_snapshot`` returns a URL for one still frame for the AI agent to analyze; ``open_job_state`` shows cached diagnostic images rather than the live feed.
 
     Args:
         name: Printer name (as returned by ``get_configured_printers``).
-        resolution: Per-client stream size, one of "native" (default, full camera resolution), "1080p" (1920×1080), "720p" (1280×720), "480p" (854×480), "360p" (640×360) or "180p" (320×180). Any other value is rejected (see Returns) before a server is started.
-        quality: Per-client JPEG compression, an integer 1-100 (default 85). Lower values reduce bandwidth; higher values improve sharpness.
 
     Returns:
-        On success ``{"url": str, "port": int, "protocol": "rtsps" | "tcp_tls", "opened": bool, "overlay_active": True}``. ``url`` is the stream root (``http://localhost:{port}/``) with ``?resolution=...&quality=...`` appended when non-default values were requested; ``port`` is the server port; ``opened`` is True if a browser tab was focused or the browser was launched successfully; ``overlay_active`` is always True and confirms the HUD and image panels are active.
-        ``{"error": "invalid_resolution", "detail": ...}`` when ``resolution`` is not one of the listed values; this is checked first, so it is returned even for a printer that is not connected, and nothing is started or opened.
-        Other errors are the dicts returned by ``start_stream``, passed through unchanged (printer not connected, ``no_camera``, ``stream_failed``).
+        On success ``{"url": str, "port": int, "protocol": "rtsps" | "tcp_tls", "opened": bool, "overlay_active": True}``. ``url`` is the stream root (``http://localhost:{port}/``); ``port`` is the server port; ``opened`` is True if a browser tab was focused or the browser was launched successfully; ``overlay_active`` is always True and confirms the HUD and image panels are active.
+        Errors are the dicts returned by ``start_stream``, passed through unchanged (printer not connected, ``no_camera``, ``stream_failed``).
 
     Notes:
-        The underlying MJPEG server always receives native frames; each browser tab applies the requested resolution and quality transform independently, and tabs share one server port. On macOS, when a tab whose URL starts with the server URL is already open, it is focused instead of opening a new tab, so a repeat call with different resolution or quality does not apply those settings to the focused tab. Otherwise the portal URL is ``{url}/open?name=bambu-{name}`` plus the resolution and quality parameters when they are non-default (the name and every parameter value are percent-encoded, so a printer name containing a space, "&", "#" or "+" reaches the portal intact and names made only of letters, digits and "-", "_", ".", "~" appear unchanged); the portal calls ``window.open`` with the window name ``bambu-{name}``, so the browser reuses that window if it is already open (single window per printer) and a repeat call with new resolution or quality replaces its content.
-
-        Named profiles (documentation-only):
-          native   resolution="native"  quality=85  ~1–4 MB/frame  Maximum fidelity (default)
-          high     resolution="1080p"   quality=85  ~500KB–2MB     High detail
-          standard resolution="720p"    quality=75  ~200–400KB     Good balance
-          low      resolution="480p"    quality=65  ~80–150KB      Low bandwidth
-          preview  resolution="180p"    quality=55  ~20–40KB       Minimal bandwidth
-
-        start_stream() is always native (server infrastructure). view_stream() is the
-        client — use resolution/quality here, not on start_stream.
+        The page plays the camera as video at its native size and rate: an RTSPS printer's own H.264, or an A1/P1's stills about every 2 s. There is no per-tab resolution or quality; for a smaller still, use ``get_snapshot``. On macOS, when a tab whose URL starts with the server URL is already open, it is focused instead of opening a new tab. Otherwise the portal URL is ``{url}/open?name=bambu-{name}`` (the name is percent-encoded, so a printer name containing a space, "&", "#" or "+" reaches the portal intact and names made only of letters, digits and "-", "_", ".", "~" appear unchanged); the portal calls ``window.open`` with the window name ``bambu-{name}``, so the browser reuses that window if it is already open (single window per printer).
 
         The browser page shows the live camera feed with a full HUD overlay. See
         start_stream() for the complete HUD component breakdown (badge, progress bar,
@@ -1161,30 +1124,21 @@ def view_stream(name: str, resolution: str = "native", quality: int = 85) -> dic
     """
     import webbrowser
 
-    log.debug("view_stream: called for %s resolution=%s quality=%s", name, resolution, quality)
-    if resolution not in _RESOLUTION_MAP:
-        return {"error": "invalid_resolution",
-                "detail": f"resolution must be one of: {', '.join(_RESOLUTION_MAP)} (got {resolution!r})"}
+    log.debug("view_stream: called for %s", name)
     result = start_stream(name)
     if "error" in result:
         return result
     url = result["url"]
-    # Construct per-client parameterized URL; omit params when using defaults.
-    use_default = (resolution == "native" and quality == 85)
-    client_url = url if use_default else f"{url.rstrip('/')}/?resolution={_q(resolution)}&quality={_q(quality)}"
     focused = _focus_existing_tab(url.rstrip("/"))
     if focused:
         log.debug("view_stream: focused existing tab for %s", name)
         opened = True
     else:
-        open_path = f"/open?name={_q(f'bambu-{name}')}"
-        if not use_default:
-            open_path += f"&resolution={_q(resolution)}&quality={_q(quality)}"
-        open_url = url.rstrip("/") + open_path
+        open_url = url.rstrip("/") + f"/open?name={_q(f'bambu-{name}')}"
         opened = webbrowser.open(open_url)
         log.debug("view_stream: browser open result=%s for url=%s", opened, open_url)
     return {
-        "url": client_url,
+        "url": url,
         "port": result["port"],
         "protocol": result["protocol"],
         "opened": opened,

@@ -4,7 +4,7 @@
 >
 > **Archetype:** MCP server + REST API daemon
 > **Language:** Python 3.12+ · setuptools · `.venv/` local install
-> **Interfaces:** MCP (stdio/SSE) · HTTP REST (49152+) · MJPEG streams
+> **Interfaces:** MCP (stdio/SSE) · HTTP REST (49152+) · camera streams (fMP4/MSE)
 > **Depends on:** 📦 bambu-printer-manager — MQTT, FTPS, state
 > **Shared rules:** `~/ai/forge/bambu/.claude/rules/bambu-ecosystem.md`
 
@@ -23,9 +23,9 @@
 - All printer ops route through BPM library via `session_manager.get_printer(name)`
 - BPM is considered stable — do not modify it to solve MCP-layer problems
 - No tool may open its own direct FTPS/MQTT/socket/HTTP connection (camera streaming excepted)
-- REST API server and MJPEG camera streams draw ports from a shared `PortPool` (default 49152-49251)
+- REST API server, camera stream servers and their relay children draw ports from a shared `PortPool` (default 49152-49251)
 - Port discovery: `get_server_info()` MCP tool or `GET /api/server_info` — never hardcode ports
-- Camera subsystem: RTSPS (H2D/X1) + TCP-TLS (A1/P1), MJPEG encoding, anomaly detection
+- Camera subsystem: `camera/mse_relay.py` runs bambu-mse-stream (vendored at a pinned commit as `camera/mse_relay_server.py`) as one child per streaming printer; `camera/mjpeg_server.py` serves the HUD page and proxies the relay's fMP4. RTSPS (H2D/X1) + TCP-TLS (A1/P1) single-frame clients remain for snapshots with no stream running; anomaly detection
 - Secrets: `~/.bambu-mcp/secrets.enc` (AES-256-GCM, separate from isaac vault)
 - Console script entry point: `bambu-mcp = "server:main"`
 - 24 runtime dependencies (Flask, mcp SDK, av, numpy, PIL, zeroconf)

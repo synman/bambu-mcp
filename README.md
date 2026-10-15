@@ -4,7 +4,7 @@
 
 An MCP (Model Context Protocol) server that lets AI agents monitor and control Bambu Lab 3D
 printers. It is built on [bambu-printer-manager](https://github.com/synman/bambu-printer-manager)
-and keeps one live MQTT session per printer. The same process serves a REST API and MJPEG
+and keeps one live MQTT session per printer. The same process serves a REST API and live
 camera streams. No Docker or container is needed.
 
 **Documentation:** <https://synman.github.io/bambu-printer-manager/bambu-mcp/>, with the full
@@ -20,7 +20,9 @@ MCP tool reference and REST API reference.
 - Write protection: every state-changing tool refuses unless called with `user_permission=True`,
   and tools that would disturb a print refuse while the printer is printing.
 - A REST API over the same sessions, with a Swagger UI at `/api/docs`.
-- MJPEG camera streams: RTSPS for X1, P2S and H2 series, TLS on port 6000 for A1 and P1.
+- Live camera streams for every model through the bambu-mse-stream relay: RTSPS H.264 passed
+  through for X1, P2S and H2 series, TLS port 6000 stills encoded once for A1 and P1, played in
+  the browser as fragmented MP4 (Media Source Extensions).
 - Printer credentials encrypted at rest with AES-256-GCM, keychain-backed master key.
 - 4 `bambu://rules/*` resources, a `bambu://alerts/{name}` alert feed and one prompt,
   `bambu_system_context`.
@@ -118,7 +120,7 @@ bambu-mcp/
 ├── daemon_port.py       ← Streamable HTTP port and singleton handling
 ├── gen_docs.py          ← Generates the published docs pages and the Tools section above
 ├── make.py              ← Cross-platform venv installer
-├── camera/              ← RTSPS and TCP-TLS clients, MJPEG server, job monitor and analyzer
+├── camera/              ← camera relay, stream page, RTSPS and TCP-TLS clients, job monitor and analyzer
 ├── calibration/         ← Calibration scripts
 ├── tools/               ← Tool modules, plus _registry.py (registration and annotations)
 ├── resources/rules.py   ← bambu://rules/* readers (redacted)

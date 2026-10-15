@@ -283,28 +283,6 @@ def test_snapshot_route_rejects_what_int_alone_accepts():
             assert not cam.calls, f"quality={bad!r} reached the camera: {cam.calls}"
 
 
-def test_snapshot_route_and_stream_server_agree_on_quality_strings():
-    # The stream server (camera/mjpeg_server.py) is the reference: for every candidate, the route answers
-    # 400 exactly when _parse_stream_params raises. "" is left out: parse_qs drops a blank value, so the
-    # stream server reads it as "not given" (quality 85) while the route has always answered it 400.
-    import importlib
-    from urllib.parse import urlencode
-    mjpeg = importlib.import_module("camera.mjpeg_server")
-    candidates = (INT_ACCEPTED_NON_DIGIT_QUALITIES
-                  + ["0", "1", "85", "100", "101", "000085", "0000085", "-5", "1000", "85.5", "1e2", "abc",
-                     "99999999999999999999"])
-    client = _app.test_client()
-    with _Stub(), _CameraStub():
-        for s in candidates:
-            try:
-                mjpeg._parse_stream_params("/?" + urlencode({"quality": s}))
-                stream_rejects = False
-            except mjpeg._BadStreamParam:
-                stream_rejects = True
-            route_rejects = _snapshot(client, PLAIN, quality=s).status_code == 400
-            assert route_rejects == stream_rejects, (s, "route rejects:", route_rejects, "stream rejects:", stream_rejects)
-
-
 def test_snapshot_route_passes_a_valid_quality_through_unchanged():
     client = _app.test_client()
     with _Stub(), _CameraStub() as cam:
@@ -333,6 +311,29 @@ def test_health_fields_is_one_module_constant_shared_by_route_and_tool():
     assert "_HEALTH_FIELDS" not in route.__code__.co_varnames, "monitoring_series route defines its own _HEALTH_FIELDS"
     assert url_factory._valid_fields() == tuple(PrinterDataCollector.COLLECTION_NAMES) + tuple(hf)
 
+
+
+def test_stream_routes_read_the_printer_from_the_json_body():
+    # The three routes called an undefined _rbody(), so every POST answered 500 "name '_rbody' is not
+    # defined" and no stream could be started, stopped or viewed over REST.
+    client = _app.test_client()
+    seen = []
+    saved = {k: getattr(camera, k) for k in ("start_stream", "stop_stream", "view_stream")}
+    camera.start_stream = lambda name, port=None: seen.append(("start", name, port)) or {"url": "u", "port": 1, "protocol": "rtsps"}
+    camera.stop_stream = lambda name: seen.append(("stop", name)) or {"stopped": True, "name": name}
+    camera.view_stream = lambda name: seen.append(("view", name)) or {"url": "u", "port": 1, "protocol": "rtsps",
+                                                                     "opened": True, "overlay_active": True}
+    try:
+        with _Stub():
+            for route in ("start_stream", "stop_stream", "view_stream"):
+                resp = client.post(f"/api/{route}", json={"printer": PLAIN})
+                assert resp.status_code == 200, (route, resp.status_code, resp.data[:200])
+            resp = client.post("/api/start_stream", json={"printer": PLAIN, "port": "49200"})
+            assert resp.status_code == 200, resp.data[:200]
+    finally:
+        for k, v in saved.items():
+            setattr(camera, k, v)
+    assert seen == [("start", PLAIN, None), ("stop", PLAIN), ("view", PLAIN), ("start", PLAIN, 49200)], seen
 
 if __name__ == "__main__":
     failed = 0

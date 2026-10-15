@@ -266,24 +266,24 @@ RTSPS (X1/H2D, port 322) and TCP+TLS binary (A1/P1, port 6000). You only use too
 
 - get_stream_url(name)      — Get URL info without starting a server or connecting.
                                Returns: rtsps_url (X1/H2D raw URL, open in VLC),
-                               local_mjpeg_url (if server running), streaming (bool).
+                               local_mjpeg_url (stream page URL if running), streaming (bool).
 
-- start_stream(name, port?) — Start a local MJPEG HTTP server (always native resolution). Returns:
+- start_stream(name, port?) — Start the camera relay + local stream page (native video). Returns:
                                url  — http://localhost:{port}/ — open in any browser
-                               port — allocated port (default: 8090+)
+                               port — allocated port from the shared pool
                                protocol — "rtsps" or "tcp_tls"
-                              Server runs until stop_stream() or MCP shutdown.
+                              The page plays fragmented MP4 (MSE): RTSPS H.264 passed through, A1/P1
+                              stills encoded once as H.264. RTSPS servers stop 10 s after the last
+                              viewer leaves; TCP-TLS ones run until stop_stream() or MCP shutdown.
                               Returns existing URL if already running.
 
-- stop_stream(name)         — Stop the MJPEG server and disconnect from camera.
+- stop_stream(name)         — Stop the stream page and its camera relay.
                                Returns: {stopped: bool, name: str}
 
-- view_stream(name, resolution="native", quality=85) — Start server + open browser tab at requested quality.
+- view_stream(name)         — Start server + open (or focus) the printer's browser tab.
                                Returns: {url, port, protocol, opened: bool, overlay_active: bool}
-                              resolution/quality are per-client URL params — multiple tabs at different
-                              settings share one server port. Uses webbrowser.open() — macOS/Linux/Windows.
+                              Uses webbrowser.open() — macOS/Linux/Windows.
                               Preferred for "let me watch the print" / "open the camera".
-                              Profiles: native(85) / high(1080p,85) / standard(720p,75) / low(480p,65) / preview(180p,55).
                               overlay_active=True means stream includes live status + thumbnail overlays.
 
 Session-level operations: MQTT connection management, firmware version, telemetry history, and full state refresh. Rarely needed in normal operation. Some require user_permission=True.

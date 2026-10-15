@@ -96,8 +96,7 @@ _HEALTH_FIELDS = ("success_pct", "confidence", "hot_pct", "strand_score", "diff_
 _SNAPSHOT_QUALITY_MIN = 1
 _SNAPSHOT_QUALITY_MAX = 100
 # The only spelling of a quality the route reads as an integer: ASCII digits. int() alone also takes "5_0",
-# non-ASCII digits, a sign and surrounding whitespace, none of which the stream server
-# (camera/mjpeg_server.py _parse_stream_params) accepts; the route answers all of them 400 like the stream does.
+# non-ASCII digits, a sign and surrounding whitespace; the route answers all of them 400.
 _SNAPSHOT_QUALITY_RE = re.compile(r"[0-9]{1,6}")
 
 
@@ -2626,8 +2625,8 @@ def _build_app():
             pool_end       — last port in the shared ephemeral pool inclusive (default 49251)
             pool_size      — total number of ports in the pool
             pool_available — number of unclaimed ports remaining
-            pool_claimed   — sorted list of all currently claimed port numbers (API + MJPEG streams)
-            stream_count   — number of active MJPEG camera streams
+            pool_claimed   — sorted list of all currently claimed port numbers (API + camera stream servers and relays)
+            stream_count   — number of active camera stream servers
             streams        — {printer_name: {port, url}} for each active stream
         """
         log.debug("server_info: called")
@@ -2808,7 +2807,7 @@ def _build_app():
         Returns:
           protocol        — "rtsps", "tcp_tls", or "none"
           rtsps_url       — RTSPS URL (password redacted), or null
-          local_mjpeg_url — base URL of running MJPEG server, or null
+          local_mjpeg_url — base URL of the running stream page, or null (MJPEG-era key name)
           streaming       — bool: whether a stream server is currently active
         """
         log.debug("stream_url: called")
@@ -2826,10 +2825,9 @@ def _build_app():
 
     @app.route("/api/start_stream", methods=["POST"])
     def start_stream():
-        """⚠️ Start the local MJPEG camera stream server for a printer.
+        """⚠️ Start the local camera stream server (HUD page + camera relay) for a printer.
 
-        The server always runs at native resolution — per-client quality is applied
-        by the browser tab via URL params (use /api/view_stream for parameterized tabs).
+        The page plays the camera as native video; /api/view_stream also opens it in a browser.
 
         Request body (JSON):
           printer — printer name (required)
@@ -2843,7 +2841,7 @@ def _build_app():
         log.debug("start_stream: called")
         import importlib
         try:
-            body = _rbody()
+            body = _rargs()
             p, printer_name = _get_printer(body)
             if p is None:
                 return jsonify({"error": "not_connected"}), 400
@@ -2859,7 +2857,7 @@ def _build_app():
 
     @app.route("/api/stop_stream", methods=["POST"])
     def stop_stream():
-        """⚠️ Stop the local MJPEG camera stream server for a printer.
+        """⚠️ Stop the local camera stream server and its camera relay for a printer.
 
         Request body (JSON):
           printer — printer name (required)
@@ -2871,7 +2869,7 @@ def _build_app():
         log.debug("stop_stream: called")
         import importlib
         try:
-            body = _rbody()
+            body = _rargs()
             p, printer_name = _get_printer(body)
             if p is None:
                 return jsonify({"error": "not_connected"}), 400
@@ -2884,25 +2882,16 @@ def _build_app():
 
     @app.route("/api/view_stream", methods=["POST"])
     def view_stream():
-        """⚠️ Start the MJPEG stream server (if not already running) and open a browser tab.
+        """⚠️ Start the camera stream server (if not already running) and open a browser tab.
 
-        The tab opens at the requested resolution/quality via URL params. Multiple calls
-        with different settings open independent tabs on the same server port.
+        The page plays the camera as native video (fragmented MP4 from the camera relay) with the
+        HUD overlay. A repeat call focuses or reuses the printer's existing tab.
 
         Request body (JSON):
           printer    — printer name (required)
-          resolution — "native" | "1080p" | "720p" | "480p" | "360p" | "180p" (default "native")
-          quality    — JPEG quality integer 1–100 (default 85)
-
-        Named profiles (agent guidance):
-          native   resolution=native  quality=85  Max fidelity (default for streams)
-          high     resolution=1080p   quality=85  High detail
-          standard resolution=720p    quality=75  Good balance
-          low      resolution=480p    quality=65  Low bandwidth
-          preview  resolution=180p    quality=55  Minimal bandwidth
 
         Returns:
-          url            — the parameterized URL opened in the browser
+          url            — the stream page URL
           port           — stream server port
           protocol       — "rtsps" or "tcp_tls"
           opened         — bool: True if browser tab was opened
@@ -2911,14 +2900,12 @@ def _build_app():
         log.debug("view_stream: called")
         import importlib
         try:
-            body = _rbody()
+            body = _rargs()
             p, printer_name = _get_printer(body)
             if p is None:
                 return jsonify({"error": "not_connected"}), 400
-            resolution = body.get("resolution", "native")
-            quality    = int(body.get("quality", 85))
             cam = importlib.import_module("tools.camera")
-            result = cam.view_stream(printer_name, resolution=resolution, quality=quality)
+            result = cam.view_stream(printer_name)
             if "error" in result:
                 return jsonify(result), 400
             return jsonify(result)

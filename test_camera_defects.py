@@ -38,6 +38,7 @@ Run directly (no pytest needed):  .venv/bin/python3 test_camera_defects.py
 import ast
 import contextlib
 import http.client
+import http.server
 import importlib
 import io
 import json
@@ -47,6 +48,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import urllib.parse
 from pathlib import Path
 from types import SimpleNamespace
@@ -780,59 +782,25 @@ def _query(url):
 def test_view_stream_urls_for_an_ordinary_name_are_unchanged():
     with _view_stream_env() as (opened, _):
         default = camera_tool.view_stream("h2d")
-        custom = camera_tool.view_stream("h2d-1.a_b~c", "720p", 75)
+        dotted = camera_tool.view_stream("h2d-1.a_b~c")
     assert default["url"] == "http://localhost:1234/", default
     assert opened[0] == "http://localhost:1234/open?name=bambu-h2d", opened
-    assert custom["url"] == "http://localhost:1234/?resolution=720p&quality=75", custom
-    assert opened[1] == "http://localhost:1234/open?name=bambu-h2d-1.a_b~c&resolution=720p&quality=75", opened
+    assert dotted["url"] == "http://localhost:1234/", dotted
+    assert opened[1] == "http://localhost:1234/open?name=bambu-h2d-1.a_b~c", opened
 
 
 def test_view_stream_portal_url_round_trips_an_awkward_printer_name():
     with _view_stream_env() as (opened, _):
-        camera_tool.view_stream(_AWKWARD, "480p", 60)
+        camera_tool.view_stream(_AWKWARD)
     parts, q = _query(opened[0])
     assert parts.path == "/open" and parts.fragment == "", opened[0]
-    assert q == {"name": [f"bambu-{_AWKWARD}"], "resolution": ["480p"], "quality": ["60"]}, (opened[0], q)
+    assert q == {"name": [f"bambu-{_AWKWARD}"]}, (opened[0], q)
 
 
-def test_view_stream_rejects_an_unknown_resolution_before_starting_anything():
-    bad = ["720p&quality=1#x", "4k", "", "NATIVE", "720p "]
-    with _view_stream_env() as (opened, starts):
-        for value in bad:
-            r = camera_tool.view_stream("h2d", value, 75)
-            assert r.get("error") == "invalid_resolution", (value, r)
-            assert all(k in r["detail"] for k in camera_tool._RESOLUTION_MAP), r
-    assert not starts and not opened, (starts, opened)
-
-
-def test_view_stream_accepts_every_documented_resolution():
-    with _view_stream_env() as (opened, _):
-        for res in camera_tool._RESOLUTION_MAP:
-            r = camera_tool.view_stream("h2d", res, 70)
-            assert "error" not in r, (res, r)
-            assert _query(r["url"])[1]["resolution"] == [res], r
-    assert len(opened) == len(camera_tool._RESOLUTION_MAP), opened
-
-
-def test_view_stream_escapes_quality_in_the_client_and_portal_urls():
-    with _view_stream_env() as (opened, _):
-        r = camera_tool.view_stream("h2d", "720p", "50&name=evil#x")
-    for url in (r["url"], opened[0]):
-        parts, q = _query(url)
-        assert parts.fragment == "" and q["quality"] == ["50&name=evil#x"], (url, q)
-        assert q["resolution"] == ["720p"] and set(q) <= {"resolution", "quality", "name"}, q
-    assert _query(opened[0])[1]["name"] == ["bambu-h2d"], opened
-
-
-def test_view_stream_escapes_resolution_independently_of_the_validation():
-    # The validation makes every reachable resolution URL-safe, so the encoding is only observable by
-    # widening the accepted set: a value the resizer honours that needs escaping must still round-trip.
-    awkward = "a&b#c d"
-    with mock.patch.dict(camera_tool._RESOLUTION_MAP, {awkward: None}), _view_stream_env() as (opened, _):
-        r = camera_tool.view_stream("h2d", awkward, 70)
-    for url in (r["url"], opened[0]):
-        parts, q = _query(url)
-        assert parts.fragment == "" and q["resolution"] == [awkward] and q["quality"] == ["70"], (url, q)
+def test_view_stream_takes_no_resolution_or_quality():
+    # The page plays the camera's own video; nothing can resize passthrough H.264 per tab.
+    import inspect
+    assert list(inspect.signature(camera_tool.view_stream).parameters) == ["name"]
 
 
 @contextlib.contextmanager
@@ -895,15 +863,78 @@ class _RecordingServer(mjpeg_server._MJPEGHTTPServer):
         self.handler_errors.append(sys.exc_info()[1])
 
 
-def _one_frame():
-    yield b"\xff\xd8camdef-frame"
+class _FakeRelay:
+    """A real HTTP server standing in for the relay child: canned /stats, /snapshot.jpg and a
+    /stream.mp4 that sends three fragments and ends, as the relay does when its camera session resets."""
+
+    FRAGS = [b"ftypmoov-init", b"moofmdat-1", b"moofmdat-2"]
+
+    def __init__(self):
+        frags, outer = self.FRAGS, self
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                path = self.path.split("?", 1)[0]
+                if path == "/stats":
+                    body = json.dumps({"camera": "rtsps", "codec": "avc1.64C029", "packets_per_s": 29.9}).encode()
+                    self._send(200, "application/json", body)
+                elif path == "/snapshot.jpg":
+                    self._send(200, "image/jpeg", b"\xff\xd8camdef-frame") if outer.has_frame else \
+                        self._send(503, "text/plain", b"no frame yet")
+                elif path == "/stream.mp4":
+                    self.send_response(200)
+                    self.send_header("Content-Type", "video/mp4")
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                    for f in frags:
+                        self.wfile.write(f)
+                        self.wfile.flush()
+                        time.sleep(0.05)
+                else:
+                    self._send(404, "text/plain", b"not found")
+
+            def _send(self, code, ctype, body):
+                self.send_response(code)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        self.has_frame = True
+        self.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        self.port = self.httpd.server_address[1]
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+
+    # the RelayProcess surface the stream server uses, over the real HTTP above
+    def get(self, path, timeout=10.0):
+        from camera.mse_relay import RelayProcess
+        return RelayProcess.get(self, path, timeout)
+
+    def open_stream(self, timeout=40.0):
+        from camera.mse_relay import RelayProcess
+        return RelayProcess.open_stream(self, timeout)
+
+    def snapshot(self):
+        from camera.mse_relay import RelayProcess
+        return RelayProcess.snapshot(self)
+
+    name = "fake"
+
+    def close(self):
+        self.httpd.shutdown()
+        self.httpd.server_close()
 
 
 @contextlib.contextmanager
-def _stream_server(printer_name=""):
-    """A real MJPEG server on an ephemeral loopback port, served by a real thread."""
-    srv = _RecordingServer(("127.0.0.1", 0), mjpeg_server._StreamHandler, frame_factory=_one_frame,
-                           printer_name=printer_name)
+def _stream_server(printer_name="", relay=None, on_idle=None):
+    """A real stream server on an ephemeral loopback port, served by a real thread, over a fake relay."""
+    own = relay is None
+    relay = relay or _FakeRelay()
+    srv = _RecordingServer(("127.0.0.1", 0), mjpeg_server._StreamHandler, relay,
+                           printer_name=printer_name, on_idle=on_idle)
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
     thread.start()
     try:
@@ -912,6 +943,8 @@ def _stream_server(printer_name=""):
         srv.shutdown()
         srv.server_close()
         thread.join(5)
+        if own:
+            relay.close()
 
 
 def _http_get(srv, path):
@@ -931,67 +964,79 @@ def _qs(**params):
     return urllib.parse.urlencode(params, quote_via=urllib.parse.quote)
 
 
-_STREAM_PATHS = ("/open", "/", "/stream")
-
-_CRAFTED_RESOLUTIONS = ["720p');alert(1);//", "x'+alert(document.domain)+'", "</script><script>alert(1)</script>",
-                        "720p&quality=1", "720p\\", "NATIVE", "4k", "720p "]
-
-_BAD_QUALITIES = ["abc", "12.5", "0", "101", "-5", "1e2", "5_0", "9" * 5000, "٥٠"]
-
-
-def test_stream_pages_reject_a_crafted_resolution_and_never_serve_it():
-    # _serve_open put the request's resolution inside a single-quoted JS string (window.open and
-    # location.replace), so a value carrying a quote ran as script in the opened page.
-    failures = []
+def test_stream_mp4_is_the_relays_bytes_unchanged_until_the_relay_ends_it():
     with _stream_server() as srv:
-        for path in _STREAM_PATHS:
-            for value in _CRAFTED_RESOLUTIONS:
-                status, ctype, body = _http_get(srv, f"{path}?{_qs(resolution=value)}")
-                text = body.decode("utf-8", "replace")
-                ok = (status == 400 and ctype == "application/json"
-                      and json.loads(text).get("error") == "invalid_resolution"
-                      and "alert" not in text and "detail" in json.loads(text))
-                if not ok:
-                    failures.append((path, value, status, text[:120]))
+        status, ctype, body = _http_get(srv, "/stream.mp4?cb=1")
         assert not srv.handler_errors, srv.handler_errors
-    assert not failures, f"{len(failures)} crafted resolutions not rejected with a 400 body, e.g. {failures[:2]}"
+    assert status == 200 and ctype == "video/mp4", (status, ctype)
+    assert body == b"".join(_FakeRelay.FRAGS), body
 
 
-def test_stream_pages_accept_every_documented_resolution():
-    # The control for the rejection above: the accepted set is tools.camera._RESOLUTION_MAP itself.
-    assert len(camera_tool._RESOLUTION_MAP) >= 6
-    with _stream_server() as srv:
-        for res in camera_tool._RESOLUTION_MAP:
-            for path in _STREAM_PATHS:
-                status, _c, body = _http_get(srv, f"{path}?{_qs(resolution=res, quality=50)}")
-                assert status == 200, (path, res, status, body[:120])
+def test_stats_and_snapshot_come_from_the_relay():
+    relay = _FakeRelay()
+    try:
+        with _stream_server(relay=relay) as srv:
+            status, ctype, body = _http_get(srv, "/stats")
+            assert status == 200 and json.loads(body)["packets_per_s"] == 29.9, (status, body)
+            status, ctype, body = _http_get(srv, "/snapshot")
+            assert (status, ctype, body) == (200, "image/jpeg", b"\xff\xd8camdef-frame"), (status, ctype, body)
+            relay.has_frame = False
+            status, _c, _b = _http_get(srv, "/snapshot")
+            assert status == 503, status
+            assert not srv.handler_errors, srv.handler_errors
+    finally:
+        relay.close()
+
+
+def test_a_dead_relay_answers_503_not_a_dropped_connection():
+    relay = _FakeRelay()
+    relay.close()   # nothing listens on its port any more
+    with _stream_server(relay=relay) as srv:
+        for path in ("/stream.mp4", "/stats", "/snapshot"):
+            status, _c, body = _http_get(srv, path)
+            assert status == 503, (path, status, body[:80])
         assert not srv.handler_errors, srv.handler_errors
 
 
-def test_stream_pages_answer_a_bad_quality_with_400_not_an_exception():
-    # int(params['quality'][0]) raised ValueError in the handler thread, which dropped the connection
-    # with no response. 5_0 and non-ASCII digits are integers to int() but not to a URL parameter.
-    failures = []
+def test_unknown_paths_are_404_and_the_old_mjpeg_route_is_gone():
     with _stream_server() as srv:
-        for path in _STREAM_PATHS:
-            for value in _BAD_QUALITIES:
-                status, ctype, body = _http_get(srv, f"{path}?{_qs(quality=value)}")
-                ok = (status == 400 and ctype == "application/json"
-                      and json.loads(body).get("error") == "invalid_quality")
-                if not ok:
-                    failures.append((path, value[:12], status, body[:80]))
-        assert not srv.handler_errors, f"handler thread raised: {srv.handler_errors[:1]}"
-    assert not failures, f"{len(failures)} bad qualities not answered with a 400 body, e.g. {failures[:3]}"
+        for path in ("/stream", "/nope", "/stream.mjpg"):
+            status, _c, _b = _http_get(srv, path)
+            assert status == 404, (path, status)
 
 
-def test_stream_pages_accept_the_quality_range_edges():
+def test_status_carries_no_server_side_fps():
+    # The FPS gauge is the browser's own frame count against the relay's /stats input rate now.
     with _stream_server() as srv:
-        for value in ("1", "50", "050", "85", "100"):
-            for path in _STREAM_PATHS:
-                status, _c, body = _http_get(srv, f"{path}?{_qs(quality=value)}")
-                assert status == 200, (path, value, status, body[:120])
-        status, _c, body = _http_get(srv, "/stream")
-        assert status == 200 and b"--frame" in body and b"camdef-frame" in body, (status, body[:80])
+        srv.status_fn = lambda: {"gcode_state": "RUNNING"}
+        status, _c, body = _http_get(srv, "/status")
+    assert status == 200 and json.loads(body) == {"gcode_state": "RUNNING"}, body
+
+
+def test_idle_stop_fires_after_the_last_viewer_leaves_and_not_before():
+    fired = []
+    with mock.patch.object(mjpeg_server, "_IDLE_STOP_S", 0.3), \
+            _stream_server(on_idle=lambda: fired.append(1)) as srv:
+        time.sleep(0.5)
+        assert not fired, "armed with no viewer ever attached"
+        _http_get(srv, "/stream.mp4")      # attaches, receives the fragments, detaches
+        time.sleep(0.1)
+        assert not fired, "fired before the idle delay"
+        time.sleep(0.5)
+        assert fired == [1], fired
+
+
+def test_a_viewer_returning_inside_the_idle_delay_cancels_the_stop():
+    fired = []
+    with mock.patch.object(mjpeg_server, "_IDLE_STOP_S", 0.5), \
+            _stream_server(on_idle=lambda: fired.append(1)) as srv:
+        _http_get(srv, "/stream.mp4")
+        srv.stream_client_added()           # a second viewer arrives inside the delay and stays
+        time.sleep(0.8)
+        assert not fired, fired
+        srv.stream_client_removed()
+        time.sleep(0.8)
+        assert fired == [1], fired
 
 
 def test_served_page_escapes_the_printer_name_in_the_title():
@@ -1009,11 +1054,19 @@ def test_served_page_escapes_the_printer_name_in_the_title():
         _s, _c, body = _http_get(srv, "/")
     page = body.decode()
     head = page.split("<style>", 1)[0]
-    assert ("<title>Bambu Cam \u2014 &lt;/title&gt;&lt;script&gt;alert(1)&lt;/script&gt;it&#x27;s</title>" in head
+    assert ("<title>Bambu Cam — &lt;/title&gt;&lt;script&gt;alert(1)&lt;/script&gt;it&#x27;s</title>" in head
             and page.count("<script") == 1), head
     with _stream_server("") as srv:
         _s, _c, body = _http_get(srv, "/")
     assert body == mjpeg_server._HTML_PAGE.encode(), "unnamed printer: page must be served unchanged"
+
+
+def test_served_page_plays_the_relay_stream_in_a_video_element():
+    page = mjpeg_server._HTML_PAGE
+    assert '<video id="stream"' in page and "fetch('/stream.mp4" in page, "the page must play /stream.mp4"
+    assert "createImageBitmap" not in page and "fetch('/stream'" not in page, "MJPEG parser left behind"
+    assert "isTypeSupported" in page and "revokeObjectURL" in page, "MSE guards from the relay page"
+    assert "serverRate" in page and "fps_cap" not in page, "FPS must be judged against the measured rate"
 
 
 _OPEN_HARNESS = r"""
@@ -1050,38 +1103,16 @@ def _run_open_page(body, search, mode="popup-ok"):
     return json.loads(proc.stdout)
 
 
-def test_open_portal_forwards_a_valid_resolution_and_quality_to_the_stream_page():
+def test_open_portal_opens_the_stream_page_in_the_named_window():
     with _stream_server() as srv:
         _s, _c, plain = _http_get(srv, "/open?name=bambu-h2d")
-        _s, _c, custom = _http_get(srv, f"/open?{_qs(name='bambu-h2d', resolution='720p', quality=50)}")
+        _s, _c, legacy = _http_get(srv, f"/open?{_qs(name='bambu-h2d', resolution='720p', quality=50)}")
     assert b"location.origin+'/'," in plain and b"location.replace('/')" in plain, plain
-    assert b"location.origin+'/?resolution=720p&quality=50'," in custom, custom
-    assert b"location.replace('/?resolution=720p&quality=50')" in custom, custom
-    if _skip_without_node("test_open_portal_forwards_a_valid_resolution_and_quality_to_the_stream_page"):
+    assert legacy == plain, "old resolution/quality parameters must be ignored, not forwarded"
+    if _skip_without_node("test_open_portal_opens_the_stream_page_in_the_named_window"):
         return
-    calls = _run_open_page(custom, "?name=bambu-h2d")
-    assert calls == {"open": [["http://h:1/?resolution=720p&quality=50", "bambu-h2d"]], "replace": []}, calls
-    blocked = _run_open_page(custom, "?name=bambu-h2d", "popup-blocked")
-    assert blocked["replace"] == ["/?resolution=720p&quality=50"], blocked
-    assert _run_open_page(plain, "?name=bambu-h2d")["open"] == [["http://h:1/", "bambu-h2d"]]
-
-
-def test_open_portal_escapes_whatever_it_interpolates_independently_of_the_validation():
-    # The validation makes every reachable resolution safe, so the escaping is only observable by
-    # widening the accepted set with a value that would break out of a JS string and out of <script>.
-    awkward = "a'b\"c</script><!--d\\e f"
-    with mock.patch.dict(camera_tool._RESOLUTION_MAP, {awkward: None}), _stream_server() as srv:
-        status, _c, body = _http_get(srv, f"/open?{_qs(name='bambu-h2d', resolution=awkward, quality=50)}")
-    assert status == 200, status
-    text = body.decode()
-    assert text.count("</script>") == 1 and text.count("<script>") == 1 and "<!--" not in text, text
-    assert " " not in text, "a raw U+2028 ends a JS string literal in older engines"
-    if _skip_without_node("test_open_portal_escapes_whatever_it_interpolates_independently_of_the_validation"):
-        return
-    want = "/?" + urllib.parse.urlencode({"resolution": awkward, "quality": 50})
-    calls = _run_open_page(body, "?name=bambu-h2d")
-    assert calls == {"open": [["http://h:1" + want, "bambu-h2d"]], "replace": []}, calls
-    assert _run_open_page(body, "?name=bambu-h2d", "popup-blocked")["replace"] == [want]
+    assert _run_open_page(plain, "?name=bambu-h2d") == {"open": [["http://h:1/", "bambu-h2d"]], "replace": []}
+    assert _run_open_page(plain, "?name=bambu-h2d", "popup-blocked")["replace"] == ["/"]
 
 
 _JS_STR_CASES = ["plain", "a'b", 'a"b', "a\\b", "</script>", "<!--x", "a\nb\rc", "\u2028\u2029", "\x00\x1f\x7f",
