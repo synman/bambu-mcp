@@ -12,8 +12,10 @@ Usage:
 
 import atexit
 import logging
+import os
 import signal
 import sys
+import threading
 
 import setproctitle
 from pathlib import Path
@@ -270,6 +272,30 @@ def _shutdown() -> None:
 
 atexit.register(_shutdown)
 
+# How long a stdio server whose session is gone may spend stopping before it exits regardless.
+_STDIO_EXIT_GRACE_S = 10
+
+
+def _stdio_teardown() -> None:
+    """End a stdio server once its session is gone: stop everything, then guarantee the exit.
+
+    EOF on stdin means the session that spawned this process died, and nothing else will ever use
+    it. atexit cannot do this job: the interpreter joins every non-daemon thread (bpm's MQTT loop
+    and watchdog, the REST API) before it runs atexit handlers, so with a printer configured
+    _shutdown never ran and the orphan kept analysing the camera. Stop those threads here instead.
+    The timer is the backstop for a stop that blocks (bpm quit() joins its threads without a
+    timeout) and is a daemon, so it never keeps a clean exit waiting.
+    """
+    backstop = threading.Timer(_STDIO_EXIT_GRACE_S, os._exit, args=(0,))
+    backstop.daemon = True
+    backstop.start()
+    _shutdown()
+    try:
+        import api_server
+        api_server.stop()
+    except Exception as exc:
+        log.warning(f"API server shutdown error: {exc}")
+
 
 def _signal_handler(signum: int, _frame) -> None:
     """Log the signal that killed us, then exit (atexit._shutdown will fire)."""
@@ -323,6 +349,8 @@ def main() -> None:
         threading.Thread(target=_startup, daemon=True, name="bambu-mcp-startup").start()
         log.info(f"Starting Bambu Lab MCP server (transport: {transport})")
         mcp.run(transport=transport)
+        log.info("stdin closed: the session that started this server is gone, shutting down")
+        _stdio_teardown()
     else:
         _startup()
         log.info(f"Starting Bambu Lab MCP server (transport: {transport})")

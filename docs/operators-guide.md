@@ -103,6 +103,15 @@ Printer MQTT sessions restart automatically; streamable-http MCP clients reconne
 transparently to port 25099 (verified 2026-09-14 — no `mcp-reload` needed for CC
 sessions on the http binding; a stdio-bound or stuck client still needs `~/bin/mcp-reload`).
 
+A stdio `bambu-mcp` lives and dies with the session that spawned it. When stdin closes,
+`server.py` runs `_stdio_teardown()`: it stops the job monitors, camera streams, printer
+sessions and REST API, and exits within `_STDIO_EXIT_GRACE_S` (10 s) even if a stop blocks.
+Before 2026-10-25 it did not exit: bpm's non-daemon MQTT and watchdog threads and the REST API
+thread are joined before atexit handlers run, so `_shutdown` never fired and the orphan
+(parent pid 1) kept analysing the camera at about 60% of a core each. A copy started before
+that fix and still running with parent pid 1 is such an orphan and is safe to stop (SIGTERM).
+`test_stdio_exit.py` pins the exit.
+
 **A restart, reload, or code redeploy is safe during a print — it never touches the job.**
 The printer runs the job on its own firmware; the daemon only watches and commands it over
 MQTT, so stopping the daemon neither pauses, stops, nor restarts a print, and there is no
