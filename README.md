@@ -1,6 +1,6 @@
 # Bambu Lab MCP Server
 
-**Version: 0.9.0** · Follows [Semantic Versioning](https://semver.org/)
+**Version: 1.0.0** · Follows [Semantic Versioning](https://semver.org/)
 
 An MCP (Model Context Protocol) server that lets AI agents monitor and control Bambu Lab 3D
 printers. It is built on [bambu-printer-manager](https://github.com/synman/bambu-printer-manager)
@@ -128,6 +128,37 @@ bambu-mcp/
 ├── docs/                ← Operators guide, LAN file tunnel protocol, site overview source
 └── config/              ← Example client configs and settings template
 ```
+
+---
+
+## Versioning
+
+The version of record is `__version__` in `server.py`, plain semver with no suffix. `pyproject.toml`
+repeats it and `test_version.py` pins them equal. The MCP `initialize` response reports it as
+`serverInfo.version`, and the REST API (`info.version` in the OpenAPI document) and the mDNS record
+read the same constant. Nothing derives it from package metadata.
+
+Bump it by hand, with every change to a serving file:
+
+- MAJOR: a tool removed or renamed, or a parameter or return shape changed incompatibly.
+- MINOR: a tool or behaviour added.
+- PATCH: a fix, hardening, or a wording change to a tool description, docstring or the server instructions.
+
+Tests, docs, config, calibration scripts and the standalone tools need no bump. `SERVING` in
+`hooks/version_bump_gate.py` is the list of files that do, and `test_version.py` pins it against the tree.
+
+A repo-local pre-commit gate blocks a commit that stages a serving file while `__version__` is unchanged.
+Install it once per clone with `python3 hooks/version_bump_gate.py --install`. The commit subject ends
+with the version. After a daemon restart, read the version back from the running server:
+
+```bash
+PORT=$(cat ~/.bambu-mcp/daemon.port)
+curl -s -X POST "http://localhost:$PORT/mcp" \
+  -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"readback","version":"0"}}}'
+```
+
+`serverInfo.version` must equal `__version__` at the deployed commit.
 
 ---
 

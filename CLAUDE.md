@@ -52,8 +52,9 @@ Pattern: `~/.bambu-mcp/<feature>_<printer_name>.<ext>` — save on state change,
 Agent-managed — full git lifecycle authorized (stage, commit, push). Descriptive commit messages, push after each logical unit.
 
 - Never update/add/remove dependencies without explicit user approval
-- Version in one place: `pyproject.toml` `[project] version`
-- After version bump: `pip install -e .` then `python make.py version-sync`
+- Version of record: `__version__` in `server.py`, plain semver, bumped by hand with every change to a serving file (`SERVING` in `hooks/version_bump_gate.py`). `pyproject.toml` `[project] version` must equal it. Rules: KB `isaac-mcp-versioning-policy`; README Versioning section
+- A pre-commit gate blocks a serving change with no bump. Install it once per clone: `python3 hooks/version_bump_gate.py --install`
+- The commit subject ends with the version (`..., 1.2.0`). After a bump run `python make.py version-sync`; after a daemon restart read `serverInfo.version` back
 
 ## Credential Registry
 

@@ -63,6 +63,8 @@ _port: int = 0           # set by start(); 0 = not running
 _zc_instance = None      # Zeroconf instance for mDNS service registration
 _zc_info = None          # ServiceInfo registered with Zeroconf
 _log_level_setter = None  # callable(level_name: str) -> str, injected by server.py
+# Set by server.py from its __version__ before start(); None only if api_server runs without it.
+SERVER_VERSION: str | None = None
 _UPLOADS = os.path.join(os.path.dirname(__file__), "uploads")
 
 
@@ -762,11 +764,7 @@ _TAG_DESCRIPTIONS: dict[str, str] = {
 
 def build_openapi_document(flask_app) -> dict:
     log.debug("build_openapi_document: called")
-    try:
-        from importlib.metadata import version as _pkg_version
-        _api_version = _pkg_version("bambu-mcp")
-    except Exception:
-        _api_version = "0.0.0"
+    _api_version = SERVER_VERSION
 
     paths: dict = {}
     for rule in sorted(flask_app.url_map.iter_rules(), key=lambda r: r.rule):
@@ -3148,16 +3146,14 @@ def _register_mdns(port: int) -> None:
     global _zc_instance, _zc_info
     try:
         import socket
-        from importlib.metadata import version as _pkg_version
         from zeroconf import ServiceInfo, Zeroconf
 
         from tools.management import get_configured_printers
         printers_result = get_configured_printers()
         printer_names = ",".join(p["name"] for p in printers_result.get("printers", []))
 
-        pkg_ver = _pkg_version("bambu-mcp")
         props = {
-            "version": pkg_ver,
+            "version": SERVER_VERSION,
             "api_url": f"http://localhost:{port}/api",
             "printers": printer_names,
         }

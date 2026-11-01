@@ -112,12 +112,9 @@ def _cycle_bpm_log_level() -> None:
     set_log_level(logging.getLevelName(_root.level), bpm_level_name=logging.getLevelName(next_level))
 
 # ── FastMCP server ─────────────────────────────────────────────────────────────
-def _pkg_version() -> str:
-    try:
-        from importlib.metadata import version
-        return version("bambu-mcp")
-    except Exception:
-        return "0.0.0"
+# Version of record. Bumped by hand with every change to a serving file; hooks/version_bump_gate.py
+# blocks a commit that skips it, and pyproject.toml must read the same string (test_version.py).
+__version__ = "1.0.0"
 
 mcp = FastMCP(
     name="bambu-mcp",
@@ -129,7 +126,7 @@ mcp = FastMCP(
 )
 # FastMCP doesn't expose version in its constructor, but the underlying MCPServer does.
 # Set it here so clients receive the correct version in the MCP initialize response.
-mcp._mcp_server.version = _pkg_version()
+mcp._mcp_server.version = __version__
 
 # ── Register tools ─────────────────────────────────────────────────────────────
 register_tools(mcp)
@@ -242,6 +239,7 @@ def _startup() -> None:
 
     try:
         import api_server
+        api_server.SERVER_VERSION = __version__
         api_server.start(log_level_setter=set_log_level)
     except Exception as exc:
         log.warning(f"API server startup error: {exc}")
