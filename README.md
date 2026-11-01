@@ -134,31 +134,24 @@ bambu-mcp/
 ## Versioning
 
 The version of record is `__version__` in `server.py`, plain semver with no suffix. `pyproject.toml`
-repeats it and `test_version.py` pins them equal. The MCP `initialize` response reports it as
-`serverInfo.version`, and the REST API (`info.version` in the OpenAPI document) and the mDNS record
-read the same constant. Nothing derives it from package metadata.
+repeats it, and `test_version.py` fails when the two differ. The README header line and `PLAN.md`
+carry a copy that `python make.py version-sync` refreshes. The MCP `initialize` response reports it
+as `serverInfo.version`. The REST OpenAPI `info.version` and the mDNS record read the same constant.
+Nothing derives it from package metadata.
 
-Bump it by hand, with every change to a serving file:
+Raise it by hand with every change to a serving file:
 
 - MAJOR: a tool removed or renamed, or a parameter or return shape changed incompatibly.
 - MINOR: a tool or behaviour added.
 - PATCH: a fix, hardening, or a wording change to a tool description, docstring or the server instructions.
 
-Tests, docs, config, calibration scripts and the standalone tools need no bump. `SERVING` in
-`hooks/version_bump_gate.py` is the list of files that do, and `test_version.py` pins it against the tree.
-
-A repo-local pre-commit gate blocks a commit that stages a serving file while `__version__` is unchanged.
-Install it once per clone with `python3 hooks/version_bump_gate.py --install`. The commit subject ends
-with the version. After a daemon restart, read the version back from the running server:
-
-```bash
-PORT=$(cat ~/.bambu-mcp/daemon.port)
-curl -s -X POST "http://localhost:$PORT/mcp" \
-  -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"readback","version":"0"}}}'
-```
-
-`serverInfo.version` must equal `__version__` at the deployed commit.
+Tests, docs, config, `calibration/` and the standalone scripts (`make.py`, `gen_docs.py`,
+`smoke_test.py`, `thermal_snapshot_monitor.py`) need no bump. `SERVING` in
+`hooks/version_bump_gate.py` lists the files that do: the top-level modules the daemon imports
+and every `.py` under `tools/`, `camera/`, `prompts/` and `resources/`. A pre-commit gate blocks a commit that stages
+one while `__version__` is unchanged against HEAD. Install it once per clone:
+`python3 hooks/version_bump_gate.py --install`. The steps to release a change, and to read the
+version back from the running daemon, are in `docs/operators-guide.md` — Release a change.
 
 ---
 

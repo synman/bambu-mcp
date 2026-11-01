@@ -81,13 +81,14 @@ Captured in:
 |---|---|
 | `MAJOR` | Breaking change: tool removed/renamed, required param changed, return shape broken |
 | `MINOR` | New tool added or new optional parameter added (backwards-compatible) |
-| `PATCH` | Bug fix, docstring fix, internal refactor — no tool API change |
+| `PATCH` | Bug fix, hardening, tool description or docstring wording, internal refactor — no tool API change |
 
-Version lives in one place: `pyproject.toml [project] version`. `server.py` reads it via
-`importlib.metadata.version("bambu-mcp")` and sets `mcp._mcp_server.version` so clients
-see the correct version in every MCP `initialize` response.
+The version of record is `__version__` in `server.py`; `pyproject.toml [project] version`
+repeats it. `server.py` sets `mcp._mcp_server.version` from it so clients see the correct version
+in every MCP `initialize` response. A pre-commit gate (`hooks/version_bump_gate.py`) requires a
+bump with every change to a serving file. Steps: `docs/operators-guide.md` — Release a change.
 
-**Current version: 0.9.0**
+**Current version: 1.0.0**
 
 ---
 ## Installation

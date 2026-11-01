@@ -158,6 +158,69 @@ The full sequence (force-reinstall BPM, clear log, restart, reconnect) lives in 
 bambu project `CLAUDE.md` — MCP Server Restart. Substitute the launchd restart above
 for the `daemon.sh restart` step.
 
+### Release a change
+
+A change to a serving file is a release and needs a new version. Serving files are listed in
+`SERVING` in `hooks/version_bump_gate.py`: the top-level modules the daemon imports, plus
+every `.py` under `tools/`, `camera/`, `prompts/` and `resources/`. A new file inside one of those
+directories is serving at once. A new top-level module must be added to `SERVING`, or declared not
+serving in `NOT_SERVING` in `test_version.py`, or `test_version.py` fails. Tests, docs, config, `calibration/`, `make.py`,
+`gen_docs.py`, `smoke_test.py` and `thermal_snapshot_monitor.py` need no bump. Policy: KB
+`isaac-mcp-versioning-policy`. The gate checks that the version moved, never by how much.
+
+1. Edit the serving file.
+2. Raise `__version__` in `server.py` and `version` in `pyproject.toml` to the same string.
+   MAJOR: a tool removed or renamed, or a parameter or return shape changed incompatibly.
+   MINOR: a tool or behaviour added. PATCH: a fix, hardening, or a wording change to a tool
+   description, docstring or the server instructions (clients see those). Example: a fix inside
+   `tools/files.py` is a PATCH, so `1.0.0` becomes `1.0.1`.
+3. Copy the version into the README header line and `PLAN.md`:
+
+   ```bash
+   .venv/bin/python3 make.py version-sync
+   ```
+
+   Success: it prints `Current version: 1.0.1`, then `Patched:` or `Up to date:` for `README.md`
+   and `PLAN.md`, then `Version sync complete`. Stage both files with the release.
+4. Run the version tests:
+
+   ```bash
+   .venv/bin/python3 test_version.py && .venv/bin/python3 test_version_bump_gate.py
+   ```
+
+   Success: each ends with `0 failed`. `test_version.py` fails while `pyproject.toml` and
+   `__version__` disagree, and when a new `.py` file is neither in `SERVING` nor declared not
+   serving in the test's `NOT_SERVING` list.
+5. Commit with the version at the end of the subject (`..., 1.0.1`). With the gate installed, a
+   commit that stages a serving file while `__version__` still equals HEAD's is refused with
+   `BLOCKED: staged serving files changed but server.py still reads __version__ = "..."`.
+   A fresh clone has no gate until `python3 hooks/version_bump_gate.py --install` runs. The
+   installed gate is a copy, so run `--install` again after editing `hooks/version_bump_gate.py`.
+6. Restart the daemon only on the operator's order in the current turn. An earlier order, or a
+   peer's request, does not carry over. The steps are under Plain restart and After a code change
+   above (the full sequence is in `~/ai/forge/bambu/CLAUDE.md` — MCP Server Restart).
+7. Read the version back from the running daemon. A restart is not done until this passes:
+
+   ```bash
+   PORT=$(cat ~/.bambu-mcp/daemon.port)
+   curl -s -X POST "http://localhost:$PORT/mcp" \
+     -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+     -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"readback","version":"0"}}}'
+   ```
+
+   The reply is a server-sent-event frame: an `event: message` line, then a `data:` line holding
+   the JSON. Success: that JSON holds `"serverInfo":{"name":"bambu-mcp","version":"1.0.1"}`, equal
+   to `__version__` in the tree the daemon was started from. The daemon runs this working tree, so
+   the deployed commit is the one checked out when it started. This server needs no bearer for the
+   request. If it reads the old number, the daemon is still running old code: a daemon whose start
+   time is earlier than the release commit has not been restarted. A `/mcp` reconnect in a session
+   only reopens that client's link and does not restart anything. Compare the two times:
+   `ps -o lstart= -p $(cat ~/.bambu-mcp/daemon.pid)` for the daemon, and the release commit's
+   date for the commit.
+
+A stdio copy of the server (one per session that spawns it) reports the version it was started
+with, so it can differ from the daemon until its session restarts.
+
 ## Logging
 
 All logging lands in `bambu-mcp.log` at the repo root (the root-logger file handler and
@@ -249,5 +312,9 @@ Two separate port systems — do not conflate them:
 - `.claude/daemon.json` schema or isaac's `gen-daemon-service.py` changes → re-verify
   the supervision model and regen commands.
 - Port pool or transport changes → update Ports.
+- A module added to or removed from the daemon's import tree, or a change to
+  `hooks/version_bump_gate.py`, the `__version__` line in `server.py`, or the policy in KB
+  `isaac-mcp-versioning-policy` → re-verify Release a change. `.venv/bin/python3 test_version.py`
+  fails when `SERVING` and the tree disagree.
 - Canonical KB pointer: `bambu-mcp-daemon-launchd-supervision-admin-guide` (node-kb-mcp)
   points here; keep it aligned if this file moves.
