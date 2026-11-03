@@ -7,11 +7,11 @@ Two operating modes:
   standalone mode:      sets bed temp, runs for --hot-duration seconds, then cools down
 
 Usage:
-    cd ~/bambu-mcp
+    cd <repo>
     # job mode (H2D, default):
-    nohup .venv/bin/python thermal_snapshot_monitor.py > ~/thermal_captures/monitor_stdout.log 2>&1 &
+    nohup .venv/bin/python thermal_snapshot_monitor.py > thermal_captures/monitor_stdout.log 2>&1 &
     # standalone bench mode (A1, 100°C, 20 min hot phase):
-    nohup .venv/bin/python thermal_snapshot_monitor.py --printer A1 --standalone --bed-temp 100 --hot-duration 1200 > ~/thermal_captures/a1_standalone.log 2>&1 &
+    nohup .venv/bin/python thermal_snapshot_monitor.py --printer A1 --standalone --bed-temp 100 --hot-duration 1200 > thermal_captures/a1_standalone.log 2>&1 &
 """
 
 import io
@@ -99,7 +99,7 @@ BED_COOLDOWN_DELTA  = 10.0     # bed must drop to within this many °C of baseli
 CHAM_COOLDOWN_DELTA = 5.0      # chamber must drop to within this many °C of baseline
 GITHUB_ISSUE        = 10
 GITHUB_REPO         = "synman/bambu-mcp"
-OUTPUT_ROOT         = Path.home() / "thermal_captures"
+OUTPUT_ROOT         = Path(os.environ.get("BAMBU_THERMAL_OUT") or "thermal_captures").expanduser()
 MCP_PORTS           = [49152, 49153, 49154, 49155, 49156]
 
 # ---------------------------------------------------------------------------

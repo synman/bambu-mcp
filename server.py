@@ -114,7 +114,7 @@ def _cycle_bpm_log_level() -> None:
 # ── FastMCP server ─────────────────────────────────────────────────────────────
 # Version of record. Bumped by hand with every change to a serving file; hooks/version_bump_gate.py
 # blocks a commit that skips it, and pyproject.toml must read the same string (test_version.py).
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 mcp = FastMCP(
     name="bambu-mcp",
@@ -134,7 +134,7 @@ register_tools(mcp)
 # ── Register resources ─────────────────────────────────────────────────────────
 _RESOURCES = [
     ("bambu://rules/global",            get_global_rules,           "Global copilot behavioral rules (live, sensitive values redacted)"),
-    ("bambu://rules/printer-app",       get_printer_app_rules,      "bambu-printer-app rules file (live, redacted)"),
+    ("bambu://rules/printer-app",       get_printer_app_rules,      "the print app rules file (live, redacted)"),
     ("bambu://rules/printer-manager",   get_printer_manager_rules,  "bambu-printer-manager rules file (live, redacted)"),
     ("bambu://rules/bambu-mcp",         get_bambu_mcp_rules,        "bambu-mcp project rules file (live, redacted)"),
 ]
@@ -157,7 +157,7 @@ for _uri, _fn, _desc in _RESOURCES:
         "Per-printer push alert feed. Subscribe to receive notifications when high-visibility "
         "printer state transitions occur (job start/finish/fail, HMS errors, health changes). "
         "Returns pending alerts as JSON array. Clear them after reading via get_pending_alerts(). "
-        "See kb_get('bambu-state-change-alerts') (node-kb-mcp) for full alert type semantics."
+        "Each alert carries a type, a severity and a type-specific payload."
     ),
     mime_type="application/json",
 )

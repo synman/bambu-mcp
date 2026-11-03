@@ -4,11 +4,9 @@ Reference for the Bambu Lab **LAN file tunnel** on TCP port 6000 (H2 series, P2S
 answers, and what fails. It is the only LAN route to the printer's internal (eMMC) model cache and the only way to read one member of a 3MF without downloading it. **The reference client is read-only** — it never uploads,
 deletes, or changes printer state. The tested write helpers under Writes are separate and need the operator's explicit permission each time.
 
-- **Scope / owner:** `bambu-mcp` docs (agent-managed). Applies to the ecosystem (`bpm`, `bpa`, `bambu-mcp`); none of them has a `:6000` client today.
-- **Not covered:** the A1/P1 MJPEG camera (also port 6000, different protocol) — see `bambu://knowledge/protocol`.
-- **Depth lives in the KB.** This page is the operator/agent how-to. Facts, evidence tiers and correction history are in
-  `kb_get("bambu-tcp-6000-protocol")`, `kb_get("bambu-tcp-6000-command-reference")`, `kb_get("bambu-h2d-internal-storage-emmc-model-cache")`,
-  `kb_get("bambu-mqtt-storage-capability-fields")`.
+- **Scope / owner:** `bambu-mcp` docs (agent-managed). Applies to the ecosystem (`bpm`, `the web app`, `bambu-mcp`); none of them has a `:6000` client today.
+- **Not covered:** the A1/P1 MJPEG camera (also port 6000, different protocol) — see the protocol topic of your knowledge store.
+- **Depth lives in a knowledge store.** This page is the operator/agent how-to. Facts, evidence tiers and correction history are in the `bambu-tcp-6000-protocol`, `bambu-tcp-6000-command-reference`, `bambu-h2d-internal-storage-emmc-model-cache` and `bambu-mqtt-storage-capability-fields` topics, if you keep one.
 
 ## What works on an H2D (fw 01.03.00.00, measured 2026-09-19)
 
@@ -40,7 +38,7 @@ Read these from the printer's MQTT `push_status` (hex strings, bits counted from
 | `fun` | 28 | internal timelapse storage | 0 |
 | `fun` | 49 | part skip, the feature that fetches `mem:/16` | 1 |
 
-No live field says what the tunnel will serve, so bit 31 only proves it exists. Watch `fun2` bit 17 after every firmware upgrade and re-run the Verification block when it changes. bpm reads `fun` today but decodes none of these bits. Detail: `kb_get("bambu-mqtt-storage-capability-fields")`.
+No live field says what the tunnel will serve, so bit 31 only proves it exists. Watch `fun2` bit 17 after every firmware upgrade and re-run the Verification block when it changes. bpm reads `fun` today but decodes none of these bits. Detail: the `bambu-mqtt-storage-capability-fields` topic of a knowledge store.
 
 ## When to use it
 
@@ -311,7 +309,7 @@ Stop and report to the operator (do not retry loops) if login is refused repeate
 Run against a real printer before trusting a change to this page or the client. Read-only: `LIST_INFO`, one `SUB_FILE`, one small `FILE_DOWNLOAD`, and one download that is expected to be refused. Needs a USB stick holding at least one model under 300 KB, at least one internal file, and a printer that has run a job since boot.
 
 ```bash
-cd ~/ai/forge/bambu/bambu-mcp && D=$(mktemp -d) && trap 'rm -rf "$D"' EXIT && python3 - "$D" <<'EOF'
+cd <repo> && D=$(mktemp -d) && trap 'rm -rf "$D"' EXIT && python3 - "$D" <<'EOF'
 import pathlib, re, sys
 doc = pathlib.Path("docs/lan-file-tunnel-protocol.md").read_text()
 fence = chr(96) * 3

@@ -7,9 +7,8 @@ discovery, and provides liveness checks for stale PID cleanup.
 
 Port resolution chain:
   1. BAMBU_MCP_PORT env var
-  2. Vault pref pref-bambu-mcp-port
-  3. Default: 25099 (top of registered range 25000–25099)
-  4. Descending scan 25099→25000 if preferred port is unavailable
+  2. Default: 25099 (top of registered range 25000–25099)
+  The port is fixed: if it is unavailable, startup fails (no scan).
 
 Port/PID files:
   ~/.bambu-mcp/daemon.port — plain text integer, written atomically on start
@@ -96,8 +95,7 @@ def resolve_port() -> int:
 
     Resolution order:
       1. BAMBU_MCP_PORT env var
-      2. Vault pref pref-bambu-mcp-port (via secrets.py)
-      3. Default: 25099
+      2. Default: 25099
 
     Returns:
         The designated port for this daemon instance.
@@ -105,7 +103,7 @@ def resolve_port() -> int:
     Raises:
         OSError: If the designated port is not available.
     """
-    port = _read_env_port() or _read_vault_port() or _DEFAULT_DAEMON_PORT
+    port = _read_env_port() or _DEFAULT_DAEMON_PORT
     assert_registered_port(port)
 
     if not _is_port_available(port):
@@ -236,24 +234,6 @@ def _read_env_port() -> int | None:
             return port
         except ValueError as exc:
             log.warning("_read_env_port: invalid BAMBU_MCP_PORT=%s: %s", val, exc)
-    return None
-
-
-def _read_vault_port() -> int | None:
-    """Read pref-bambu-mcp-port from the workspace vault."""
-    try:
-        import subprocess
-        result = subprocess.run(
-            [str(Path.home() / "ai/isaac/services/get-secret.sh"),
-             "pref-bambu-mcp-port"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            port = int(result.stdout.strip())
-            assert_registered_port(port)
-            return port
-    except Exception as exc:
-        log.debug("_read_vault_port: vault lookup failed: %s", exc)
     return None
 
 

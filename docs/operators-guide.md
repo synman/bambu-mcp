@@ -2,12 +2,11 @@
 
 Runbook for administering the bambu-mcp daemon: supervision model, start/stop/restart,
 log-level management, debug logging, and verification. For architecture and tool
-reference, see the repo `README.md` and `CLAUDE.md`.
+reference, see the repo `README.md`.
 
-**Scope:** the streamable-http daemon on a workstation where the repo is registered in
-isaac's `.workspace-paths` (which brings launchd supervision with it). All commands are
-macOS (`launchctl`); on Linux the generated unit is systemd-user and the same concepts
-apply.
+**Scope:** the streamable-http daemon under a service manager: launchd on macOS, a systemd
+user unit on Linux. All commands are macOS (`launchctl`) and the same concepts apply on Linux.
+`$LABEL` stands for the service label of your install, which `launchctl list | grep bambu` shows.
 
 ## Supervision model — read this before restarting anything
 
@@ -15,12 +14,12 @@ Two managers can launch this daemon, and **launchd wins**:
 
 | Manager | Launch path | Env source |
 |---|---|---|
-| **launchd** (authoritative) | `~/Library/LaunchAgents/com.isaac.app.forge-bambu-mcp.plist`, `KeepAlive` on non-successful exit, `ThrottleInterval` 5s | The plist's `EnvironmentVariables` dict |
+| **launchd** (authoritative) | `~/Library/LaunchAgents/$LABEL.plist`, `KeepAlive` on non-successful exit, `ThrottleInterval` 5s | The plist's `EnvironmentVariables` dict |
 | `bambu-mcp-daemon.sh` (legacy/manual) | `nohup .venv/bin/python3 server.py --transport streamable-http` | The invoking shell |
 
-The plist is **generated** — do not treat it as source. isaac's
-`services/gen-daemon-service.py` renders it from this repo's `.claude/daemon.json`
-descriptor, and **every `install-hooks.sh` run regenerates it**, discarding hand edits.
+The plist is **generated** — do not treat it as source. Your host's service tooling renders it
+from a service descriptor kept outside this document, and **every regeneration discards hand
+edits**.
 
 **The trap:** `./bambu-mcp-daemon.sh restart` appears to work but silently discards your
 environment. Its `stop` kills the process; launchd's KeepAlive immediately relaunches it
@@ -45,7 +44,7 @@ Never use `bambu-mcp-daemon.sh restart`; use `kickstart -k` below instead.
 
 ```bash
 ./bambu-mcp-daemon.sh status                                    # PID, MCP port, TCP probe
-launchctl print gui/$(id -u)/com.isaac.app.forge-bambu-mcp | command grep -E "state =|pid =|runs ="   # launchd view (pid sits past line 10, so no `head`)
+launchctl print gui/$(id -u)/$LABEL | grep -E "state =|pid =|runs ="   # launchd view (pid sits past line 10, so no `head`)
 ```
 
 Success signal: `state = running` and `TCP: OK (port 25099 responding)`. The two PIDs must
@@ -56,7 +55,7 @@ delays the single surviving spawn).
 ### Plain restart (no env change)
 
 ```bash
-launchctl kickstart -k gui/$(id -u)/com.isaac.app.forge-bambu-mcp
+launchctl kickstart -k gui/$(id -u)/$LABEL
 ```
 
 **Port race — fixed and empirically confirmed in this repo's own log.** A `kickstart -k`
@@ -85,7 +84,7 @@ restart, and every restart since is clean, first-spawn, zero-`OSError`:
 (`10:46:51`) — three consecutive restarts, all landing on the first spawn, all still
 logging the same "cleaning up stale … dead daemon" line 5–6s after SIGTERM (so the old
 process dying fast is unchanged; only the TIME_WAIT bind failure is gone). Read `runs =`
-from `launchctl print gui/$(id -u)/com.isaac.app.forge-bambu-mcp` before/after a restart
+from `launchctl print gui/$(id -u)/$LABEL` before/after a restart
 to confirm the spawn counter advances by exactly 1 on your own node — this behavior can
 differ by macOS network-stack tuning.
 
@@ -100,8 +99,8 @@ not fix that case; wait longer before retrying, or check the log for whether
 listener's PID and matches the daemon's own last "Started server process" line).
 
 Printer MQTT sessions restart automatically; streamable-http MCP clients reconnect
-transparently to port 25099 (verified 2026-09-14 — no `mcp-reload` needed for CC
-sessions on the http binding; a stdio-bound or stuck client still needs `~/bin/mcp-reload`).
+transparently to port 25099 (verified 2026-09-14 — an http-bound client needs no manual
+reconnect; a stdio-bound or stuck client still needs its MCP connection restarted).
 
 A stdio `bambu-mcp` lives and dies with the session that spawned it. When stdin closes,
 `server.py` runs `_stdio_teardown()`: it stops the job monitors, camera streams, printer
@@ -129,34 +128,38 @@ bootout + bootstrap** — `kickstart -k` restarts the job from the definition la
 already holds in memory and does NOT re-read the file:
 
 ```bash
-launchctl bootout gui/$(id -u)/com.isaac.app.forge-bambu-mcp
+launchctl bootout gui/$(id -u)/$LABEL
 sleep 5
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.isaac.app.forge-bambu-mcp.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/$LABEL.plist
 ```
 
 - `bootstrap` can fail with `Bootstrap failed: 5: Input/output error` immediately after
   `bootout` (teardown race). Wait a few seconds and retry — it then loads cleanly.
-- This is a **live-only** change: the next `install-hooks.sh` regenerates the plist from
-  `.claude/daemon.json` and reverts it. That auto-revert is a feature for debug toggles.
+- This is a **live-only** change: the next regeneration of the plist from its descriptor
+  reverts it. That auto-revert is a feature for debug toggles.
 
 ### Persistent env change
 
-Edit `.claude/daemon.json` (`env` dict) in this repo, then regenerate and reload:
+Edit the `env` dict of the service descriptor, regenerate the plist with your service tooling,
+then reload:
 
 ```bash
-~/ai/isaac/services/gen-daemon-service.py --repo ~/ai/forge/bambu/bambu-mcp --key forge-bambu-mcp
-launchctl kickstart -k gui/$(id -u)/com.isaac.app.forge-bambu-mcp
+launchctl bootout gui/$(id -u)/$LABEL
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/$LABEL.plist
 ```
 
-`daemon.json` is the tracked source of the deployed plist — a plist-only edit and a
-`daemon.json`-only edit are each half a change (see `coding-principles.md` — the
-deployed/tracked pair rule).
+The descriptor is the source of the deployed plist — a plist-only edit and a descriptor-only
+edit are each half a change.
 
 ### After a code change
 
-The full sequence (force-reinstall BPM, clear log, restart, reconnect) lives in the
-bambu project `CLAUDE.md` — MCP Server Restart. Substitute the launchd restart above
-for the `daemon.sh restart` step.
+1. Reinstall the printer-manager library into the project venv. Use the local checkout to run
+   its working tree, or the published branch to run what is pushed:
+   `.venv/bin/pip install --force-reinstall --no-deps <path-or-url>`. The install is a snapshot,
+   so repeat it after every library edit.
+2. Clear the log: `truncate -s 0 bambu-mcp.log`.
+3. Restart with the launchd restart above, never `bambu-mcp-daemon.sh restart`.
+4. Reconnect any client that does not reconnect on its own.
 
 ### Release a change
 
@@ -165,8 +168,8 @@ A change to a serving file is a release and needs a new version. Serving files a
 every `.py` under `tools/`, `camera/`, `prompts/` and `resources/`. A new file inside one of those
 directories is serving at once. A new top-level module must be added to `SERVING`, or declared not
 serving in `NOT_SERVING` in `test_version.py`, or `test_version.py` fails. Tests, docs, config, `calibration/`, `make.py`,
-`gen_docs.py`, `smoke_test.py` and `thermal_snapshot_monitor.py` need no bump. Policy: KB
-`isaac-mcp-versioning-policy`. The gate checks that the version moved, never by how much.
+`gen_docs.py`, `smoke_test.py` and `thermal_snapshot_monitor.py` need no bump. The gate checks that
+the version moved, never by how much.
 
 1. Edit the serving file.
 2. Raise `__version__` in `server.py` and `version` in `pyproject.toml` to the same string.
@@ -174,14 +177,14 @@ serving in `NOT_SERVING` in `test_version.py`, or `test_version.py` fails. Tests
    MINOR: a tool or behaviour added. PATCH: a fix, hardening, or a wording change to a tool
    description, docstring or the server instructions (clients see those). Example: a fix inside
    `tools/files.py` is a PATCH, so `1.0.0` becomes `1.0.1`.
-3. Copy the version into the README header line and `PLAN.md`:
+3. Copy the version into the README header line:
 
    ```bash
    .venv/bin/python3 make.py version-sync
    ```
 
-   Success: it prints `Current version: 1.0.1`, then `Patched:` or `Up to date:` for `README.md`
-   and `PLAN.md`, then `Version sync complete`. Stage both files with the release.
+   Success: it prints `Current version: 1.0.1`, then `Patched:` or `Up to date:` for `README.md`,
+   then `Version sync complete`. Stage the README with the release.
 4. Run the version tests:
 
    ```bash
@@ -198,7 +201,7 @@ serving in `NOT_SERVING` in `test_version.py`, or `test_version.py` fails. Tests
    installed gate is a copy, so run `--install` again after editing `hooks/version_bump_gate.py`.
 6. Restart the daemon only on the operator's order in the current turn. An earlier order, or a
    peer's request, does not carry over. The steps are under Plain restart and After a code change
-   above (the full sequence is in `~/ai/forge/bambu/CLAUDE.md` — MCP Server Restart).
+   above (the full sequence is under After a code change).
 7. Read the version back from the running daemon. A restart is not done until this passes:
 
    ```bash
@@ -233,14 +236,14 @@ Log level and raw-payload verbosity are **no longer env-configured at all** — 
 every printer session's `BambuConfig.verbose=False`; the only controls are the two
 live REST routes below, which take effect immediately on the running process and
 reset to that fixed boot default on the next restart. There is nothing to add to
-`.claude/daemon.json`'s `env` dict for this — it no longer has one.
+the service descriptor's `env` dict for this — it no longer has one.
 
 `BAMBU_MCP_FTPS_TIMEOUT` is unrelated and still a genuine env knob (session start,
 `session_manager.py:57`): seconds to wait for the FTPS control connection behind every
 SD-card file operation, passed through to `BambuConfig.ftps_connection_timeout`
 (`bpm/bambuconfig.py:81`). Must parse as a positive integer; anything else is logged
 at WARNING and ignored, leaving bpm's own default. To set it, add the key to
-`.claude/daemon.json`'s `env` dict, regenerate, and reload per **Persistent env
+the service descriptor's `env` dict, regenerate, and reload per **Persistent env
 change** above.
 
 - Server-wide only — there is **no per-printer** log level.
@@ -302,19 +305,16 @@ Two separate port systems — do not conflate them:
 | `Bootstrap failed: 5: Input/output error` | bootout/bootstrap teardown race | `sleep 5`, retry bootstrap |
 | Env-dependent behavior unchanged after "restart" | The trap: launchd relaunched with plist env | Use the plist + bootout/bootstrap route |
 | Daemon down, launchd job not loaded | bootout without bootstrap | `launchctl bootstrap gui/$(id -u) <plist>` |
-| MCP tools failing after restart | Client stuck on dead connection | `~/bin/mcp-reload`, or `/mcp` reconnect in the CC session |
+| MCP tools failing after restart | Client stuck on dead connection | Restart the client's MCP connection |
 | Sessions show `connected: false` | Printer/MQTT side, not the daemon | Check printer power/LAN, then `get_session_status` |
 
 ## Update triggers (keep this guide current)
 
 - `bambu-mcp-daemon.sh`, `daemon_port.py`, or the logging block in `server.py` changes →
   re-verify the procedures and knobs here.
-- `.claude/daemon.json` schema or isaac's `gen-daemon-service.py` changes → re-verify
+- The service descriptor schema or the host's service tooling changes → re-verify
   the supervision model and regen commands.
 - Port pool or transport changes → update Ports.
 - A module added to or removed from the daemon's import tree, or a change to
-  `hooks/version_bump_gate.py`, the `__version__` line in `server.py`, or the policy in KB
-  `isaac-mcp-versioning-policy` → re-verify Release a change. `.venv/bin/python3 test_version.py`
+  `hooks/version_bump_gate.py` or the `__version__` line in `server.py` → re-verify Release a change. `.venv/bin/python3 test_version.py`
   fails when `SERVING` and the tree disagree.
-- Canonical KB pointer: `bambu-mcp-daemon-launchd-supervision-admin-guide` (node-kb-mcp)
-  points here; keep it aligned if this file moves.

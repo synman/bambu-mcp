@@ -127,8 +127,7 @@ def set_nozzle_temp(
         heat_and_wait() pattern: two concurrent checks — proactive timer (re-assert at 75%
         of timeout) and reactive poll (verify target via GET /api/printer every 10s). Both
         use PATCH /api/set_tool_target_temp (HTTP Tier 1) — never raw send_gcode/M104. See
-        ``calibration/calibrate_idle_nozzle_timeout.py`` in this repo, or the corresponding
-        node-kb-mcp ``bambu-*`` article.
+        ``calibration/calibrate_idle_nozzle_timeout.py`` in this repo.
     """
     log.debug("set_nozzle_temp: called for name=%s temp=%s extruder=%s user_permission=%s", name, temp, extruder, user_permission)
     if not user_permission:

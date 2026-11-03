@@ -8,7 +8,7 @@ Media Source Extensions:
   rtsps  X1, X1C, X1E, H2D, H2S, P2S: the printer's H.264 is copied into fMP4, no decode.
   jpeg   A1, A1 mini, P1P, P1S: each JPEG still is encoded once as an intra H.264 frame.
 
-It also keeps the latest frame for /snapshot.jpg and counts rates for /stats. BPA runs the same
+It also keeps the latest frame for /snapshot.jpg and counts rates for /stats. the print app runs the same
 file the same way (docker/run.sh); this module is the bambu-mcp equivalent. A child process,
 not an import: the relay's reader loops forever and has no stop of its own, and a blocked TLS
 read ignores any flag, so killing the process is the stop.
@@ -86,7 +86,7 @@ class RelayProcess:
             [{"name": self.name, "host": self.host, "access_code": self._access_code, "camera": self.camera}])
         log.info("relay %s: starting on 127.0.0.1:%d camera=%s ref=%s", self.name, self.port, self.camera,
                  MSE_STREAM_REF[:7])
-        # Same process group as the daemon, so launchd reaps the child with it.
+        # Same process group as the daemon, so the service manager reaps the child with it.
         self._proc = subprocess.Popen(
             [sys.executable, str(RELAY_SCRIPT), "--bind", "127.0.0.1", "--port", str(self.port)],
             env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,

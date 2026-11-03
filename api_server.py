@@ -1,8 +1,8 @@
 """
 bambu-mcp-api — HTTP REST API server for the bambu-mcp MCP service.
 
-Exposes the printer sessions over HTTP, mirroring the bambu-printer-app container API.
-Backed directly by session_manager / BambuPrinter — no dependency on the bambu-printer-app
+Exposes the printer sessions over HTTP, mirroring the the print app container API.
+Backed directly by session_manager / BambuPrinter — no dependency on the the print app
 container.
 
 Service details:
@@ -27,7 +27,7 @@ Lifecycle:
 Route inventory: build_openapi_document(), served at /api/openapi.json; published by
 gen_docs.py as the REST API page of the bambu-printer-manager docs site.
 
-Agent reference: query node-kb (kb_get('bambu-http-*')) or the Swagger UI at /api/docs for the full route inventory.
+Reference: the Swagger UI at /api/docs lists every route.
 """
 
 from __future__ import annotations
@@ -102,7 +102,7 @@ _SNAPSHOT_QUALITY_MAX = 100
 _SNAPSHOT_QUALITY_RE = re.compile(r"[0-9]{1,6}")
 
 
-# ── OpenAPI helpers (lifted from bambu-printer-app/api/openapi_local.py) ──────
+# ── OpenAPI helpers (lifted from the print app/api/openapi_local.py) ──────
 
 def _infer_param_type(source: str, name: str) -> str:
     log.debug("_infer_param_type: name=%s", name)

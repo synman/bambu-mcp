@@ -59,8 +59,8 @@ def get_server_info() -> dict:
         Ports are allocated on demand and released when listeners stop.
 
         The server also registers a Zeroconf/mDNS service (`_bambu-mcp._tcp.local.`) at startup
-        so non-MCP clients can discover the port without calling this tool. See
-        kb_get('bambu-http-system') for the TXT record schema.
+        so non-MCP clients can discover the port without calling this tool. The
+        TXT record carries ``version``, ``api_url`` and ``printers``.
 
         Environment variables that control the pool:
 

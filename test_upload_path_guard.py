@@ -7,7 +7,7 @@ f.filename)` and friends), giving arbitrary file write via
 printer SD card) via `/api/upload_file_to_printer`. The guard `_safe_upload_path`
 strips directory components and containment-checks the resolved path while
 preserving every legal filename character — '+', spaces, unicode round-trip
-unchanged (this server, unlike bambu-printer-app, deliberately does not
+unchanged (this server, unlike the print app, deliberately does not
 sanitize names).
 
 The source-scan tests assert the three exact pre-fix sink expressions (copied

@@ -94,8 +94,6 @@ def resume_print(name: str, user_permission: bool = False) -> str:
         action. <consequence>"``, ``"Error: Printer '<name>' not connected."``, or
         ``"Error resuming '<name>': <exception>"``.
 
-    Notes:
-        See kb_get('bambu-pause-state-recovery') for the full pause-cause decision table.
     """
     log.debug("resume_print: called for name=%s user_permission=%s", name, user_permission)
     if not user_permission:

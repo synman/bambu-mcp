@@ -106,8 +106,7 @@ def get_pending_alerts(name: str, clear: bool = True) -> list[dict]:
         Known code defect: the job fields above are missing because SessionManager has no
         ``get_job_info()`` or ``get_progress()`` (the resulting errors are swallowed).
 
-        Call kb_get('bambu-state-change-alerts') for further documentation on each alert
-        type, recommended actions, and severity guidance.
+        Each alert carries a type, a severity (high, medium or low) and a type-specific payload.
     """
     from session_manager import session_manager
     printer = session_manager.get_printer(name)

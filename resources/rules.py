@@ -1,26 +1,35 @@
 """
 resources/rules.py — MCP resources exposing live rules file content at bambu://rules/* URIs.
 
-Four rule sources:
-  bambu://rules/global          ~/.copilot/copilot-instructions.md (global rules)
-  bambu://rules/printer-app     ~/bambu-printer-app/.github/copilot-instructions.md
-  bambu://rules/printer-manager ~/bambu-printer-manager/.github/copilot-instructions.md
-  bambu://rules/bambu-mcp       ~/bambu-mcp/.github/copilot-instructions.md
+Four slots, each read from the file its setting names. A slot with no setting answers
+"not configured", so a fresh install serves nothing it was not pointed at:
+  bambu://rules/global           BAMBU_MCP_RULES_GLOBAL
+  bambu://rules/printer-app      BAMBU_MCP_RULES_PRINTER_APP
+  bambu://rules/printer-manager  BAMBU_MCP_RULES_PRINTER_MANAGER
+  bambu://rules/bambu-mcp        BAMBU_MCP_RULES_BAMBU_MCP
 
-Sensitive values (IPs, serial numbers, access codes, passwords, Docker infra, CI tokens)
-are redacted before serving. The baked-in knowledge/behavioral_rules.py already contains
-a cleaned synthesis; these resources allow the agent to verify rules haven't changed.
+Sensitive values (IPs, serial numbers, access codes, passwords, CI tokens) are redacted before
+serving. BAMBU_MCP_REDACT_HOST_PATTERN adds one regular expression for hostnames to redact; it
+has no default.
 """
 
+import os
 import re
 from pathlib import Path
 
-_RULES_FILES = {
-    "global": Path.home() / ".copilot" / "copilot-instructions.md",
-    "printer-app": Path.home() / "bambu-printer-app" / ".github" / "copilot-instructions.md",
-    "printer-manager": Path.home() / "bambu-printer-manager" / ".github" / "copilot-instructions.md",
-    "bambu-mcp": Path.home() / "bambu-mcp" / ".github" / "copilot-instructions.md",
+_RULES_ENV = {
+    "global": "BAMBU_MCP_RULES_GLOBAL",
+    "printer-app": "BAMBU_MCP_RULES_PRINTER_APP",
+    "printer-manager": "BAMBU_MCP_RULES_PRINTER_MANAGER",
+    "bambu-mcp": "BAMBU_MCP_RULES_BAMBU_MCP",
 }
+
+
+def _rules_path(name: str) -> Path | None:
+    var = _RULES_ENV.get(name)
+    value = os.environ.get(var, "").strip() if var else ""
+    return Path(value).expanduser() if value else None
+
 
 # Patterns to redact from live rule files before serving
 _REDACT_PATTERNS = [
@@ -28,8 +37,6 @@ _REDACT_PATTERNS = [
     (re.compile(r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b'), '<ip-redacted>'),
     # Serial numbers (Bambu format: hex-like 15-char strings)
     (re.compile(r'\b[0-9A-F]{15}\b'), '<serial-redacted>'),
-    # Hostnames with dots that look like printer hostnames
-    (re.compile(r'bambu-[a-z0-9]+\.shellware\.com'), '<hostname-redacted>'),
     # Access codes (8-char alphanumeric)
     (re.compile(r'\b[A-Z0-9]{8}\b'), '<access-code-redacted>'),
     # Docker registry / CI tokens / passwords that might appear inline
@@ -40,13 +47,18 @@ _REDACT_PATTERNS = [
 def _redact(text: str) -> str:
     for pattern, replacement in _REDACT_PATTERNS:
         text = pattern.sub(replacement, text)
+    host_pattern = os.environ.get("BAMBU_MCP_REDACT_HOST_PATTERN", "").strip()
+    if host_pattern:
+        text = re.sub(host_pattern, '<hostname-redacted>', text)
     return text
 
 
 def _read_rules(name: str) -> str:
-    path = _RULES_FILES.get(name)
-    if path is None:
+    if name not in _RULES_ENV:
         return f"Unknown rules resource: {name}"
+    path = _rules_path(name)
+    if path is None:
+        return f"Rules file not configured: set {_RULES_ENV[name]}"
     if not path.exists():
         return f"Rules file not found: {path}"
     try:
@@ -62,7 +74,7 @@ def get_global_rules() -> str:
 
 
 def get_printer_app_rules() -> str:
-    """Return bambu-printer-app copilot-instructions.md with sensitive values redacted."""
+    """Return the print app copilot-instructions.md with sensitive values redacted."""
     return _read_rules("printer-app")
 
 

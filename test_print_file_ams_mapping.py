@@ -4,7 +4,7 @@ bpm's get_project_info() cannot supply a real AMS mapping: the 3mf's
 `filament_maps` is the slicer's per-filament EXTRUDER assignment and bpm
 replaces it with a filament-id placeholder ("1", "2", ...). Until 2026-09-15
 print_file sent that placeholder to the printer verbatim when use_ams=True
-and no caller mapping was given. It now mirrors bambu-printer-app's
+and no caller mapping was given. It now mirrors the print app's
 Print3mfFileDialog scoring (reconstructAmsMapping / getProtocolTrayId /
 toWireMapping / getMatchQuality): match each project filament to a loaded
 spool by exact type then closest colour, encode the tray id per AMS type, and
@@ -85,7 +85,7 @@ def test_type_mismatch_with_far_colour_is_unmatched():
 
 
 def test_same_type_far_colour_is_a_type_match():
-    # BPA rule: a type match is always acceptable; colour only ranks. Labelled so
+    # the print app rule: a type match is always acceptable; colour only ranks. Labelled so
     # the pre-print summary can call it out.
     wire, matches, _ = resolve([F(1, "PLA", "#FF0000")], [Spool(0, 0, "PLA", "#0000FF")])
     assert wire == [0], wire
@@ -286,7 +286,7 @@ def test_print_file_caller_mapping_bypasses_resolution():
 
 
 def test_print_file_empty_string_mapping_means_not_provided():
-    # BPA's own URL sends ams_mapping= ; an empty override must resolve, not publish "".
+    # the print app's own URL sends ams_mapping= ; an empty override must resolve, not publish "".
     printer, result = _run([Spool(0, 1, "ABS", "black")], [F(1, "ABS", "#000000")], ams_mapping="", use_ams=True)
     assert result.get("success") is True, result
     assert printer.calls[0]["ams_mapping"] == "[1]"

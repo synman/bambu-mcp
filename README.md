@@ -1,6 +1,6 @@
 # Bambu Lab MCP Server
 
-**Version: 1.0.0** · Follows [Semantic Versioning](https://semver.org/)
+**Version: 1.1.0** · Follows [Semantic Versioning](https://semver.org/)
 
 An MCP (Model Context Protocol) server that lets AI agents monitor and control Bambu Lab 3D
 printers. It is built on [bambu-printer-manager](https://github.com/synman/bambu-printer-manager)
@@ -134,8 +134,8 @@ bambu-mcp/
 ## Versioning
 
 The version of record is `__version__` in `server.py`, plain semver with no suffix. `pyproject.toml`
-repeats it, and `test_version.py` fails when the two differ. The README header line and `PLAN.md`
-carry a copy that `python make.py version-sync` refreshes. The MCP `initialize` response reports it
+repeats it, and `test_version.py` fails when the two differ. The README header line
+carries a copy that `python make.py version-sync` refreshes. The MCP `initialize` response reports it
 as `serverInfo.version`. The REST OpenAPI `info.version` and the mDNS record read the same constant.
 Nothing derives it from package metadata.
 
@@ -163,4 +163,3 @@ version back from the running daemon, are in `docs/operators-guide.md` — Relea
   and commit the regenerated pages in bambu-printer-manager.
 - `docs/operators-guide.md`: daemon administration, restarts, logging and ports.
 - `docs/lan-file-tunnel-protocol.md`: the port 6000 LAN file tunnel on H2-series, P2S and X2D.
-- `PLAN.md`: implementation plan and design decisions.

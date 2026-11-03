@@ -22,7 +22,7 @@ Frame header (16 bytes, delivered alone before each JPEG):
 JPEG magic: starts with b'\\xff\\xd8', ends with b'\\xff\\xd9'.
 Data arrives in chunks of up to 4096 bytes.
 
-Architecture mirrors webcamd: one background reader thread per stream stores the
+Architecture mirrors the camera daemon: one background reader thread per stream stores the
 latest frame in a shared buffer. Multiple HTTP clients all read from that buffer
 via a Condition variable — only one TCP connection to the printer at a time.
 """
@@ -89,7 +89,7 @@ class TCPFrameBuffer:
     """
     Single background TCP+TLS reader thread. Continuously reads JPEG frames from the
     printer and stores the latest frame. Multiple HTTP stream clients share one
-    connection via a Condition variable — identical to webcamd's lastImage model.
+    connection via a Condition variable — identical to the camera daemon's lastImage model.
     """
 
     MAX_READ_TIMEOUTS = 10

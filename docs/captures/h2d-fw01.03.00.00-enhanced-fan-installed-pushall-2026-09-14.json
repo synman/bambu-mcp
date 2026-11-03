@@ -3,7 +3,7 @@
     "captured": "2026-09-14 21:28-21:30 EDT",
     "condition": "Toolhead Enhanced Cooling Fan INSTALLED and verified working (M106 P9 S255/S0 live test same evening)",
     "connected_indicator": "print.device.ext_tool: type='F000' = TOOL_TYPE_FAN_F000, mount_3d=1 = MOUNT_MOUNTED (BambuStudio DevExtensionTool.h; MountState: 0=not mounted, 1=mounted, 2=no module, 3=no cable)",
-    "printer": "H2D, serial 0948AD5B2700913, firmware 01.03.00.00, LAN mode, idle",
+    "printer": "H2D, serial SERIAL-REDACTED, firmware 01.03.00.00, LAN mode, idle",
     "run_state": "NOT reported anywhere in telemetry on this firmware (verified by full-frame diff across a live on/off window)",
     "source": "raw MQTT wire payloads, bpm _on_message pre-parse (BAMBU_MCP_BPM_VERBOSE=1)"
   },
@@ -17,7 +17,7 @@
           "loader_ver": "00.00.00.00",
           "name": "ota",
           "product_name": "Bambu Lab H2D",
-          "sn": "0948AD5B2700913",
+          "sn": "SERIAL-REDACTED",
           "sw_ver": "01.03.00.00",
           "visible": true
         },
@@ -107,7 +107,7 @@
           "loader_ver": "00.00.01.11",
           "name": "ap",
           "product_name": "",
-          "sn": "0948AD5B2700913",
+          "sn": "SERIAL-REDACTED",
           "sw_ver": "00.00.79.31",
           "visible": false
         }
@@ -470,7 +470,7 @@
         "laser_preview_res": 5,
         "mode_bits": 2,
         "resolution": "1080p",
-        "rtsp_url": "rtsps://10.151.51.108:322/streaming/live/1",
+        "rtsp_url": "rtsps://192.0.2.10:322/streaming/live/1",
         "timelapse": "disable",
         "tl_store_hpd_type": 2,
         "tl_store_path_type": 2,
@@ -583,7 +583,7 @@
         "ota_new_version_number": "",
         "progress": "0",
         "sequence_id": 0,
-        "sn": "0948AD5B2700913",
+        "sn": "SERIAL-REDACTED",
         "status": "IDLE"
       },
       "upload": {

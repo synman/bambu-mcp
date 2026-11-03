@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the bambu-mcp section of the bambu-printer-manager documentation site.
+"""Generate the bambu-mcp section of the published documentation site.
 
 Writes a static snapshot of this server's MCP tool reference and REST API reference as
 Markdown pages under bpm's docs tree, where bpm's MkDocs build publishes them next to the
@@ -18,9 +18,9 @@ Also refreshes the tool summary between the gen_docs markers in README.md.
 Usage:
     .venv/bin/python3 gen_docs.py [OUT_DIR]
 
-OUT_DIR defaults to ../bambu-printer-manager/docs/bambu-mcp. Every file in it is generated:
+OUT_DIR defaults to the BAMBU_MCP_DOCS_OUT setting, else docs/site/generated. Every file in it is generated:
 the directory is emptied of stale .md files first. Re-run after any tool, docstring, route or
-overview change, then stage the pages in bambu-printer-manager.
+overview change, then publish the pages.
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import os
 import re
 import sys
 import textwrap
@@ -41,7 +42,7 @@ from mcp.server.fastmcp import FastMCP  # noqa: E402
 import api_server  # noqa: E402
 from tools import _registry  # noqa: E402
 
-DEFAULT_OUT = ROOT.parent / "bambu-printer-manager" / "docs" / "bambu-mcp"
+DEFAULT_OUT = Path(os.environ.get("BAMBU_MCP_DOCS_OUT") or ROOT / "docs" / "site" / "generated").expanduser()
 REPO_URL = "https://github.com/synman/bambu-mcp"
 OVERVIEW_SRC = ROOT / "docs" / "site" / "overview.md"
 README = ROOT / "README.md"

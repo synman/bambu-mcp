@@ -120,7 +120,7 @@ port from the same pool. The camera protocol follows the printer model:
 | URI or name | What it returns |
 |---|---|
 | `bambu://rules/global` | The server host's global agent rules file, with IPs, serials and credentials redacted |
-| `bambu://rules/printer-app` | The bambu-printer-app agent rules file, redacted |
+| `bambu://rules/printer-app` | The the print app agent rules file, redacted |
 | `bambu://rules/printer-manager` | The bambu-printer-manager agent rules file, redacted |
 | `bambu://rules/bambu-mcp` | The bambu-mcp agent rules file, redacted |
 | `bambu://alerts/{name}` | Pending state-change alerts for one printer as JSON, without clearing them |

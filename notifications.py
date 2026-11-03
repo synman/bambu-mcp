@@ -24,7 +24,7 @@ Alert schema:
     "printer":   str,   # printer name
     "timestamp": str,   # ISO 8601 UTC
     "severity":  str,   # "high", "medium", or "low"
-    "payload":   dict,  # type-specific fields (see kb_get('bambu-state-change-alerts'))
+    "payload":   dict,  # type-specific fields
   }
 """
 

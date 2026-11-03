@@ -9,10 +9,9 @@ This is the mandatory starting context for any Bambu Lab MCP session.
 _SAFETY_RULES = """## ⚠️ Mandatory Safety Rules — apply on every request, in ALL modes
 
 Bambu domain knowledge (protocol, enums, BambuPrinter API, HTTP API, empirical/calibration)
-is canonical in **node-kb-mcp**: `mcp__node-kb-mcp__kb_search("...")` → `kb_get("bambu-*")`.
-Agent behavioral rules live in the forge `bambu-ecosystem.md` rule (auto-loaded under
-`~/ai/forge/bambu/`). The rules below are the safety floor — repeated here because they bind
-every consumer of this MCP regardless of working directory.
+is not served by this MCP: search your own knowledge store, if you have one, for `bambu-*` topics.
+Agent behavioral rules come from the project you work in. The rules below are the safety
+floor — repeated here because they bind every consumer of this MCP regardless of working directory.
 
 ### Printer Write Protection — Absolute, No Exceptions, Never Bypassed
 NEVER send a write or destructive operation to a physical printer without the user typing
@@ -43,8 +42,7 @@ expected behavior is unclear, stop and ask before proceeding.
 
 ### H2D Dual-Extruder Topology
 `extruder_id` 0 = RIGHT (T0, primary fixed nozzle, AMS 2 Pro); 1 = LEFT (T1, lifting nozzle,
-AMS HT). AMS HT `tray_id` = 128 + slot. Full topology + tray_id encoding:
-`kb_get("bambu-enums-printer")` and the forge `bambu-ecosystem.md` rule."""
+AMS HT). AMS HT `tray_id` = 128 + slot. Full topology and tray_id encoding are in your knowledge store's `bambu-enums-printer` topic, if you have one."""
 
 
 def bambu_system_context() -> str:
@@ -224,7 +222,7 @@ Manage files on the printer's SD card and prepare print jobs. Upload .3mf files 
 - rename_sdcard_file(name, src_path, dest_path) — FTPS rename/move file on SD card
 - print_file(name, file_path, plate_num, bed_type, use_ams, ams_mapping?, ...) — start print from SD card
   ams_mapping: optional override, indexed by 1-based filament id. Omit it and print_file resolves the
-  mapping from the spools the printer last reported (exact type, then closest colour — bambu-printer-app's
+  mapping from the spools the printer last reported (exact type, then closest colour — the print app's
   scoring; a same-material wrong-colour spool IS accepted as "Type Match") and REFUSES if a filament has
   no loaded match. The .3mf carries no slot assignment; get_project_info()'s ams_mapping is a filament-id
   placeholder. tray_id: 4-slot AMS = ams_id*4+slot, AMS HT = 128+slot, -1 = unused id. An external spool
@@ -308,21 +306,21 @@ Last-resort tool for sending raw MQTT JSON commands when no dedicated tool exist
 ### Raw Command (tools/commands.py) — LAST RESORT, REQUIRE user_permission=True
 - send_mqtt_command(name, command_json) — raw MQTT command; use only when no dedicated tool exists
 
-Bambu domain knowledge (protocol, enums, BambuPrinter API, HTTP API, empirical/calibration) is canonical in node-kb-mcp as `bambu-*` articles — query it directly; there is no baked-in knowledge tool.
+Bambu domain knowledge (protocol, enums, BambuPrinter API, HTTP API, empirical/calibration) is not served by this MCP and there is no baked-in knowledge tool: search your own knowledge store, if you have one, for `bambu-*` topics.
 
-### Knowledge (node-kb-mcp)
-- `mcp__node-kb-mcp__kb_search("<natural language>")` → `kb_get("<canonical-key>")` → `kb_related()` to pivot. Legacy `get_knowledge_topic` keys (e.g. `enums/ams`) resolve via article aliases.
-- Live HTTP route reference: bambu-mcp Swagger/OpenAPI at `/api/docs` (source of truth; `bambu-http-*` articles mirror it).
+### Knowledge
+- Search your own knowledge store, if you have one, with natural language for `bambu-*` topics.
+- Live HTTP route reference: bambu-mcp Swagger/OpenAPI at `/api/docs` (the source of truth).
 
-Live rules files are exposed as resources; Bambu domain knowledge is in node-kb-mcp.
+Live rules files are exposed as resources when the matching setting names a file.
 
 ### Resources (bambu:// URIs)
-- bambu://rules/global — global copilot behavioral rules (live, redacted)
-- bambu://rules/printer-app — bambu-printer-app rules (live, redacted)
-- bambu://rules/printer-manager — bambu-printer-manager rules (live, redacted)
-- bambu://rules/bambu-mcp — bambu-mcp project rules (live, redacted)
+- bambu://rules/global — global behavioral rules, file named by `BAMBU_MCP_RULES_GLOBAL` (live, redacted)
+- bambu://rules/printer-app — file named by `BAMBU_MCP_RULES_PRINTER_APP` (live, redacted)
+- bambu://rules/printer-manager — file named by `BAMBU_MCP_RULES_PRINTER_MANAGER` (live, redacted)
+- bambu://rules/bambu-mcp — file named by `BAMBU_MCP_RULES_BAMBU_MCP` (live, redacted)
 
-Domain knowledge (protocol, enums, API, HTTP, empirical): `mcp__node-kb-mcp__kb_search` → `kb_get("bambu-*")`.
+Domain knowledge (protocol, enums, API, HTTP, empirical): your own knowledge store, if you have one.
 
 ## Write Protection Summary
 
@@ -362,7 +360,7 @@ Never say "No printers configured" and stop. Discovery is mandatory before givin
 ## Knowledge Escalation Reminder
 
 When answering questions about Bambu Lab printers, protocols, or firmware:
-1. **First**: Query node-kb-mcp — `kb_search(...)` → `kb_get("bambu-*")` (canonical domain knowledge)
+1. **First**: Search your own knowledge store, if you have one, for `bambu-*` topics (canonical domain knowledge)
 2. **Second**: Live rules files (bambu://rules/*) and the Swagger/OpenAPI at /api/docs for HTTP routes
 3. **Third**: Authoritative Bambu Lab source repos (BambuStudio, ha-bambulab, OpenBambuAPI) — after KB exhaustion + ask_user
 4. **Fourth**: Broader web search as last resort

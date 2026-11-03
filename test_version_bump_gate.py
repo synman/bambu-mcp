@@ -1,7 +1,7 @@
 """hooks/version_bump_gate.py, end to end in a scratch git repo.
 
-Every case runs the real script against a real index. The two install cases make git itself dispatch
-the hook on `git commit`. Nothing here touches this repo's own index or a printer.
+Every case runs the real script against a real index. The install case makes git itself dispatch
+the hook on commit. Nothing here touches this repo's own index or a printer.
 
 Run directly (no pytest needed):  .venv/bin/python3 test_version_bump_gate.py
 """
@@ -111,7 +111,7 @@ def test_silent_outside_serving():
         assert res.returncode == 0 and res.stdout == "" and res.stderr == ""
 
 
-def test_install_without_isaac_gate_makes_git_dispatch_it():
+def test_install_makes_git_dispatch_the_gate():
     with _repo() as (root, mod, probe, version):
         assert _run_gate(root, "--install").returncode == 0
         hook = root / ".git" / "hooks" / "pre-commit"
@@ -127,31 +127,15 @@ def test_install_without_isaac_gate_makes_git_dispatch_it():
         _git(root, "commit", "-q", "-m", "bumped")
 
 
-def test_install_behind_isaac_gate_copies_pre_isaac():
-    with _repo() as (root, mod, _, _):
-        hooks = root / ".git" / "hooks"
-        hooks.mkdir(parents=True, exist_ok=True)   # an empty init template creates no hooks dir
-        stub = hooks / "pre-commit"
-        stub.write_text('#!/usr/bin/env bash\n# pre-commit hook: ISAAC-COMMIT-POLICY-GATE v1\n'
-                        'GATE="/nonexistent/services/commit_policy_gate.py"\nPY="/nonexistent/python3"\nexit 0\n')
-        res = _run_gate(root, "--install")
-        assert res.returncode == 0, res
-        installed = hooks / "pre-commit.pre-isaac"
-        assert not installed.is_symlink()
-        assert installed.read_bytes() == GATE.read_bytes()
-        assert os.access(installed, os.X_OK)
-        assert "NOT yet chained" in res.stdout      # isaac's installer is absent in this scratch repo
-        assert "ISAAC-COMMIT-POLICY-GATE" in stub.read_text()   # the gate stub was not overwritten
-
-
 def test_install_refuses_a_foreign_pre_commit():
     with _repo() as (root, _, _, _):
         hook = root / ".git" / "hooks" / "pre-commit"
         hook.parent.mkdir(parents=True, exist_ok=True)
         hook.write_text("#!/bin/sh\necho someone else\n")
         res = _run_gate(root, "--install")
-        assert res.returncode == 1 and "foreign" in res.stderr
+        assert res.returncode == 1 and "call `python3" in res.stderr
         assert hook.read_text() == "#!/bin/sh\necho someone else\n"
+        assert sorted(os.listdir(hook.parent)) == ["pre-commit"]   # nothing is chained into another hook
 
 
 if __name__ == "__main__":

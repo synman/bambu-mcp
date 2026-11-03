@@ -11,20 +11,13 @@ Install once per clone::
 
     python3 hooks/version_bump_gate.py --install
 
-Where the isaac commit-policy gate owns ``.git/hooks/pre-commit`` the hook
-is installed as ``.git/hooks/pre-commit.pre-isaac`` — that gate runs first and
-``exec``s a ``*.pre-isaac`` hook after it passes, so this hook's exit code
-becomes the commit's. Where no pre-commit hook exists it is installed as
-``pre-commit`` directly. A foreign pre-commit hook is never overwritten.
-The install is a COPY, never a symlink — a symlink into the worktree
-dangles in a linked worktree — so re-run ``--install`` after editing
-this file.
-
-This gate lives in this repo on purpose: nothing about it is installed
-into, or read from, isaac.
+The install is a COPY at ``.git/hooks/pre-commit``, never a symlink (a symlink into
+the worktree dangles in a linked worktree), so re-run ``--install`` after editing this
+file. A pre-commit hook that is not this gate is never overwritten and never chained
+into: ``--install`` refuses, and the owner of that hook calls
+``python3 hooks/version_bump_gate.py`` from it and uses its exit code.
 """
 import fnmatch
-import importlib.util
 import os
 import re
 import shutil
@@ -35,7 +28,7 @@ APP = "bambu-mcp"
 VERSION_FILE = "server.py"
 VERSION_RE = re.compile(r'^__version__\s*=\s*["\']([^"\']+)["\']', re.M)
 # Repo-relative paths that serve the MCP (fnmatch patterns; ``*`` also
-# matches ``/``). bambu-mcp runs from this tree under launchd, so the serving
+# matches ``/``). bambu-mcp runs from this tree under a service manager, so the serving
 # set is every module the daemon can import plus the version file itself. Tests,
 # docs, deploy and config files, calibration scripts and the standalone tools
 # (make.py, gen_docs.py, smoke_test.py, thermal_snapshot_monitor.py) do not
@@ -58,7 +51,6 @@ SERVING = (
     "prompts/*.py",
     "resources/*.py",
 )
-ISAAC_MARKER = "ISAAC-COMMIT-POLICY-GATE"
 HOOK = "pre-commit"
 
 
@@ -142,36 +134,13 @@ def _install_copy(target, src):
     """Install *src* at *target* as a COPY, never a symlink.
 
     A symlink into the worktree dangles in a linked worktree, where the
-    hooks dir is shared but this file's path is not — node-kb-mcp's
-    ``scripts/install-hooks.sh`` documents the same reason and installs a
-    copy for it. The installed copy does not track later edits to this
+    hooks dir is shared but this file's path is not. The installed copy does not track later edits to this
     file, so re-run ``--install`` after changing it.
     """
     if os.path.lexists(target):
         os.remove(target)
     shutil.copy2(src, target)
     os.chmod(target, os.stat(target).st_mode | 0o111)
-
-
-def _rechain_isaac_stub(stub_text, hooks_dir):
-    """Ask isaac's own installer to re-render its stub so it chains us.
-
-    Scoped to this hooks dir and idempotent (that installer keeps an existing
-    ``*.pre-isaac`` and adds the chain line). Returns False when isaac's
-    installer cannot be located; the next ``install-hooks.sh`` run chains it.
-    """
-    gate_path = re.search(r'^GATE="([^"]+)"', stub_text, re.M)
-    py = re.search(r'^PY="([^"]+)"', stub_text, re.M)
-    if not gate_path or not py:
-        return False
-    installer = os.path.join(os.path.dirname(gate_path.group(1)), "install_commit_hooks.py")
-    if not os.path.isfile(installer):
-        return False
-    spec = importlib.util.spec_from_file_location("isaac_install_commit_hooks", installer)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    mod.install_into(hooks_dir, py.group(1))
-    return True
 
 
 def install():
@@ -183,33 +152,9 @@ def install():
         return 1
     os.makedirs(hooks_dir, exist_ok=True)
     pre = os.path.join(hooks_dir, HOOK)
-    text = ""
-    if os.path.lexists(pre):
-        with open(pre, encoding="utf-8", errors="replace") as fh:
-            text = fh.read()
-    if ISAAC_MARKER in text:
-        target = os.path.join(hooks_dir, HOOK + ".pre-isaac")
-        if os.path.lexists(target) and not _is_ours(target):
-            print("[%s version-bump-gate] refusing: %s holds a foreign preserved hook" % (APP, target),
-                  file=sys.stderr)
-            return 1
-        _install_copy(target, src)
-        chained = target in text
-        if not chained:
-            try:
-                if _rechain_isaac_stub(text, hooks_dir):
-                    with open(pre, encoding="utf-8", errors="replace") as fh:
-                        chained = target in fh.read()
-            except Exception as exc:  # isaac's installer is optional here
-                print("[%s version-bump-gate] could not re-render isaac's stub: %s" % (APP, exc),
-                      file=sys.stderr)
-        state = ("chained by isaac's pre-commit" if chained
-                 else "NOT yet chained — isaac's install-hooks.sh (run at every session start) chains it")
-        print("[%s version-bump-gate] installed %s -> %s (%s)" % (APP, target, src, state))
-        return 0
-    if text and not _is_ours(pre):
-        print("[%s version-bump-gate] refusing to overwrite a foreign pre-commit hook at %s" % (APP, pre),
-              file=sys.stderr)
+    if os.path.lexists(pre) and not _is_ours(pre):
+        print("[%s version-bump-gate] refusing to overwrite or chain into the pre-commit hook at %s; "
+              "call `python3 %s` from it and use its exit code" % (APP, pre, src), file=sys.stderr)
         return 1
     _install_copy(pre, src)
     print("[%s version-bump-gate] installed %s -> %s" % (APP, pre, src))

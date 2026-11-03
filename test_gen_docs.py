@@ -1,7 +1,7 @@
 """Checks for gen_docs.py, the generator of the published bambu-mcp docs pages.
 
 Builds every page in memory from the live tool registry and OpenAPI document, and writes
-nothing: README.md and the bambu-printer-manager docs tree are left alone. Nothing here
+nothing: README.md and the published docs tree are left alone. Nothing here
 touches a printer.
 
 Run directly (no pytest needed):  .venv/bin/python3 test_gen_docs.py

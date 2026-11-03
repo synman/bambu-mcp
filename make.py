@@ -9,7 +9,7 @@ dependencies (including bambu-printer-manager from the devel branch).
 Usage:
     python make.py              # install/update the venv
     python make.py config       # generate MCP config files from templates
-    python make.py version-sync # sync version references in README.md and PLAN.md
+    python make.py version-sync # sync version references in README.md
 
 After running, point your MCP config at the python interpreter printed at the end.
 """
@@ -80,7 +80,7 @@ def cmd_config() -> None:
 
 
 def cmd_version_sync() -> None:
-    """Sync version string from pyproject.toml into README.md and PLAN.md."""
+    """Sync version string from pyproject.toml into README.md."""
     pyproject = PROJECT / "pyproject.toml"
     text = pyproject.read_text()
     m = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
@@ -95,9 +95,6 @@ def cmd_version_sync() -> None:
         (PROJECT / "README.md",
          r'\*\*Version:\s*[\d.]+\*\*',
          f"**Version: {version}**"),
-        (PROJECT / "PLAN.md",
-         r'\*\*Current version: [\d.]+\*\*',
-         f"**Current version: {version}**"),
     ]:
         if not target.exists():
             continue

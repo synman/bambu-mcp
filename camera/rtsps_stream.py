@@ -16,7 +16,7 @@ av.open() options:
 
 Architecture: RTSPSFrameBuffer runs a single background thread that owns all PyAV
 calls (av.open, container.decode, _frame_to_jpeg). Multiple HTTP clients share the
-latest JPEG frame via a threading.Condition — identical to TCPFrameBuffer / webcamd.
+latest JPEG frame via a threading.Condition — identical to TCPFrameBuffer / the camera daemon.
 This prevents libav segfaults from concurrent PyAV calls across ThreadingHTTPServer
 worker threads.
 """

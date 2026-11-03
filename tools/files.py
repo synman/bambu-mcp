@@ -420,7 +420,7 @@ def get_project_info(name: str, file_path: str, plate_num: int = 1, include_imag
         When ``include_images=True`` the response carries raw base64 data URIs which may
         exceed the CLI inline display limit. If output is truncated, use the HTTP fallback:
         ``GET http://localhost:{api_port}/api/get_3mf_props_for_file?printer={name}&file={file_path}&plate={plate_num}``.
-        Call ``kb_get('bambu-http-files')`` for full route docs. Pre-authorized, no human
+        The full route list is at ``/api/docs`` on the same port. Pre-authorized, no human
         permission needed.
     """
     log.debug("get_project_info: called for name=%s file_path=%s plate_num=%s include_images=%s", name, file_path, plate_num, include_images)
@@ -546,8 +546,8 @@ def get_plate_thumbnail(
 
     Notes:
         The result is a raw base64 data URI, which may exceed the CLI inline display limit.
-        If output is truncated, call ``kb_get('bambu-http-files')`` for the equivalent HTTP
-        endpoints, then use bash/curl to retrieve the data directly; this is pre-authorized
+        If output is truncated, find the equivalent HTTP endpoints at ``/api/docs``
+        on the API port, then use bash/curl to retrieve the data directly; this is pre-authorized
         and requires no human permission. The .3mf may be downloaded over FTPS and its
         metadata cache written as a side effect.
     """
@@ -602,8 +602,8 @@ def get_plate_topview(
 
     Notes:
         The result is a raw base64 data URI, which may exceed the CLI inline display limit.
-        If output is truncated, call ``kb_get('bambu-http-files')`` for the equivalent HTTP
-        endpoints, then use bash/curl to retrieve the data directly; this is pre-authorized
+        If output is truncated, find the equivalent HTTP endpoints at ``/api/docs``
+        on the API port, then use bash/curl to retrieve the data directly; this is pre-authorized
         and requires no human permission. The .3mf may be downloaded over FTPS and its
         metadata cache written as a side effect.
     """
@@ -905,23 +905,23 @@ def create_folder(
 # `filament_maps` is the slicer's per-filament EXTRUDER assignment, and bpm
 # replaces it with a filament-id placeholder ("1", "2", ...). The only source
 # of a real mapping is what the printer last reported loaded. This block mirrors
-# bambu-printer-app's Print3mfFileDialog (reconstructAmsMapping /
+# the print app's Print3mfFileDialog (reconstructAmsMapping /
 # getProtocolTrayId / toWireMapping / getMatchQuality) scoring. Two deliberate
 # differences, because the dialog has a human at a dropdown and this tool does
 # not: colour names are parsed with the full CSS3 table (bpm emits CSS3 names;
-# BPA's 10-name table mis-defines `green`), and assignment runs exact-first,
-# then best-unused, then reuse, instead of BPA's single greedy pass.
+# the print app's 10-name table mis-defines `green`), and assignment runs exact-first,
+# then best-unused, then reuse, instead of the print app's single greedy pass.
 
 _TYPE_MISMATCH_PENALTY = 10000.0
 # A type-mismatched spool is still accepted when its colour is this close
-# (BPA COLOR_ONLY_MATCH_DISTANCE).
+# (the print app COLOR_ONLY_MATCH_DISTANCE).
 _COLOR_ONLY_MATCH_DISTANCE = 60.0
 _TYPE_MATCH_EXCELLENT_DISTANCE = 50.0
 _TYPE_MATCH_GOOD_DISTANCE = 150.0
 
 
 def _match_quality(type_match: bool, dist: float) -> tuple[str, str]:
-    """BPA getMatchQuality: (quality key, human label) for one filament/spool pair."""
+    """the print app getMatchQuality: (quality key, human label) for one filament/spool pair."""
     if type_match and dist < _TYPE_MATCH_EXCELLENT_DISTANCE:
         return "excellent", "Excellent Match"
     if type_match and dist < _TYPE_MATCH_GOOD_DISTANCE:
@@ -970,7 +970,7 @@ def _color_distance(a, b) -> float:
 
 
 def _protocol_tray_id(spool) -> int | None:
-    """Wire tray id for an AMS-backed spool (BPA getProtocolTrayId).
+    """Wire tray id for an AMS-backed spool (the print app getProtocolTrayId).
 
     4-slot units (ams_id 0..127): ams_id * 4 + slot_id → 0..103.
     AMS HT / N3S (ams_id 128..253): ams_id + slot_id → 128..135.
@@ -992,7 +992,7 @@ def _protocol_tray_id(spool) -> int | None:
 def _usable_spools(spools: list) -> list[tuple[int, object]]:
     """(tray_id, spool) for every AMS-backed spool that can be printed from.
 
-    BPA isValidSpool: AMS-backed (external excluded), has a type, and
+    the print app isValidSpool: AMS-backed (external excluded), has a type, and
     state != 0 (an empty slot reports state 0).
     """
     out: list[tuple[int, object]] = []
@@ -1009,7 +1009,7 @@ def _resolve_ams_mapping_from_spools(
 ) -> tuple[list[int], list[dict], list[dict]]:
     """Build the filament-id-indexed wire ams_mapping from the loaded spools.
 
-    Scoring per BPA: exact type match scores 0, mismatch 10000, plus RGB
+    Scoring per the print app: exact type match scores 0, mismatch 10000, plus RGB
     colour distance; a pair is acceptable when the type matches or the colour
     alone is within _COLOR_ONLY_MATCH_DISTANCE. Assignment runs three passes
     over the filaments still unmapped:
@@ -1166,7 +1166,7 @@ def preview_ams_mapping(name: str, file_path: str, plate_num: int = 1) -> dict:
 
     WHEN to use: STEP 1 of the ``print_file`` confirmation gate. Call it, then show the
     result in the summary: each filament to its tray_id with the spool it matched, its colour
-    distance, and a BPA match label (Excellent Match / Good Match / Type Match / Color Match
+    distance, and a the print app match label (Excellent Match / Good Match / Type Match / Color Match
     Only / Poor Match).
 
     Sibling disambiguation: ``preview_ams_mapping`` is read-only and never prints;
@@ -1265,7 +1265,7 @@ def print_file(
         ams_mapping: Optional override, default None. When empty (None, ``""`` or ``[]``) and
             ``use_ams`` is True, the mapping is resolved from the spools the printer last
             reported loaded: each project filament is matched to an AMS spool by exact type
-            then closest colour (bambu-printer-app's print-dialog scoring; exact pairs are
+            then closest colour (the print app's print-dialog scoring; exact pairs are
             assigned first, then best unused, then reuse). A same-material spool of the WRONG
             colour is accepted ("Type Match"). A WRONG-MATERIAL spool is ALSO accepted if its
             colour is close enough ("Color Match Only", no material check at all), so call
@@ -1387,7 +1387,7 @@ def print_file(
             else PlateType.AUTO
         )
         matches: list[dict] = []
-        # "" and [] are the empty forms clients send for "no mapping" (BPA's own URL
+        # "" and [] are the empty forms clients send for "no mapping" (the print app's own URL
         # sends ams_mapping=); treat them as absent rather than as an empty mapping.
         if ams_mapping not in (None, "", []):
             # Coerce list → JSON string so print_3mf_file's json.loads() works
@@ -1915,8 +1915,8 @@ def get_current_job_project_info(name: str, include_images: bool = False) -> dic
         means unknown. When ``include_images=True`` the intended response carries raw base64
         data URIs which may exceed the CLI inline display limit. The HTTP route
         ``GET http://localhost:{api_port}/api/get_current_3mf_props?printer={name}`` returns the
-        active job's cached project info. Call ``kb_get('bambu-http-files')`` for full route
-        docs. Pre-authorized, no human permission needed.
+        active job's cached project info. The full route list is at ``/api/docs`` on the same
+        port. Pre-authorized, no human permission needed.
     """
     log.debug("get_current_job_project_info: called for name=%s include_images=%s", name, include_images)
     printer = session_manager.get_printer(name)

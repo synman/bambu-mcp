@@ -69,7 +69,7 @@ def test_imports():
 
 def test_knowledge():
     print("\n── Knowledge topics ────────────────────────────────────────────────────")
-    skip("knowledge lookup tools", "retired → node-kb-mcp bambu-* articles")
+    skip("knowledge lookup tools", "retired")
 
 
 # ── 3. Live HTTP API ─────────────────────────────────────────────────────────

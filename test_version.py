@@ -1,6 +1,6 @@
 """The server's version of record: one constant, plain semver, reported by initialize, equal to pyproject.
 
-Policy: KB isaac-mcp-versioning-policy. `__version__` in server.py is the only source. pyproject.toml
+`__version__` in server.py is the only source. pyproject.toml
 repeats it, the low-level MCP server carries it, the REST API and mDNS advertisement read it, and the
 initialize response reports it. hooks/version_bump_gate.py gates a commit on it, and SERVING in that
 gate is pinned here against the tree so a new module cannot ship un-gated.

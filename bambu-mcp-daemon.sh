@@ -7,7 +7,7 @@
 #   ./bambu-mcp-daemon.sh restart  Stop + start
 #   ./bambu-mcp-daemon.sh status   Check daemon health
 #
-# Port range: 25000–25099 (IANA registered, above isaac-mcp 23975–24999)
+# Port range: 25000–25099 (IANA registered)
 # Port file:  ~/.bambu-mcp/daemon.port
 # PID file:   ~/.bambu-mcp/daemon.pid
 # Log file:   bambu-mcp.log (in repo root)
@@ -160,7 +160,7 @@ case "${1:-}" in
         echo "Usage: $0 {start|stop|restart|status}"
         echo ""
         echo "Manage the bambu-mcp streamable-http daemon."
-        echo "Port range: 25000–25099 (registered, above isaac-mcp 23975–24999)"
+        echo "Port range: 25000–25099 (registered)"
         ;;
     *)
         echo "Usage: $0 {start|stop|restart|status}" >&2

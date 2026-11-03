@@ -1,8 +1,7 @@
 """Conformity test: every bambu-mcp tool declares a title and a read-only classification.
 
 Reads the live list_tools() a client receives from a scratch FastMCP server that goes through
-the same register_tools() the daemon uses, not the decorators. Following the mcp-builder skill,
-step 3.3 (isaac reference/conventions.md, "Tool annotations"):
+the same register_tools() the daemon uses, not the decorators. The rules:
   1. the tool COUNT is stated here, so a rename or an unseen registration path fails instead
      of emptying into a vacuous pass;
   2. title and readOnlyHint are present on every tool, inside annotations;
