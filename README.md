@@ -155,6 +155,39 @@ version back from the running daemon, are in `docs/operators-guide.md` — Relea
 
 ---
 
+## Dependencies
+
+bambu-mcp consumes the libraries below and names them here so the set is known. It carries
+nothing about the programs that consume it.
+
+Declared in `pyproject.toml`:
+
+| Package | Used for |
+|---|---|
+| `bambu-printer-manager` | the printer sessions: MQTT, FTPS and state (the one Bambu-specific dependency) |
+| `mcp` | the MCP server and its streamable-http transport |
+| `flask`, `flask-cors` | the REST API |
+| `av`, `pillow`, `numpy` | camera frames, stills and the job-health image analysis |
+| `cryptography`, `keyring` | the encrypted printer-credential file and its master key |
+| `zeroconf` | the mDNS record that advertises the API |
+| `setproctitle` | the process title |
+
+Used through a declared package, so not declared again: `pydantic` and `starlette` (through
+`mcp`, for alert models and the HTTP app in tests) and `webcolors` (through
+`bambu-printer-manager`, for filament colour names).
+
+Standalone scripts only, not installed with the server: `matplotlib` and `scipy`
+(`thermal_snapshot_monitor.py` and the plot scripts in `docs/`).
+
+Known gap: `camera/coord_transform.py` imports `matplotlib.path` inside a function, and
+`matplotlib` is not declared. Declaring it is a dependency change and waits for the owner.
+
+`test_dependencies.py` enforces this section. A third-party import in a tracked Python file
+that is not declared, listed above or in that test fails it, and so does a declared package that
+nothing imports.
+
+---
+
 ## Documentation
 
 - Published docs: <https://synman.github.io/bambu-printer-manager/bambu-mcp/>. The pages are
